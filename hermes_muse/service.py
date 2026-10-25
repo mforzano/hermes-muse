@@ -15,7 +15,7 @@ from .store import DAY, GOVERNANCE_JOBS, bounded, digest, epoch, identifier, is_
 
 DEFAULT_PREFERENCES = {"start_hour": 9, "end_hour": 22, "ordinary_per_day": None,
                        "time_sensitive_per_day": 3, "blocked_topics": [], "feed_brief": "",
-                       "deliver": None}
+                       "deliver": None, "weather_context": False}
 # A reviewed relevant notice held this long by conversation churn/activity is released
 # to the remaining gates (quiet hours, budget, snooze, topic opt-out, dedup).
 HOLD_RELEASE = 3600
@@ -43,6 +43,8 @@ class Companion:
             raise ValueError("blocked_topics must be a list of topic IDs")
         if prefs["deliver"] is not None and (not isinstance(prefs["deliver"], str) or not prefs["deliver"].strip()):
             raise ValueError("deliver must be a non-empty string or null")
+        if type(prefs["weather_context"]) is not bool:
+            raise ValueError("weather_context must be true or false")
         return prefs
 
     def preference_update(self, data, *, cron=False):
@@ -69,6 +71,9 @@ class Companion:
             if prefs["deliver"] is not None and (not isinstance(prefs["deliver"], str) or not prefs["deliver"].strip() or "," in prefs["deliver"]):
                 raise fail("preferences", "data.deliver", "must be one destination string or null", expected='null (automatic), "all", "bot-chat" or one platform such as "telegram"',
                            got=prefs["deliver"], fix='send data.deliver as one of those strings (no comma lists), or null to restore automatic selection')
+            if type(prefs["weather_context"]) is not bool:
+                raise fail("preferences", "data.weather_context", "must be true or false", expected="true (send the configured location to a third-party weather service) or false (default, no weather lookups)",
+                           got=prefs["weather_context"], fix="send data.weather_context as the JSON boolean true or false")
             if not isinstance(prefs["feed_brief"], str) or len(prefs["feed_brief"]) > 12000:
                 raise fail("preferences", "data.feed_brief", "must be text of at most 12000 characters", got=prefs["feed_brief"], fix="send a shorter plain-text brief")
             path = self.store.path("PROACTIVE_PREFERENCES.md")

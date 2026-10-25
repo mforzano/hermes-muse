@@ -20,7 +20,7 @@ FIELDS = {
     "interest_record": "signal_id title id expires rationale",
     "idea_add": "title rationale goal_id sources expires",
     "feedback": "kind id action signal_id until",
-    "preferences": "start_hour end_hour ordinary_per_day time_sensitive_per_day blocked_topics feed_brief deliver signal_id",
+    "preferences": "start_hour end_hour ordinary_per_day time_sensitive_per_day blocked_topics feed_brief deliver weather_context signal_id",
     "notification_add": "event_key message rationale sources verified_at expires goal_id interest_id priority priority_reason issue_key source_snapshot supersedes signal_id watch_id final_result topic",
     "notification_refresh": "id verified_at sources message priority priority_reason source_snapshot",
     "notification_review": "id conversation_revisions verdict reason",

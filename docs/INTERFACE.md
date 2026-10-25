@@ -1,4 +1,4 @@
-# Muse 0.3.11 interface
+# Muse 0.3.12 interface
 
 Single tool: `muse_manage(action,data)`. Profile/home come from Hermes, never caller parameters.
 Goals need no request ID or caller scope token. Optional goal expected_revision is one integer; conflicts return current goal.
@@ -20,7 +20,7 @@ Content page revisions and non-goal mutation journals retain their existing boun
 | `interest_record` | `signal_id title id expires rationale expected_revision request_id` | Request ID + natural key |
 | `idea_add` | `title rationale goal_id sources expires expected_revision request_id` | Request ID + natural key |
 | `feedback` | `kind id action signal_id until expected_revision request_id` | Required revision + request ID |
-| `preferences` | `start_hour end_hour ordinary_per_day time_sensitive_per_day blocked_topics feed_brief deliver signal_id expected_revision request_id` | Required revision + request ID |
+| `preferences` | `start_hour end_hour ordinary_per_day time_sensitive_per_day blocked_topics feed_brief deliver weather_context signal_id expected_revision request_id` | Required revision + request ID |
 | `notification_add` | `event_key message rationale sources verified_at expires goal_id interest_id priority priority_reason issue_key source_snapshot supersedes signal_id watch_id final_result expected_revision request_id` | Request ID + natural key |
 | `notification_refresh` | `id verified_at sources message priority priority_reason source_snapshot expected_revision request_id` | Required revision + request ID |
 | `notification_review` | `id verdict reason expected_revision request_id` (`conversation_revisions` optional, ignored) | Required revision + request ID |

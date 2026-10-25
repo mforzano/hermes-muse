@@ -1,3 +1,13 @@
+# 0.3.12 — contextual weather recipe (PR #2), behind an off-by-default privacy switch (2026-10-25)
+
+Merges community PR #2 (feat(proactivity): add contextual weather correlation recipe and guidance). Thank you, BrunoBza — the original commit and authorship are kept in the merge history.
+
+- New optional preference `weather_context` (boolean, default `false`) in `PROACTIVE_PREFERENCES.md`, settable through `muse_manage preferences`. A location is private data, so weather is opt-in: when it is off or absent (every existing install after upgrade) the patrol skips weather completely — no location lookup, no request to any weather service.
+- When `true`, the patrol reads the new `references/weather.md`: the Open-Meteo recipe and the PR's thresholds (precipitation probability >= 70% or severe weather, or a >= 5°C shift, overlapping a real event, trip or routine, with concrete advice). The recipe moved out of the `TOOLS.md` template and the thresholds out of the default proactivity text so nothing weather-related runs by default.
+- The location must come from a place the user explicitly gave or an authorized device-location tool; the plugin never obtains, stores or forwards it. Turning the preference on sends that place to a third-party weather service.
+- Invalid values are rejected with a repairable `data.weather_context` error (`invalid_argument`, expected, received, fix). The `PROACTIVE_PREFERENCES.md` template is unchanged so the byte-compared default migration keeps working.
+- Tests: the PR's three tests now follow the switch; added default-off, on, invalid-value and template-migration tests.
+
 # 0.3.11 — delivery follows /sethome; configurable destination (2026-10-24)
 
 Merges community PR #1 (feat(delivery): support dynamic /sethome delivery and configurable destination). Co-authored with BrunoBza — thank you for the contribution; the original commit and authorship are kept in the merge history.

@@ -1,1 +1,1 @@
-{"name":"hermes-muse","label":"Muse","description":"Private read-only content views with profile selection","icon":"Sparkles","version":"0.3.11","tab":{"path":"/muse","position":"after:skills"},"slots":[],"entry":"dist/index.js","api":"plugin_api.py"}
+{"name":"hermes-muse","label":"Muse","description":"Private read-only content views with profile selection","icon":"Sparkles","version":"0.3.12","tab":{"path":"/muse","position":"after:skills"},"slots":[],"entry":"dist/index.js","api":"plugin_api.py"}

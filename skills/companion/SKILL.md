@@ -1,7 +1,7 @@
 ---
 name: companion
 description: Goals, proactive reminders, calendar views, memory upkeep, Feed and research in the current Hermes profile.
-version: 0.3.11
+version: 0.3.12
 ---
 # Companion
 
@@ -10,7 +10,7 @@ do not perform IO. Hermes owns native memory, skills, providers and permissions.
 
 Choose the relevant procedure:
 - Accepted work and completion: [followup](references/followup.md), [goals](references/goals.md).
-- Calendar windows and source coverage: [calendar](references/calendar.md), [proactivity](references/proactivity.md).
+- Calendar windows and source coverage: [calendar](references/calendar.md), [proactivity](references/proactivity.md), [weather](references/weather.md) (only when `weather_context` is on).
 - Content/pages and bounded context: [content](references/content.md), [context](references/context.md), [conversations](references/conversations.md).
 - Memory feedback/forgetting: [memory](references/memory.md).
 - Feed, research and reports: [Feed](references/feed.md), [research](references/research.md), [briefings](references/briefings.md).
