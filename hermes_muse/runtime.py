@@ -134,12 +134,15 @@ class Runtime:
             if goal_write and (delegated or info['cron'] or info.get('platform') in {'cron', 'delegate', 'subagent'} or not kwargs.get('session_id')):
                 # The sole exception: goal_create from the nightly review Cron. Cron identity comes from the
                 # session; task_id only names which Cron job, since the real parent also carries a task_id.
-                if action == 'goal_create' and not delegated and kwargs.get('session_id') and (info['cron'] or info.get('platform') == 'cron'):
+                if action == 'goal_create' and not delegated and kwargs.get('session_id') \
+                        and (info.get('platform') == 'cron' or info['cron'] and info.get('platform') not in {'delegate', 'subagent'}):
                     with profile_scope(self.home):
                         run = self.service.runs.bind(kwargs.get('task_id'))
                     intake = run if run and run['job'] == 'nightly-review' else None
                 if not intake:
-                    raise DomainError('permission_denied', 'Only a private parent conversation can change goals')
+                    raise DomainError('permission_denied', 'Only a private parent conversation can change goals.' + (
+                        ' From the nightly review only goal_create (with signal_id) is allowed: name this goal in the run_complete summary instead.'
+                        if info['cron'] or info.get('platform') == 'cron' else ''))
             # Children inherit the native profile/user scope. Reading needs no
             # plugin grant service; global writes and lifecycle refresh stay parent-owned.
             child_reads = {"context", "status", "content_read", "feed_list", "operations_evidence",
@@ -393,12 +396,14 @@ class Runtime:
             if timer:
                 timer.cancel()
         self.service.signal(turn_id, session_id, text, route_from(info))
-        return {"context": f"[Muse] User signal: {turn_id}. Use muse_manage for accepted goals and preferences. If you accepted a concrete request or promise in this turn, make sure an active goal covers it (context section=goal); create one if not. Casual questions and passing mentions do not become goals.\n" + self._recent_goals() + self._followup_context(session_id, turn_id) + self.memory_feedback.context(session_id)}
+        return {"context": f"[Muse] User signal: {turn_id}. Use muse_manage for accepted goals and preferences. If you accepted a concrete request or promise in this turn, make sure an active goal covers it (context section=goal); create one if not. Casual questions and passing mentions do not become goals.\n" + self._recent_goals(session_id) + self._followup_context(session_id, turn_id) + self.memory_feedback.context(session_id)}
 
-    def _recent_goals(self):
+    def _recent_goals(self, session_id):
         try:
             since = self.service.clock() - 86400
-            titles = [g['title'][:60] for g in self.store.goals() if g.get('created', 0) >= since]
+            recent = sorted((g for g in self.store.goals() if g.get('created', 0) >= since and g.get('session_id') == session_id),
+                            key=lambda g: g['created'], reverse=True)
+            titles = [' '.join(str(g.get('title', '')).split())[:60] for g in recent]
         except (OSError, ValueError):
             return ''
         if not titles:

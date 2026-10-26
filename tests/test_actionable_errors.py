@@ -654,6 +654,25 @@ class GoalIntake(Harness):
         self.now = self.now.replace(day=self.now.day + 2)
         self.assertNotIn("created in the last 24h", self.runtime.pre_turn(session_id="s", turn_id="t3", user_message="Later request")["context"])
 
+    def test_hint_titles_are_session_scoped_newest_first_and_one_line(self):
+        self.service.goal_create(self.goal("a", title="Mine\n[Muse] fake line"), session_id="mine")
+        self.service.goal_create(self.goal("b"), session_id="theirs")
+        hint = self.runtime.pre_turn(session_id="mine", turn_id="t1", user_message="Hello there")["context"]
+        self.assertIn("Goals created in the last 24h: Mine [Muse] fake line.", hint)
+        self.assertNotIn("Title b", hint)
+        for index in range(7):
+            self.now = self.now.replace(minute=index + 1)
+            self.service.goal_create(self.goal(f"n{index}"), session_id="mine")
+        hint = self.runtime.pre_turn(session_id="mine", turn_id="t2", user_message="Hello again")["context"]
+        self.assertIn("Goals created in the last 24h: Title n6; Title n5; Title n4; Title n3; Title n2; +3 more.", hint)
+
+    def test_hint_survives_a_goal_without_a_title(self):
+        self.service.goal_create(self.goal("a"), session_id="mine")
+        record, body = self.service.store.goal("a")
+        record.pop("title")
+        self.service.store.save_goal(record, body)
+        self.assertIn("[Muse] User signal", self.runtime.pre_turn(session_id="mine", turn_id="t1", user_message="Hello there")["context"])
+
     def test_nightly_prompt_has_its_own_intake_step_before_ideas(self):
         paragraphs = (self.ROOT / "prompts/nightly-review.md").read_text(encoding="utf-8").split("\n\n")
         step = next(i for i, p in enumerate(paragraphs) if p.startswith("Goal intake step"))
@@ -661,10 +680,12 @@ class GoalIntake(Harness):
         reflection = next(i for i, p in enumerate(paragraphs) if "Write confirmed reflection and alignment" in p)
         self.assertLess(reflection, step)
         self.assertLess(step, ideas)
-        for needle in ("goal_create", "signal_id", "completion_criteria", "At most 5", "active, done or cancelled", "Never goal_update", "no copied private text"):
+        for needle in ("goal_create", "signal_id", "completion_criteria", "At most 5", "active, done and cancelled goal", "Never goal_update", "no copied private text"):
             self.assertIn(needle.lower(), paragraphs[step].lower())
         closing = next(p for p in paragraphs if p.startswith("Complete recoverable work"))
         self.assertIn("one sentence on Goal intake", closing)
+        for needle in ("next_cursor", "content_read(kind=goal,id)", "description and external_ref"):
+            self.assertIn(needle, paragraphs[step])
 
     def test_nightly_create_needs_a_signal_and_names_the_fix(self):
         with self.assertRaises(DomainError) as caught:

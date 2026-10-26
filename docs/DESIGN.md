@@ -52,7 +52,7 @@ Exactly six fixed jobs, all inheriting host model/provider/timezone:
 | --- | --- | --- |
 | muse-proactive-watch | */30 * * * * | Observe 24h, research relevant changes, verify candidates; ordinary delivery has its own waking-hour and daily budget gates. |
 | muse-memory-upkeep | 0 * * * * | Inspect new user signals, sourced notes and verified outcomes for incremental memory/relationships. |
-| muse-nightly-review | 20 3 * * * | Reflection/repair, goal intake safety net (accepted requests or promises without a matching goal in the last window; dedupe against active/done/cancelled goals), goal research rotation, a separate bounded Ideas step (0-3, no quota; the run summary records the count or the reason for none), skills review and lifecycle cleanup. |
+| muse-nightly-review | 20 3 * * * | Reflection/repair, goal intake safety net (accepted requests or promises without a matching goal in the last window; the prompt, not the code, dedupes against active/done/cancelled goals), goal research rotation, a separate bounded Ideas step (0-3, no quota; the run summary records the count or the reason for none), skills review and lifecycle cleanup. |
 | muse-feed-pulse | 0 * * * * | Opportunity to generate fresh content; not an article quota. |
 | muse-weekly-governance-review | 15 21 * * 0 | Seven-day review of useful outcomes, cost, reuse and simplification. |
 | muse-monthly-system-audit | 40 10 1 * * | Thirty-day review of alignment, instruction placement and redundant workflows. |

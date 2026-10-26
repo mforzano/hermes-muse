@@ -20,7 +20,7 @@ tracking with status=cancelled when asked. Cancellation does not prove the exter
 owner stopped. Inspect unknown writes through their owner; never automatically resend.
 
 Only private parent conversations change goals. Cron and children may inspect and
-report; a normal parent task_id is not a child marker. Optional expected_revision
+report (the nightly review may also goal_create with a signal_id, see goals.md); a normal parent task_id is not a child marker. Optional expected_revision
 is the goal's integer revision; a conflict returns the latest goal for merging.
 
 Use existing notification review, quiet hours and deduplication for reminders.

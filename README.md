@@ -113,7 +113,7 @@ Apple PIM receipts also support a bounded observation mode: actual returned even
 
 | Hook | Purpose |
 | --- | --- |
-| pre_llm_call | Before the reply, records up to 8,000 user characters and source identity, and adds a state-tool pointer for goals, interests and feedback, a one-line check that any request or promise accepted in the turn is covered by an active goal, and the titles of goals created in the last 24 hours. Native Cron results, including other jobs, receive the shared guidance for a self-contained reply instead of becoming user signals. |
+| pre_llm_call | Before the reply, records up to 8,000 user characters and source identity, and adds a state-tool pointer for goals, interests and feedback, a one-line check that any request or promise accepted in the turn is covered by an active goal, and the titles of goals created in this conversation in the last 24 hours. Native Cron results, including other jobs, receive the shared guidance for a self-contained reply instead of becoming user signals. |
 | post_llm_call | Associates owned Cron sessions with their native execution IDs for self-review. After replying to a user message of at least 80 characters, waits for five quiet minutes before scheduling memory upkeep. New input cancels the pending timer; at most three early triggers per day. |
 | transform_llm_output | For a patrol/watch that used the state tool, replaces the final response with approved notice bodies or `[SILENT]`. Bot Chat notices and weekly/monthly reports include the same receiving guidance. Ordinary conversations and direct channel reports are unchanged. |
 | post_tool_call | Captures minimal correlated memory/skill write feedback from actual native results, without copying memory bodies. |

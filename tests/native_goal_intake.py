@@ -82,6 +82,29 @@ def run(home):
                 assert call('goal_create', goal('other-cron', signal_id='u'), False, session='cron-night', task=task)['code'] == 'permission_denied', task
             with delegated_child_context('child'):
                 assert call('goal_create', goal('child', signal_id='u'), False, session='cron-night', task=second)['code'] == 'permission_denied'
+            # A Cron flag on a delegate/subagent platform never carries the exception, even with a running nightly task_id.
+            for platform in ('subagent', 'delegate'):
+                clear_session_vars(tokens)
+                tokens = set_session_vars(platform=platform, source='cron', chat_type='private', session_id='cron-night', cron_session='1')
+                assert call('goal_create', goal('sub-' + platform, signal_id='u'), False, session='cron-night', task=second)['code'] == 'permission_denied', platform
+            clear_session_vars(tokens)
+            tokens = set_session_vars(platform='cron', source='cron', chat_type='private', session_id='cron-night', cron_session='1')
+            # Parallel tool calls cannot exceed the cap.
+            import contextvars
+            import threading
+            _, third = execution('nightly-review')
+            outcomes = []
+            def attempt(index):
+                raw = handle_function_call('muse_manage', {'action': 'goal_create', 'data': goal(f'par-{index}', signal_id='u')}, session_id='cron-night', turn_id='u', task_id=third, enabled_toolsets=['muse'])
+                outcomes.append(json.loads(raw)['ok'])
+            threads = [threading.Thread(target=contextvars.copy_context().run, args=(attempt, i)) for i in range(12)]
+            [t.start() for t in threads]
+            [t.join() for t in threads]
+            assert outcomes.count(True) == 5 and len(outcomes) == 12, outcomes
+            assert len(list((home / 'muse/workspace/goals').glob('par-*'))) == 5
+            # Another conversation's hint does not list this one's goal titles.
+            hint = invoke_hook('pre_llm_call', session_id='other', turn_id='o1', platform='cli', user_message='Question from elsewhere')
+            assert 'Intake' not in '\n'.join(h['context'] for h in hint if h)
             # An ended execution no longer carries the exception.
             ended, ended_task = execution('nightly-review')
             finish_execution(ended, success=True)
@@ -95,4 +118,9 @@ def run(home):
 
 
 if __name__ == '__main__':
-    run(Path(tempfile.mkdtemp(dir=os.environ.get('TMPDIR') or None, prefix='goal-intake-')) / 'home')
+    root = Path(__file__).resolve().parents[1]
+    for path in (os.environ.get('HERMES_SOURCE'), str(root / 'tests'), str(root)):
+        if path:
+            sys.path.insert(0, path)
+    base = Path(os.environ['HERMES_HOME']) if os.environ.get('HERMES_HOME') else Path(tempfile.mkdtemp(prefix='goal-intake-'))
+    run(base / 'goal-intake')
