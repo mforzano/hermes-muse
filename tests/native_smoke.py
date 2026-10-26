@@ -268,6 +268,8 @@ def main():
         companion_checks(base / "companion")
         from native_followup_smoke import run as followup_checks
         followup_checks(base / "followup")
+        from native_goal_intake import run as goal_intake_checks
+        goal_intake_checks(base / "goal-intake")
         from native_compatibility_smoke import run as compatibility_checks
         compatibility_checks(base / "compatibility")
         from tool_client import close_containers

@@ -145,6 +145,30 @@ class Companion:
                 self.store.path(f'workspace/goals/{key}/{folder}').mkdir(exist_ok=True)
         return record
 
+    INTAKE_CAP = 5
+
+    def intake_goal_create(self, data, run):
+        """goal_create for the nightly review: needs an original signal and at most INTAKE_CAP goals per run."""
+        if not data.get('signal_id'):
+            raise fail('goal_create', 'data.signal_id', 'is required in the nightly review', expected='the ID of the user signal that holds the accepted request, taken from context(section=signals)',
+                       fix='resend with data.signal_id set to that signal ID; skip the item when no signal supports it')
+        def reserve(step):
+            with self.store.transaction() as db:
+                row = self.store.get(db, 'run', run['id'])
+                stage = row['stages'].setdefault('goal_intake', {'created': 0})
+                if step > 0 and stage['created'] >= self.INTAKE_CAP:
+                    raise fail('goal_create', 'data', f"is not allowed: this nightly run already created {stage['created']} goals", code='size_limit',
+                               expected=f'at most {self.INTAKE_CAP} new goals per nightly run', fix='stop creating goals; list the remaining candidates in the run_complete summary for the next run')
+                stage.update(created=stage['created'] + step, at=self.clock())
+                self.store.put(db, 'run', row['id'], row)
+        reserve(1)
+        try:
+            # No session_id: the goal belongs to the conversation of its signal, not to the Cron session.
+            return self.goal_create(data)
+        except BaseException:
+            reserve(-1)
+            raise
+
     def goal_update(self, data):
         from .content_io import DomainError
         from .followup import owner

@@ -130,8 +130,16 @@ class Runtime:
             from agent.delegation_context import is_delegated_child_context
             delegated = is_delegated_child_context()
             goal_write = action in {'goal_create', 'goal_update'} or action == 'forget' and data.get('kind') == 'goal'
+            intake = None
             if goal_write and (delegated or info['cron'] or info.get('platform') in {'cron', 'delegate', 'subagent'} or not kwargs.get('session_id')):
-                raise DomainError('permission_denied', 'Only a private parent conversation can change goals')
+                # The sole exception: goal_create from the nightly review Cron. Cron identity comes from the
+                # session; task_id only names which Cron job, since the real parent also carries a task_id.
+                if action == 'goal_create' and not delegated and kwargs.get('session_id') and (info['cron'] or info.get('platform') == 'cron'):
+                    with profile_scope(self.home):
+                        run = self.service.runs.bind(kwargs.get('task_id'))
+                    intake = run if run and run['job'] == 'nightly-review' else None
+                if not intake:
+                    raise DomainError('permission_denied', 'Only a private parent conversation can change goals')
             # Children inherit the native profile/user scope. Reading needs no
             # plugin grant service; global writes and lifecycle refresh stay parent-owned.
             child_reads = {"context", "status", "content_read", "feed_list", "operations_evidence",
@@ -196,6 +204,8 @@ class Runtime:
                 elif action == "installation_prepare":
                     from .installation import prepare
                     result = prepare(self, data, kwargs.get("session_id", ""), kwargs.get("turn_id", ""))
+                elif action == 'goal_create' and intake:
+                    result = self.service.intake_goal_create(data, intake)
                 elif action == 'goal_create':
                     result = self.service.goal_create(data, session_id=kwargs.get('session_id', ''))
                 elif action == 'goal_update':
@@ -383,7 +393,18 @@ class Runtime:
             if timer:
                 timer.cancel()
         self.service.signal(turn_id, session_id, text, route_from(info))
-        return {"context": f"[Muse] User signal: {turn_id}. Use muse_manage for accepted goals and preferences.\n" + self._followup_context(session_id, turn_id) + self.memory_feedback.context(session_id)}
+        return {"context": f"[Muse] User signal: {turn_id}. Use muse_manage for accepted goals and preferences. If you accepted a concrete request or promise in this turn, make sure an active goal covers it (context section=goal); create one if not. Casual questions and passing mentions do not become goals.\n" + self._recent_goals() + self._followup_context(session_id, turn_id) + self.memory_feedback.context(session_id)}
+
+    def _recent_goals(self):
+        try:
+            since = self.service.clock() - 86400
+            titles = [g['title'][:60] for g in self.store.goals() if g.get('created', 0) >= since]
+        except (OSError, ValueError):
+            return ''
+        if not titles:
+            return ''
+        more = f'; +{len(titles) - 5} more' if len(titles) > 5 else ''
+        return '[Muse] Goals created in the last 24h: ' + '; '.join(titles[:5]) + more + '.\n'
 
     def _followup_context(self, session_id, turn_id):
         try:

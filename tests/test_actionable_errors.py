@@ -630,3 +630,63 @@ class StrayTopLevelArguments(Harness):
         reply = self.failure("search", None, section="session_search")
         self.assertIn("is not a muse_manage action", reply["error"])
         self.assertIn("put every argument inside `data`", reply["error"])
+
+
+class GoalIntake(Harness):
+    """0.3.13: per-turn accepted-work check and the nightly goal_create cap."""
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def goal(self, key, **extra):
+        return {"id": key, "title": "Title " + key, "description": "Basis paraphrased", "completion_criteria": "Done when shown", **extra}
+
+    def run_row(self):
+        with self.service.store.transaction() as db:
+            self.service.store.put(db, "run", "night", {"id": "night", "job": "nightly-review", "started": 0, "status": "running", "stages": {}})
+        return {"id": "night"}
+
+    def test_user_turn_hint_carries_the_check_and_recent_titles(self):
+        hint = self.runtime.pre_turn(session_id="s", turn_id="t1", user_message="Please book the venue")["context"]
+        self.assertIn("If you accepted a concrete request or promise in this turn, make sure an active goal covers it (context section=goal); create one if not.", hint)
+        self.assertIn("Casual questions and passing mentions do not become goals.", hint)
+        self.assertNotIn("created in the last 24h", hint)
+        self.service.goal_create(self.goal("venue", signal_id="t1"), session_id="s")
+        self.assertIn("Goals created in the last 24h: Title venue.", self.runtime.pre_turn(session_id="s", turn_id="t2", user_message="Next request")["context"])
+        self.now = self.now.replace(day=self.now.day + 2)
+        self.assertNotIn("created in the last 24h", self.runtime.pre_turn(session_id="s", turn_id="t3", user_message="Later request")["context"])
+
+    def test_nightly_prompt_has_its_own_intake_step_before_ideas(self):
+        paragraphs = (self.ROOT / "prompts/nightly-review.md").read_text(encoding="utf-8").split("\n\n")
+        step = next(i for i, p in enumerate(paragraphs) if p.startswith("Goal intake step"))
+        ideas = next(i for i, p in enumerate(paragraphs) if p.startswith("Ideas step"))
+        reflection = next(i for i, p in enumerate(paragraphs) if "Write confirmed reflection and alignment" in p)
+        self.assertLess(reflection, step)
+        self.assertLess(step, ideas)
+        for needle in ("goal_create", "signal_id", "completion_criteria", "At most 5", "active, done or cancelled", "Never goal_update", "no copied private text"):
+            self.assertIn(needle.lower(), paragraphs[step].lower())
+        closing = next(p for p in paragraphs if p.startswith("Complete recoverable work"))
+        self.assertIn("one sentence on Goal intake", closing)
+
+    def test_nightly_create_needs_a_signal_and_names_the_fix(self):
+        with self.assertRaises(DomainError) as caught:
+            self.service.intake_goal_create(self.goal("a"), self.run_row())
+        error = caught.exception
+        self.assertEqual(error.details["field"], "data.signal_id")
+        self.assertIn("context(section=signals)", error.details["expected"])
+        self.assertIn("Fix:", str(error))
+        self.assertNotRegex(str(error), LEAK)
+
+    def test_nightly_cap_is_five_and_failed_creates_do_not_consume_it(self):
+        self.service.signal("u", "chat", "I would like the report")
+        run = self.run_row()
+        with self.assertRaises(ValueError):
+            self.service.intake_goal_create(self.goal("bad", signal_id="missing"), run)
+        for index in range(5):
+            self.assertEqual(self.service.intake_goal_create(self.goal(f"g{index}", signal_id="u"), run)["session_id"], "chat")
+        with self.assertRaises(DomainError) as caught:
+            self.service.intake_goal_create(self.goal("g5", signal_id="u"), run)
+        details = caught.exception.details
+        self.assertEqual((caught.exception.code, details["field"]), ("size_limit", "data"))
+        self.assertIn("at most 5", details["expected"])
+        self.assertIn("run_complete", details["hint"])
+        self.assertNotRegex(str(caught.exception), LEAK)
+        self.assertEqual(len(self.service.store.goals()), 5)
