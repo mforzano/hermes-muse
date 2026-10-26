@@ -1,3 +1,13 @@
+# 0.3.13 — goal intake safety nets (2026-10-26)
+
+Goals were created only when the assistant remembered to call `goal_create` during a chat turn, so accepted requests and promises could go unrecorded and the patrol never saw them.
+
+- Per-turn check: the `[Muse] User signal` hint now also says: if you accepted a concrete request or promise in this turn, make sure an active goal covers it (`context section=goal`) and create one if not; casual questions and passing mentions do not become goals. It lists the titles (up to 5) of goals created in the last 24 hours so duplicates are visible. No new storage.
+- Nightly intake step in the existing nightly-review job (no new Cron job): from the window's signals and conversation text it finds accepted requests or promises without a matching goal, dedupes against active, done and cancelled goals, and calls `goal_create` with `signal_id`, a title, a description citing the basis in a short paraphrase and `completion_criteria`. At most 5 per run; borderline items are skipped; it never updates, completes, cancels or re-owns a goal. The run summary states how many were created or why none.
+- Guard exception: `goal_create` is allowed from the nightly-review Cron and nothing else. Identity is the Cron session plus the host-bound running nightly-review execution (`task_id` is only used to name the job, since the main session also carries one). `signal_id` is required and the cap is 5 per execution, counted in the run record and released if the create fails; the goal belongs to the signal's conversation. `goal_update`, `forget` of a goal, other Cron jobs and children remain rejected. New errors name the field, expectation and fix (`data.signal_id`; `size_limit` on `data` for the cap).
+- Stored Cron prompts are rewritten when the plugin loads, not when Cron runs: the new nightly wording takes effect only after a Gateway restart. The guard and hint change apply once the plugin is reloaded.
+- Tests: `tests/native_goal_intake.py` (real dispatch: main session with a Cron-looking `task_id` still allowed, nightly create/cap/signal, nightly `goal_update`/`forget` rejected, other Cron jobs, task-less Cron, ended execution and child rejected) and unit tests for the hint and the prompt.
+
 # 0.3.12 — contextual weather recipe (PR #2), behind an off-by-default privacy switch (2026-10-25)
 
 Merges community PR #2 (feat(proactivity): add contextual weather correlation recipe and guidance). Thank you, BrunoBza — the original commit and authorship are kept in the merge history.

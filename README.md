@@ -1,4 +1,4 @@
-# Hermes Muse 0.3.12
+# Hermes Muse 0.3.13
 
 [简体中文](README.zh-CN.md) · [Design](docs/DESIGN.md) · [Acceptance guide](docs/ACCEPTANCE.md)
 
@@ -95,7 +95,7 @@ explained to the user, call `goal_update(id=..., status="done", note="...")`.
 Optional owner handles link native delegation, Cron, Paseo or external work; checking
 an owner never dispatches again or automatically completes a goal. Due active goals
 appear in `context(section="followups")`; ordinary turns get at most a short reminder.
-Children and Cron can inspect/report, while private parent conversations own goals.
+Children and Cron can inspect/report, while private parent conversations own goals. The one exception is the nightly review's intake step, which may call `goal_create` (requires `signal_id`, at most 5 per run) for accepted requests no goal covers; every other goal write from Cron or a child is rejected.
 Goals need no request ID, reply hash, handoff or caller scope token. An optional integer
 expected_revision prevents stale writes and returns the current goal on conflict.
 
@@ -113,7 +113,7 @@ Apple PIM receipts also support a bounded observation mode: actual returned even
 
 | Hook | Purpose |
 | --- | --- |
-| pre_llm_call | Before the reply, records up to 8,000 user characters and source identity, and adds a state-tool pointer for goals, interests and feedback. Native Cron results, including other jobs, receive the shared guidance for a self-contained reply instead of becoming user signals. |
+| pre_llm_call | Before the reply, records up to 8,000 user characters and source identity, and adds a state-tool pointer for goals, interests and feedback, a one-line check that any request or promise accepted in the turn is covered by an active goal, and the titles of goals created in the last 24 hours. Native Cron results, including other jobs, receive the shared guidance for a self-contained reply instead of becoming user signals. |
 | post_llm_call | Associates owned Cron sessions with their native execution IDs for self-review. After replying to a user message of at least 80 characters, waits for five quiet minutes before scheduling memory upkeep. New input cancels the pending timer; at most three early triggers per day. |
 | transform_llm_output | For a patrol/watch that used the state tool, replaces the final response with approved notice bodies or `[SILENT]`. Bot Chat notices and weekly/monthly reports include the same receiving guidance. Ordinary conversations and direct channel reports are unchanged. |
 | post_tool_call | Captures minimal correlated memory/skill write feedback from actual native results, without copying memory bodies. |
@@ -130,7 +130,7 @@ Delegates are instructed to remain read-only under inherited host permissions; t
 | --- | --- | --- |
 | muse-proactive-watch | Every 30 minutes | Source coverage, worthwhile reminders, evidence and delivery state |
 | muse-memory-upkeep | Hourly | New facts and people/group notes |
-| muse-nightly-review | Daily at 03:20 | Alignment, goal research, Ideas, working lessons and skill review |
+| muse-nightly-review | Daily at 03:20 | Alignment, goal intake (accepted requests no goal covers, at most 5), goal research, Ideas, working lessons and skill review |
 | muse-feed-pulse | Hourly | Local Feed articles |
 | muse-weekly-governance-review | Sunday at 21:15 | A concrete review of usefulness, execution and proposed adjustments |
 | muse-monthly-system-audit | First day of the month at 10:40 | A short audit of priorities, instructions and recurring work |

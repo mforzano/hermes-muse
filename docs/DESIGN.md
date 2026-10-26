@@ -1,4 +1,4 @@
-# Hermes Muse design — 0.3.12
+# Hermes Muse design — 0.3.13
 
 Status: implementation contract. This independent plugin assembles a long-term assistant using Hermes tools, memory, skills, cron and conversations. It does not modify Hermes core or require a particular model, memory provider, note app or messaging platform. All features are installed together in the active profile.
 
@@ -52,7 +52,7 @@ Exactly six fixed jobs, all inheriting host model/provider/timezone:
 | --- | --- | --- |
 | muse-proactive-watch | */30 * * * * | Observe 24h, research relevant changes, verify candidates; ordinary delivery has its own waking-hour and daily budget gates. |
 | muse-memory-upkeep | 0 * * * * | Inspect new user signals, sourced notes and verified outcomes for incremental memory/relationships. |
-| muse-nightly-review | 20 3 * * * | Reflection/repair, goal research rotation, a separate bounded Ideas step (0-3, no quota; the run summary records the count or the reason for none), skills review and lifecycle cleanup. |
+| muse-nightly-review | 20 3 * * * | Reflection/repair, goal intake safety net (accepted requests or promises without a matching goal in the last window; dedupe against active/done/cancelled goals), goal research rotation, a separate bounded Ideas step (0-3, no quota; the run summary records the count or the reason for none), skills review and lifecycle cleanup. |
 | muse-feed-pulse | 0 * * * * | Opportunity to generate fresh content; not an article quota. |
 | muse-weekly-governance-review | 15 21 * * 0 | Seven-day review of useful outcomes, cost, reuse and simplification. |
 | muse-monthly-system-audit | 40 10 1 * * | Thirty-day review of alignment, instruction placement and redundant workflows. |
@@ -63,7 +63,7 @@ Weekly/monthly gates always wake at the scheduled tick, even without active goal
 
 ## Evidence for background work
 
-Foreground and background calls use the 0.1.2 action rules. Operations that require user evidence still need a recorded user signal; renewing an interest needs a newer signal. Goals belong to private parent conversations; Cron may update only its existing maintenance-owned state. New repeating watches (interval or cron) must stay at least 30 minutes apart and prompt/stop fields allow 4000 characters each; one-off schedules are exempt and existing jobs are not rewritten. New notifications go to the current profile's Bot Chat.
+Foreground and background calls use the 0.1.2 action rules. Operations that require user evidence still need a recorded user signal; renewing an interest needs a newer signal. Goals belong to private parent conversations; Cron may update only its existing maintenance-owned state. The single exception is `goal_create` from the nightly-review Cron: the session must be a Cron session (not a delegated child), and the host-bound running execution must belong to the nightly-review job (`task_id` only names the job; the real parent also carries a `task_id`, so it never identifies Cron by itself). It requires `signal_id` and is capped at 5 per execution, counted in that execution's run record (`stages.goal_intake`) and released again if the create fails. The goal is owned by the signal's conversation, not the Cron session. goal_update, forget(kind=goal) and every other Cron or child goal write stay rejected. New repeating watches (interval or cron) must stay at least 30 minutes apart and prompt/stop fields allow 4000 characters each; one-off schedules are exempt and existing jobs are not rewritten. New notifications go to the current profile's Bot Chat.
 
 ## Lifecycle contracts
 

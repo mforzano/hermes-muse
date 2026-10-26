@@ -1,4 +1,4 @@
-# Muse 0.3.12 interface
+# Muse 0.3.13 interface
 
 Single tool: `muse_manage(action,data)`. Profile/home come from Hermes, never caller parameters.
 Goals need no request ID or caller scope token. Optional goal expected_revision is one integer; conflicts return current goal.
@@ -15,7 +15,7 @@ Content page revisions and non-goal mutation journals retain their existing boun
 | `content_write` | `kind id resource body expected_revision request_id signal_id` | Body revision + request ID |
 | `memory_feedback_review` | `receipt_id decision reason expected_revision request_id` | Receipt integer revision + request ID |
 | `installation_prepare` | `operation signal_id expected_revision request_id` | Installation revision + request ID |
-| `goal_create` | `signal_id title description completion_criteria id parent_id deadline external_ref owner` | Private parent only; starts at revision 1 |
+| `goal_create` | `signal_id title description completion_criteria id parent_id deadline external_ref owner` | Private parent only, plus the nightly-review Cron (requires `signal_id`, at most 5 per run); starts at revision 1 |
 | `goal_update` | `id progress note status owner waiting_user blocked next_check_at expected_revision research_review_at description completion_criteria` | Private parent only; optional integer revision |
 | `interest_record` | `signal_id title id expires rationale expected_revision request_id` | Request ID + natural key |
 | `idea_add` | `title rationale goal_id sources expires expected_revision request_id` | Request ID + natural key |
@@ -50,7 +50,7 @@ Content page revisions and non-goal mutation journals retain their existing boun
 | `forget` | `kind object_kind id resource signal_id expected_revision request_id` | Required revision + request ID |
 
 Due followups: `context(section=followups,cursor?,limit?)` returns active due goals and read-only owner status. Completed owners need parent review, not automatic goal completion.
-Ordinary parent task_id values are accepted. Native session kind and delegated context reject child/Cron goal mutations.
+Ordinary parent task_id values are accepted. Native session kind and delegated context reject child/Cron goal mutations, except `goal_create` from the running nightly-review execution (Cron session plus host-bound job; `signal_id` required; 5 per execution, `size_limit` on `data` beyond that).
 Request budget512 KiB, final response256 KiB. Follow real cursors; oversized committed non-goal results expose content_ref.
 Notification review, quiet hours, actual transport receipts and unknown-write no-resend behavior remain unchanged.
 Offline migration/rollback: `python -m hermes_muse.migration --home <profile-home> [--rollback]`; back up and stop writers.
