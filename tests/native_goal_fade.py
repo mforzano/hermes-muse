@@ -67,7 +67,8 @@ def run(home):
 
             rows = dormant()
             assert set(rows) == {'old', 'mid', 'waiting2'}, set(rows)
-            assert rows['old']['fade_due'] is True and rows['mid']['fade_due'] is False and rows['old']['dormant_since'] < time.time(), rows
+            assert rows['old']['fade_due'] is False and 'not been asked yet' in rows['old']['fade_wait'] and rows['old']['fade_at'] < time.time(), rows  # past its cancel time, but never asked
+            assert rows['mid']['fade_due'] is False and rows['old']['dormant_since'] < time.time(), rows
             assert all(r['status'] == 'active' for r in rows.values())
             listing = {r['id']: r for r in call('context', {'section': 'goal', 'limit': 100})['items']}
             assert 'dormant_since' in listing['old'] and 'dormant_since' not in listing['young'] and 'dormant_since' not in listing['dated'], listing
@@ -106,6 +107,28 @@ def run(home):
             with delegated_child_context('child'):
                 assert call('goal_update', cancel, False, session='cron-night', task=night)['code'] == 'permission_denied'
             assert runtime.store.goal('old')[0]['status'] == 'active'
+            # Past its cancel time but never asked: still refused, even from the right job.
+            unasked = call('goal_update', cancel, False, session='cron-night', task=night)
+            assert 'has not been asked yet' in unasked['error'] and rows['old']['ask_key'].startswith('goal-fade-ask:old:'), unasked
+            # Cron cannot move the thresholds that eligibility is computed from, nor exempt goals (real dispatch).
+            prefs = call('content_read', {'kind': 'preferences', 'id': 'current'}, session='cron-night', task=night)['revision']
+            for days in ({'goal_dormant_days': 1}, {'goal_fade_days': 1}):
+                blocked = call('preferences', {**days, 'expected_revision': prefs, 'request_id': 'fade-prefs-' + next(iter(days)), 'signal_id': 'u'}, False, session='cron-night', task=night)
+                assert blocked['field'] == 'data.' + next(iter(days)) and 'private parent conversation' in blocked['error'] and 'run_complete' in blocked['hint'], blocked
+            _, patrol_run = execution('proactive-watch')
+            assert call('preferences', {'goal_dormant_days': 1, 'expected_revision': prefs, 'request_id': 'fade-prefs-patrol', 'signal_id': 'u'}, False, session='cron-night', task=patrol_run)['field'] == 'data.goal_dormant_days'
+            assert (runtime.service.preferences()['goal_dormant_days'], runtime.service.preferences()['goal_fade_days']) == (7, 7)
+            pinned = call('goal_create', {'title': 'Pinned', 'description': 'd', 'completion_criteria': 'c', 'signal_id': 'u', 'no_fade': True, 'id': 'sig'}, False, session='cron-night', task=night)
+            assert pinned['field'] == 'data.no_fade' and not (home / 'muse/workspace/goals/sig').exists(), pinned
+            # The question is asked and delivered; a day later the cancel is allowed.
+            ask = runtime.service.notification_add({'event_key': rows['old']['ask_key'], 'message': 'Still want this?', 'rationale': 'dormant', 'sources': ['goal:old'], 'goal_id': 'old',
+                                                    'verified_at': time.time(), 'expires': time.time() + 3 * DAY})
+            with runtime.store.transaction() as store_db:
+                runtime.store.put(store_db, 'notification', ask['id'], {**ask, 'status': 'candidate'})
+            assert 'not been delivered yet' in call('goal_update', cancel, False, session='cron-night', task=night)['error']
+            with runtime.store.transaction() as store_db:
+                runtime.store.put(store_db, 'notification', ask['id'], {**ask, 'status': 'sent', 'created': time.time() - 2 * DAY})
+            assert call('content_read', {'kind': 'goal', 'id': 'old'}, session='cron-night', task=night)  # still readable
             # The eligible goal is cancelled with the canonical note; the caller's note cannot replace it.
             done = call('goal_update', {**cancel, 'note': 'my own words'}, session='cron-night', task=night)
             assert done['status'] == 'cancelled' and done['progress'][-1]['text'] == 'no user activity for 20 days; auto-faded', done
@@ -120,6 +143,20 @@ def run(home):
             revived = call('goal_update', {'id': 'old', 'status': 'active', 'note': 'User asked again'}, task=night)
             assert revived['status'] == 'active' and 'old' not in dormant()
             assert 'old' in {i['id'] for i in call('context', {'section': 'followups'})['items']}
+            # A real Muse watch (native Cron job, checked through Host.is_active_watch) exempts its goal until it is stopped.
+            make('watchme', 20)
+            assert 'watchme' in dormant()
+            watch = call('watch_create', {'goal_id': 'watchme', 'signal_id': 'u', 'schedule': 'every 1h', 'prompt': 'Check the synthetic source', 'stop_condition': 'Verified',
+                                          'request_id': 'fade-watch', 'expires': time.time() + 7 * DAY})
+            job_id = watch.get('job_id') or watch['id']
+            assert 'watchme' not in dormant(), 'an enabled watch exempts its goal'
+            call('watch_stop', {'job_id': job_id})
+            assert 'watchme' in dormant(), 'a stopped watch no longer exempts it'
+            # The parent sets no_fade and may change the thresholds.
+            call('goal_update', {'id': 'waiting2', 'no_fade': True})
+            assert 'waiting2' not in dormant() and runtime.store.goal('waiting2')[0]['no_fade'] is True
+            bad = call('goal_update', {'id': 'waiting2', 'no_fade': 'yes'}, False)
+            assert bad['field'] == 'data.no_fade' and 'JSON boolean' in bad['hint'], bad
             # Configurable days (profile preferences).
             runtime.service.preference_update({'goal_dormant_days': 30})
             assert dormant() == {}

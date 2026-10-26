@@ -56,6 +56,13 @@ class Companion:
         if unknown:
             raise fail("preferences", ", ".join("data." + k for k in sorted(unknown)), "is not a preference", expected="only " + ", ".join(DEFAULT_PREFERENCES),
                        fix="delete the unknown fields or correct their names")
+        fading = sorted({'goal_dormant_days', 'goal_fade_days'} & set(data))
+        if cron and fading:
+            # Eligibility for auto-cancel is computed from these two values, so a background run must not move them.
+            raise fail("preferences", ", ".join("data." + k for k in fading), "can only be changed in a private parent conversation",
+                       expected="a change the user asked for in conversation (background runs cannot write goal fade settings)",
+                       got=", ".join(f"{k}={data[k]!r}" for k in fading),
+                       fix="delete these fields from the call and describe the proposed change in the run_complete summary")
         with self.store.transaction() as db:
             prefs = self.preferences()
             changed = any(prefs.get(key) != value for key, value in data.items())
@@ -148,6 +155,8 @@ class Companion:
                       'source_signal': (signal or {}).get('id'), 'session_id': origin, 'progress': [],
                       'owner': owner(data.get('owner')), 'next_check_at': now + 1800,
                       'waiting_user': False, 'blocked': None}
+            if 'no_fade' in data:
+                record['no_fade'] = self.no_fade(data['no_fade'], 'goal_create')
             body = f"# {record['title']}\n\n{bounded(data['description'])}\n\n## Completion criteria\n{bounded(data['completion_criteria'])}\n"
             self.store.save_goal(record, body)
             for folder in ('files', 'hidden_files'):
@@ -156,8 +165,18 @@ class Companion:
 
     INTAKE_CAP = 5
 
+    @staticmethod
+    def no_fade(value, action):
+        if type(value) is not bool:
+            raise fail(action, "data.no_fade", "must be true or false", expected="true (never goes dormant or is auto-cancelled; only on the user's explicit request) or false",
+                       got=value, fix="send data.no_fade as the JSON boolean true or false")
+        return value
+
     def intake_goal_create(self, data, run):
         """goal_create for the nightly review: needs an original signal and at most INTAKE_CAP goals per run."""
+        if 'no_fade' in data:
+            raise fail('goal_create', 'data.no_fade', 'cannot be set by the nightly review', expected='the field omitted (only the user, in conversation, can exempt a goal from fading)',
+                       got=data['no_fade'], fix='delete data.no_fade and resend')
         if not data.get('signal_id'):
             raise fail('goal_create', 'data.signal_id', 'is required in the nightly review', expected='the ID of the user signal that holds the accepted request, taken from context(section=signals)',
                        fix='resend with data.signal_id set to that signal ID; skip the item when no signal supports it')
@@ -187,12 +206,13 @@ class Companion:
                        expected='exactly {id, status: "cancelled"} (note and expected_revision optional)',
                        got=sorted(data), fix='send only id and status="cancelled" for a goal listed with fade_due=true; name any other change in the run_complete summary')
         record, _ = self.store.goal(identifier(data['id']))
-        fade = Fade(self.store.home, self.store.goals(), self.clock())
+        fade = Fade(self.store.home, self.store.goals(), self.clock(), getattr(self.host, 'is_active_watch', None))
         state = fade.of(record)
         if not state or not state['fade_due']:
             why = ('it is not active' if not state else f"it is exempt because {state['exempt']}" if state['exempt']
-                   else 'fading is off for it' if state['fade_at'] is None and state['state'] == 'dormant'
-                   else 'it is dormant but the cancel time has not come' if state['state'] == 'dormant' else 'it is not dormant')
+                   else 'fading is off for it' if state['state'] == 'dormant' and state['fade_at'] is None
+                   else 'it is dormant but the cancel time has not come' if state['state'] == 'dormant' and self.clock() < state['fade_at']
+                   else state['wait'] if state['wait'] else 'it is not dormant')
             raise fail('goal_update', 'data.id', 'is not eligible for auto-fade: ' + why, expected='a goal returned by context(section=goal,status=dormant) with fade_due=true',
                        got=data['id'], fix='skip this goal; re-list dormant goals and cancel only rows with fade_due=true')
         idle = int((self.clock() - fade.last_activity(record)) // DAY)
@@ -225,6 +245,8 @@ class Companion:
                 body = f"# {record['title']}\n\n{description}\n\n## Completion criteria\n{criteria}\n"
             if 'owner' in data:
                 record['owner'] = owner(data['owner'])
+            if 'no_fade' in data:
+                record['no_fade'] = self.no_fade(data['no_fade'], 'goal_update')
             if 'waiting_user' in data:
                 if type(data['waiting_user']) is not bool:
                     raise fail("goal_update", "data.waiting_user", "must be true or false", got=data['waiting_user'], fix="send a JSON boolean without quotes")

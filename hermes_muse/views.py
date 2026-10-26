@@ -425,6 +425,7 @@ class Views:
                         "next_check_at",
                         "waiting_user",
                         "blocked",
+                        "no_fade",
                         "source",
                     )
                     if k in metadata
@@ -454,7 +455,9 @@ class Views:
                 for row in items:
                     state = fade.of(goals[row["id"]])
                     if state and state["state"] == "dormant":
-                        row.update(dormant_since=state["dormant_since"], fade_at=state["fade_at"], fade_due=state["fade_due"])
+                        row.update(dormant_since=state["dormant_since"], fade_at=state["fade_at"], fade_due=state["fade_due"], ask_key=state["ask_key"])
+                        if state["wait"]:
+                            row["fade_wait"] = state["wait"]
                 if status == "dormant":
                     items = [row for row in items if "dormant_since" in row]
                 # Needs-you, blocked, in progress; closed goals last, newest first.

@@ -1,9 +1,11 @@
 """Goal dormancy and fade, derived from stored data; no goal status or timestamp is added.
 
 An active goal with no activity for goal_dormant_days is dormant; goal_fade_days later the nightly
-review may cancel it. Activity is the latest of: creation, any goal_update (progress, owner,
-deadline, next check; they all set `updated`), a user signal that literally contains the goal ID or
-title, and the same for an active subgoal. Read-only: callers decide what to do with the answer.
+review may cancel it, but only after its dormancy question was delivered at least a day earlier.
+Activity is the latest of: creation, any goal_update (progress, owner, deadline, next check; they
+all set `updated`), the end of a deadline or watch that exempted the goal, a user signal that
+literally contains the goal ID or title, and the same for an active subgoal. Read-only: callers
+decide what to do with the answer. Whatever cannot be read means "do not fade".
 """
 from __future__ import annotations
 
@@ -12,102 +14,164 @@ import sqlite3
 import time
 from pathlib import Path
 
-from .store import DAY
+from .store import DAY, digest
 
 DEFAULTS = {"goal_dormant_days": 7, "goal_fade_days": 7}
 LIVE_OWNER = {"running", "stalling", "finalizing", "claimed"}
+# An ask notice in one of these states has not reached the user yet.
+UNSENT = {"candidate", "pending", "queued", "dispatching", "transport_queued"}
+UNSURE = "its fade data could not be read; retry later"
 
 
 def settings(home):
-    """Preferences with defaults; an unreadable or invalid value falls back to its default."""
+    """(preferences with defaults, readable). A missing file means defaults; a present but invalid one means unreadable."""
+    path = Path(home) / "muse/PROACTIVE_PREFERENCES.md"
+    if not path.exists():
+        return dict(DEFAULTS), True
     try:
-        line = (Path(home) / "muse/PROACTIVE_PREFERENCES.md").read_text(encoding="utf-8").splitlines()[0]
+        line = path.read_text(encoding="utf-8").splitlines()[0]
         stored = json.loads(line[len("<!-- hermes-muse "):-len(" -->")])
-    except (OSError, ValueError, IndexError):
-        stored = {}
-    result = {}
-    for key, default in DEFAULTS.items():
-        value = stored.get(key, default)
-        result[key] = value if value is None or type(value) is int and 1 <= value <= 365 else default
-    return result
+        result = {}
+        for key, default in DEFAULTS.items():
+            value = stored.get(key, default)
+            if value is not None and not (type(value) is int and 1 <= value <= 365):
+                return dict(DEFAULTS), False
+            result[key] = value
+        return result, True
+    except (OSError, ValueError, IndexError, AttributeError):
+        return dict(DEFAULTS), False
 
 
-def _json(path):
-    try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+def ask_key(goal_id, dormant_since):
+    """One question per dormancy episode: revival moves dormant_since, so the next episode gets a new key."""
+    return f"goal-fade-ask:{goal_id}:{time.strftime('%Y%m%d', time.gmtime(dormant_since))}"
+
+
+def _native_watch_check(home):
+    """Host.is_active_watch bound to this profile without opening Muse's store."""
+    from .host import HermesHost
+
+    class _Paths:
+        def __init__(self, root):
+            self.home = Path(root).resolve()
+
+        def path(self, relative):
+            return self.home / "muse" / relative
+
+    return HermesHost(_Paths(home)).is_active_watch
 
 
 class Fade:
-    def __init__(self, home, goals, now=None):
+    def __init__(self, home, goals, now=None, is_active_watch=None):
         self.home, self.goals = Path(home), goals
         self.now = time.time() if now is None else now
-        self.cfg = settings(home)
-        self._signals = self._watches = None
+        self.cfg, readable = settings(home)
+        self.unsure = not readable
+        self._signals = self._records = None
+        self._is_active_watch = is_active_watch
 
     @property
     def enabled(self):
         return self.cfg["goal_dormant_days"] is not None
 
+    def _query(self, sql, args=()):
+        try:
+            with sqlite3.connect(f"file:{self.home / 'muse/state.db'}?mode=ro", uri=True, timeout=2) as db:
+                db.execute("PRAGMA query_only=ON")
+                return [json.loads(r[0]) for r in db.execute(sql, args)]
+        except (sqlite3.Error, ValueError):
+            self.unsure = True
+            return []
+
     def signals(self):
         if self._signals is None:
-            try:
-                with sqlite3.connect(f"file:{self.home / 'muse/state.db'}?mode=ro", uri=True, timeout=2) as db:
-                    db.execute("PRAGMA query_only=ON")
-                    rows = [json.loads(r[0]) for r in db.execute("SELECT data FROM records WHERE kind='signal'")]
-            except (sqlite3.Error, ValueError):
-                rows = []
+            rows = self._query("SELECT data FROM records WHERE kind='signal'")
             self._signals = [(r.get("created", 0), str(r.get("text", "")).casefold()) for r in rows]
         return self._signals
 
-    def watching(self, goal_id):
-        """An unexpired watch of this goal whose native job is still enabled."""
-        if self._watches is None:
-            enabled = {j.get("id") for j in _json(self.home / "cron/jobs.json").get("jobs", []) if j.get("enabled")}
-            self._watches = {}
-            for job_id, record in _json(self.home / "muse/install.json").get("jobs", {}).items():
-                if str(record.get("key", "")).startswith("watch-") and job_id in enabled and (record.get("expires") or self.now + 1) > self.now:
-                    self._watches[record.get("owner")] = True
-        return goal_id in self._watches
+    def watches(self, goal_id):
+        """(job_id, expires) of every Muse watch record owned by the goal."""
+        if self._records is None:
+            try:
+                jobs = json.loads((self.home / "muse/install.json").read_text(encoding="utf-8")).get("jobs", {})
+                self._records = [(job_id, r.get("owner"), r.get("expires")) for job_id, r in jobs.items()
+                                 if str(r.get("key", "")).startswith("watch-")]
+            except FileNotFoundError:
+                self._records = []
+            except (OSError, ValueError, AttributeError):
+                self._records, self.unsure = [], True
+        return [(job_id, expires) for job_id, owner, expires in self._records if owner == goal_id]
+
+    def children(self, goal):
+        return [g for g in self.goals if g.get("parent_id") == goal["id"] and g.get("status") == "active"]
 
     def last_activity(self, goal):
         mentions = (goal["id"].casefold(), str(goal.get("title", "")).casefold())
         latest = max(goal.get("created", 0), goal.get("updated", 0))
         if not latest:
             return self.now  # a record without timestamps has an unknown age; it never fades
+        # The end of a deadline or watch is activity: the clock restarts when the exemption lapses.
+        ends = [t for t in (goal.get("deadline"), *(e for _, e in self.watches(goal["id"]))) if t and t <= self.now]
+        latest = max([latest, *ends])
         latest = max([latest, *(s for s, text in self.signals() if s > latest and any(len(m) >= 3 and m in text for m in mentions))])
-        children = [g.get("updated", 0) for g in self.goals if g.get("parent_id") == goal["id"] and g.get("status") == "active"]
-        return max([latest, *children])
+        return max([latest, *(self.last_activity(child) for child in self.children(goal))])
 
     def exemption(self, goal):
+        if goal.get("no_fade"):
+            return "it is marked no_fade"
         if (goal.get("deadline") or 0) > self.now:
             return "it has a future deadline"
-        if self.watching(goal["id"]):
-            return "it has an active watch"
+        for job_id, expires in self.watches(goal["id"]):
+            if expires is not None and expires <= self.now:
+                continue
+            try:
+                check = self._is_active_watch or _native_watch_check(self.home)
+                if check(job_id, goal["id"]):
+                    return "it has an active watch"
+            except Exception:  # unreadable watch state: do not fade
+                self.unsure = True
         from .followup import owner_status
         if owner_status(self.home, goal.get("owner")) in LIVE_OWNER:
             return "its owner is still running"
+        for child in self.children(goal):
+            reason = self.exemption(child)
+            if reason:
+                return f"an active subgoal is exempt ({reason[3:] if reason.startswith('it ') else reason})"
+        return None
+
+    def asked(self, key):
+        """None when the dormancy question was delivered at least a day ago, else why the cancel must wait."""
+        rows = self._query("SELECT data FROM records WHERE kind='notification' AND id=?", (digest(key),))
+        if not rows:
+            return "the dormancy question has not been asked yet"
+        if rows[0].get("status") in UNSENT:
+            return "the dormancy question has not been delivered yet"
+        if rows[0].get("created", self.now) > self.now - DAY:
+            return "the dormancy question was sent less than a day ago"
         return None
 
     def of(self, goal):
-        """None for a goal that is not active; otherwise state, dormant_since, fade_at, fade_due, exempt."""
+        """None for a goal that is not active; otherwise state, dormant_since, fade_at, fade_due, ask_key, wait, exempt."""
         if goal.get("status") != "active":
             return None
-        view = {"state": "active", "dormant_since": None, "fade_at": None, "fade_due": False, "exempt": None}
+        view = {"state": "active", "dormant_since": None, "fade_at": None, "fade_due": False, "ask_key": None, "wait": None, "exempt": None}
         days = self.cfg["goal_dormant_days"]
         if days is None:
             return view
         since = self.last_activity(goal) + days * DAY
-        if self.now < since:
+        if self.now < since and not self.unsure:
             return view
-        view["exempt"] = self.exemption(goal)
-        if view["exempt"]:
+        view["exempt"] = self.exemption(goal) or (UNSURE if self.unsure else None)
+        if view["exempt"] or self.now < since:
             return view
         fade_days = self.cfg["goal_fade_days"]
-        view.update(state="dormant", dormant_since=since)
+        key = ask_key(goal["id"], since)
+        view.update(state="dormant", dormant_since=since, ask_key=key, wait=self.asked(key))
         if fade_days is not None:
-            view.update(fade_at=since + fade_days * DAY, fade_due=self.now >= since + fade_days * DAY)
+            view["fade_at"] = since + fade_days * DAY
+            view["fade_due"] = self.now >= view["fade_at"] and view["wait"] is None and not self.unsure
+        if self.unsure:
+            view["wait"] = UNSURE
         return view
 
     def dormant(self, goal):

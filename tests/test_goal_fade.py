@@ -39,8 +39,25 @@ class FadeCase(unittest.TestCase):
     def at(self, days):
         self.now = self.t0 + days * DAY
 
+    watch_active = staticmethod(lambda job_id, goal_id: False)
+
+    def fade(self):
+        return Fade(self.home, self.store.goals(), self.now, self.watch_active)
+
     def state(self, key="g"):
-        return Fade(self.home, self.store.goals(), self.now).of(self.store.goal(key)[0])
+        return self.fade().of(self.store.goal(key)[0])
+
+    def ask(self, key="g", status="sent"):
+        """The nightly review's dormancy question for the goal's current episode, in the given notice state."""
+        row = self.service.notification_add({"event_key": self.state(key)["ask_key"], "message": "Still want this?", "rationale": "dormant", "sources": [f"goal:{key}"],
+                                             "goal_id": key, "verified_at": self.now, "expires": self.now + 3 * DAY})
+        with self.store.transaction() as db:
+            self.store.put(db, "notification", row["id"], {**row, "status": status})
+        return row
+
+    def watch(self, goal_id, expires):
+        self.store.write_text("install.json", json.dumps({"plugin": "hermes-muse", "installation_id": "fixture", "fixed": {}, "jobs": {
+            "job1": {"key": "watch-abc", "owner": goal_id, "expires": expires}}}))
 
 
 class Timeline(FadeCase):
@@ -51,6 +68,7 @@ class Timeline(FadeCase):
         self.at(7)
         dormant = self.state()
         self.assertEqual((dormant["state"], dormant["dormant_since"], dormant["fade_due"]), ("dormant", self.t0 + 7 * DAY, False))
+        self.ask()
         self.at(13.99)
         self.assertFalse(self.state()["fade_due"])
         with self.assertRaises(DomainError) as early:
@@ -89,6 +107,8 @@ class Timeline(FadeCase):
 
     def test_revival_by_parent_goal_update(self):
         self.goal()
+        self.at(8)
+        self.ask()
         self.at(15)
         self.service.fade_goal({"id": "g", "status": "cancelled"})
         revived = self.service.goal_update({"id": "g", "status": "active", "note": "User asked again"})
@@ -108,36 +128,86 @@ class Exemptions(FadeCase):
         self.goal("dated", deadline=self.t0 + 30 * DAY)
         self.goal("watched")
         self.goal("owned", owner={"kind": "native_delegation", "id": "deleg_1"})
-        self.goal("waiting"); self.goal("stuck"); self.goal("past", deadline=self.t0 + 2 * DAY)
+        self.goal("waiting"); self.goal("stuck"); self.goal("past", deadline=self.t0 + 2 * DAY); self.goal("pinned", no_fade=True)
         self.service.goal_update({"id": "waiting", "waiting_user": True})
         self.service.goal_update({"id": "stuck", "blocked": "needs a login"})
-        self.store.write_text("install.json", json.dumps({"plugin": "hermes-muse", "installation_id": "fixture", "fixed": {}, "jobs": {
-            "job1": {"key": "watch-abc", "owner": "watched", "expires": self.t0 + 40 * DAY}}}))
-        (self.home / "cron").mkdir()
-        (self.home / "cron/jobs.json").write_text(json.dumps({"jobs": [{"id": "job1", "enabled": True}]}))
+        self.watch("watched", self.t0 + 40 * DAY)
+        self.watch_active = staticmethod(lambda job_id, goal_id: goal_id == "watched")
         self.at(20)
         with patch("hermes_muse.followup.owner_status", side_effect=lambda home, handle: "running" if handle else "unassigned"):
             self.assertIn("deadline", self.state("dated")["exempt"])
             self.assertIn("watch", self.state("watched")["exempt"])
             self.assertIn("owner", self.state("owned")["exempt"])
+            self.assertIn("no_fade", self.state("pinned")["exempt"])
             for key in ("waiting", "stuck", "past"):
                 self.assertEqual(self.state(key)["state"], "dormant", key)
             with self.assertRaises(DomainError) as refused:
                 self.service.fade_goal({"id": "dated", "status": "cancelled"})
             self.assertIn("exempt because it has a future deadline", str(refused.exception))
-        (self.home / "cron/jobs.json").write_text(json.dumps({"jobs": [{"id": "job1", "enabled": False}]}))
-        self.assertEqual(Fade(self.home, self.store.goals(), self.now).of(self.store.goal("watched")[0])["state"], "dormant")
+        self.watch_active = staticmethod(lambda job_id, goal_id: False)  # watch paused or removed
+        self.assertEqual(self.state("watched")["state"], "dormant")
         with patch("hermes_muse.followup.owner_status", return_value="completed"):
             self.assertEqual(self.state("owned")["state"], "dormant")
 
+    def test_exemption_that_lapses_restarts_the_clock(self):
+        self.goal("dated", deadline=self.t0 + 30 * DAY)
+        self.goal("watched")
+        self.watch("watched", self.t0 + 30 * DAY)
+        self.watch_active = staticmethod(lambda job_id, goal_id: True)
+        self.at(29)
+        self.assertEqual((self.state("dated")["state"], self.state("watched")["state"]), ("active", "active"))
+        self.at(30.1)
+        self.assertEqual((self.state("dated")["state"], self.state("watched")["state"]), ("active", "active"))  # idle for 0.1 days since the exemption ended
+        self.at(36.9)
+        self.assertEqual(self.state("dated")["state"], "active")
+        self.at(37)
+        dormant = self.state("dated")
+        self.assertEqual((dormant["state"], dormant["dormant_since"]), ("dormant", self.t0 + 37 * DAY))
+        self.assertEqual(self.state("watched")["state"], "dormant")
+        self.ask("dated")
+        self.at(43.9)
+        self.assertFalse(self.state("dated")["fade_due"])
+        self.at(44.1)
+        self.assertTrue(self.state("dated")["fade_due"])
+
+    def test_exempt_subgoal_keeps_its_parent_and_is_never_cascaded(self):
+        for key, extra in (("p1", {}), ("p2", {}), ("p3", {})):
+            self.goal(key, **extra)
+        self.goal("c1", parent_id="p1", deadline=self.t0 + 60 * DAY)
+        self.goal("c2", parent_id="p2", no_fade=True)
+        self.goal("c3", parent_id="p3")
+        self.watch("c3", self.t0 + 60 * DAY)
+        self.watch_active = staticmethod(lambda job_id, goal_id: goal_id == "c3")
+        self.at(20)
+        for parent in ("p1", "p2", "p3"):
+            state = self.state(parent)
+            self.assertEqual(state["state"], "active", parent)
+            self.assertIn("active subgoal is exempt", state["exempt"])
+            with self.assertRaises(DomainError):
+                self.service.fade_goal({"id": parent, "status": "cancelled"})
+            self.assertEqual(self.store.goal(parent)[0]["status"], "active")
+        self.assertEqual([self.store.goal(c)[0]["status"] for c in ("c1", "c2", "c3")], ["active"] * 3)
+
+    def test_unreadable_watch_state_means_do_not_fade(self):
+        self.goal("watched")
+        self.watch("watched", self.t0 + 60 * DAY)
+        self.at(20)
+        def broken(job_id, goal_id):
+            raise ImportError("native scheduler unavailable")
+        self.watch_active = staticmethod(broken)
+        state = self.state("watched")
+        self.assertEqual(state["state"], "active")
+        self.assertIn("could not be read", state["exempt"])
+        (self.home / "muse/install.json").write_text("{ not json")
+        self.assertEqual(self.fade().of(self.store.goal("watched")[0])["state"], "active")
+
     def test_expired_watch_does_not_exempt(self):
         self.goal("watched")
-        self.store.write_text("install.json", json.dumps({"plugin": "hermes-muse", "installation_id": "fixture", "fixed": {}, "jobs": {
-            "job1": {"key": "watch-abc", "owner": "watched", "expires": self.t0 + DAY}}}))
-        (self.home / "cron").mkdir()
-        (self.home / "cron/jobs.json").write_text(json.dumps({"jobs": [{"id": "job1", "enabled": True}]}))
+        self.watch("watched", self.t0 + DAY)
+        self.watch_active = staticmethod(lambda job_id, goal_id: True)
         self.at(20)
         self.assertEqual(self.state("watched")["state"], "dormant")
+        self.assertEqual(self.state("watched")["dormant_since"], self.t0 + 8 * DAY)  # clock restarted when the watch expired
 
 
 class Exclusions(FadeCase):
@@ -181,6 +251,7 @@ class Preferences(FadeCase):
         self.assertEqual(self.state()["state"], "active")
         self.at(3)
         self.assertEqual(self.state()["state"], "dormant")
+        self.ask()
         self.at(4.9)
         self.assertFalse(self.state()["fade_due"])
         self.at(5)
@@ -235,13 +306,157 @@ class FadeGuardInputs(FadeCase):
         with self.assertRaises(ValueError):
             self.service.fade_goal({"id": "missing", "status": "cancelled"})
 
-    def test_ask_once_uses_a_fixed_event_key(self):
+    def test_ask_once_per_dormancy_episode(self):
         self.goal()
-        ask = {"event_key": "goal-fade-ask:g", "message": "Still want this?", "rationale": "dormant", "sources": ["goal:g"], "goal_id": "g",
-               "verified_at": self.now, "expires": self.now + 3 * DAY}
-        first = self.service.notification_add(dict(ask))
-        self.assertEqual(self.service.notification_add(dict(ask))["id"], first["id"])
+        self.at(8)
+        first = self.state()["ask_key"]
+        self.assertRegex(first, r"^goal-fade-ask:g:\d{8}$")
+        row = self.ask()
+        self.assertEqual(self.service.notification_add({"event_key": first, "message": "again", "rationale": "dormant", "sources": ["goal:g"], "goal_id": "g",
+                                                         "verified_at": self.now, "expires": self.now + 3 * DAY})["id"], row["id"])
         self.assertEqual(len(self.store.all("notification")), 1)
+        self.at(15)
+        self.service.fade_goal({"id": "g", "status": "cancelled"})
+        self.service.goal_update({"id": "g", "status": "active", "note": "back"})
+        self.at(30)
+        second = self.state()["ask_key"]
+        self.assertNotEqual(first, second)  # a revived goal that goes dormant again may be asked again
+        self.ask()
+        self.assertEqual(len(self.store.all("notification")), 2)
+
+
+class AskBeforeCancel(FadeCase):
+    def test_first_night_backlog_is_asked_then_cancelled_a_day_after_delivery(self):
+        keys = [f"old{i}" for i in range(5)]
+        for key in keys:
+            self.goal(key)
+        self.at(40)  # idle far beyond 14 days: the first night after rollout
+        self.assertTrue(all(self.state(k)["state"] == "dormant" and not self.state(k)["fade_due"] for k in keys))
+        for key in keys:
+            with self.assertRaises(DomainError) as early:
+                self.service.fade_goal({"id": key, "status": "cancelled"})
+            self.assertIn("has not been asked yet", str(early.exception))
+        rows = {key: self.ask(key, status="candidate") for key in keys}
+        for key in keys:  # asked in this very run: neither candidate nor fresh may cancel
+            with self.assertRaises(DomainError) as same_night:
+                self.service.fade_goal({"id": key, "status": "cancelled"})
+            self.assertIn("not been delivered yet", str(same_night.exception))
+            self.assertEqual(self.store.goal(key)[0]["status"], "active")
+        with self.store.transaction() as db:  # the patrol delivers them
+            for row in rows.values():
+                self.store.put(db, "notification", row["id"], {**row, "status": "sent"})
+        self.at(40.5)
+        with self.assertRaises(DomainError) as soon:
+            self.service.fade_goal({"id": "old0", "status": "cancelled"})
+        self.assertIn("less than a day ago", str(soon.exception))
+        self.at(41.1)
+        for key in keys:
+            self.assertEqual(self.service.fade_goal({"id": key, "status": "cancelled"})["status"], "cancelled")
+
+    def test_listing_says_what_the_row_is_waiting_for(self):
+        self.goal()
+        self.at(9)
+        row = Views(self.home, now=self.now).read({"kind": "goal", "status": "dormant"})["items"][0]
+        self.assertIn("not been asked yet", row["fade_wait"])
+        self.assertRegex(row["ask_key"], r"^goal-fade-ask:g:")
+
+
+class UnreadableMeansNoFade(FadeCase):
+    def test_damaged_or_invalid_preferences_do_not_turn_fading_on(self):
+        self.service.preference_update({"goal_dormant_days": None})
+        self.goal()
+        self.at(30)
+        prefs = self.home / "muse/PROACTIVE_PREFERENCES.md"
+        original = prefs.read_text(encoding="utf-8")
+        for damaged in ("not a header\nbody", '<!-- hermes-muse {"goal_dormant_days": 0} -->\nbody', "<!-- hermes-muse {broken -->\nbody"):
+            prefs.write_text(damaged, encoding="utf-8")
+            state = self.state()
+            self.assertEqual(state["state"], "active", damaged)
+            self.assertIn("could not be read", state["exempt"])
+            with self.assertRaises(DomainError) as caught:
+                self.service.fade_goal({"id": "g", "status": "cancelled"})
+            self.assertIn("could not be read", str(caught.exception))
+        prefs.unlink()  # a missing file simply means defaults
+        self.assertEqual(self.state()["state"], "dormant")
+        prefs.write_text(original, encoding="utf-8")
+        self.assertEqual(self.state()["state"], "active")  # dormancy off again
+
+    def test_unreadable_signal_store_does_not_fade(self):
+        self.goal()
+        self.at(30)
+        with patch("hermes_muse.fade.sqlite3.connect", side_effect=__import__("sqlite3").OperationalError("database is locked")):
+            state = self.state()
+        self.assertEqual(state["state"], "active")
+        self.assertIn("could not be read", state["exempt"])
+
+
+class NoFade(FadeCase):
+    def test_marker_exempts_forever_and_is_set_or_cleared_by_the_parent(self):
+        self.goal("pinned", no_fade=True)
+        self.goal("plain")
+        self.at(400)
+        self.assertEqual(self.state("pinned")["state"], "active")
+        self.assertEqual(self.state("plain")["state"], "dormant")
+        self.assertTrue(self.store.goal("pinned")[0]["no_fade"])
+        self.assertNotIn("no_fade", self.store.goal("plain")[0])
+        self.service.goal_update({"id": "plain", "no_fade": True})
+        self.assertEqual(self.state("plain")["state"], "active")
+        self.service.goal_update({"id": "pinned", "no_fade": False})
+        self.assertEqual(self.state("pinned")["state"], "active")  # the update itself is activity
+        row = next(r for r in Views(self.home, now=self.now).read({"kind": "goal"})["items"] if r["id"] == "plain")
+        self.assertIs(row["no_fade"], True)
+
+    def test_wrong_type_gets_an_actionable_error(self):
+        for action in ("create", "update"):
+            for bad in ("yes", 1, None, [True]):
+                with self.assertRaises(DomainError, msg=(action, bad)) as caught:
+                    if action == "create":
+                        self.goal("x", no_fade=bad)
+                    else:
+                        self.goal(f"y{type(bad).__name__}{id(bad) % 1000}")
+                        self.service.goal_update({"id": f"y{type(bad).__name__}{id(bad) % 1000}", "no_fade": bad})
+                error = caught.exception
+                self.assertEqual(error.details["field"], "data.no_fade")
+                self.assertIn("true", error.details["expected"])
+                self.assertIn("received", error.details)
+                self.assertIn("JSON boolean", error.details["hint"])
+                self.assertNotRegex(str(error), LEAK)
+
+    def test_contract_and_docs(self):
+        self.assertIn("no_fade", FIELDS["goal_create"].split())
+        self.assertIn("no_fade", FIELDS["goal_update"].split())
+        for path in ("docs/INTERFACE.md", "README.md", "skills/companion/references/goals.md"):
+            self.assertIn("no_fade", (ROOT / path).read_text(encoding="utf-8"), path)
+
+    def test_nightly_review_cannot_set_it(self):
+        self.service.signal("n1", "chat", "Please remind me about the report")
+        self.store.write_text("install.json", json.dumps({"plugin": "hermes-muse", "installation_id": "fixture", "jobs": {}, "fixed": {}}))
+        with self.store.transaction() as db:
+            self.store.put(db, "run", "night", {"id": "night", "job": "nightly-review", "started": 0, "status": "running", "stages": {}})
+        with self.assertRaises(DomainError) as caught:
+            self.service.intake_goal_create({"id": "n", "title": "Report", "description": "d", "completion_criteria": "c", "signal_id": "n1", "no_fade": True}, {"id": "night"})
+        self.assertEqual(caught.exception.details["field"], "data.no_fade")
+        self.assertIn("Fix:", str(caught.exception))
+        self.assertFalse((self.home / "muse/workspace/goals/n").exists())
+        with self.assertRaises(DomainError) as update:
+            self.service.fade_goal({"id": "n", "status": "cancelled", "no_fade": False})
+        self.assertEqual(update.exception.details["field"], "data")
+
+
+class CronCannotMoveTheThresholds(FadeCase):
+    def test_background_runs_cannot_write_fade_preferences(self):
+        for data in ({"goal_dormant_days": 1}, {"goal_fade_days": 1}, {"goal_dormant_days": None, "goal_fade_days": 2}):
+            with self.assertRaises(DomainError, msg=data) as caught:
+                self.service.preference_update(data, cron=True)
+            error = caught.exception
+            self.assertIn("goal_", error.details["field"])
+            self.assertIn("private parent conversation", error.details["hint"] + error.details["expected"] + str(error))
+            self.assertIn("run_complete", error.details["hint"])
+            self.assertIn("received", error.details)
+            self.assertNotRegex(str(error), LEAK)
+        self.assertEqual((self.service.preferences()["goal_dormant_days"], self.service.preferences()["goal_fade_days"]), (7, 7))
+        self.assertTrue(self.service.preference_update({"feed_brief": "Gardening"}, cron=True)["changed"])  # other preferences are unchanged
+        self.assertEqual(self.service.preference_update({"goal_dormant_days": 3})["goal_dormant_days"], 3)
 
 
 class Prompts(unittest.TestCase):
@@ -250,7 +465,7 @@ class Prompts(unittest.TestCase):
         order = [next(i for i, p in enumerate(paragraphs) if p.startswith(start)) for start in ("Goal intake step", "Goal fade step", "Ideas step")]
         self.assertEqual(order, sorted(order))
         step = paragraphs[order[1]]
-        for needle in ("status=dormant", "goal-fade-ask:", "fade_due=true", 'status="cancelled"', "never cancel a goal that is not listed"):
+        for needle in ("status=dormant", "ask_key", "fade_due=true", 'status="cancelled"', "never cancel a goal that is not listed"):
             self.assertIn(needle, step)
         closing = next(p for p in paragraphs if p.startswith("Complete recoverable work"))
         self.assertIn("one sentence on Goal fade", closing)
