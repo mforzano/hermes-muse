@@ -10,15 +10,20 @@ decide what to do with the answer. Whatever cannot be read means "do not fade".
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import time
 from pathlib import Path
 
 from .store import DAY, digest
 
+log = logging.getLogger(__name__)
 DEFAULTS = {"goal_dormant_days": 7, "goal_fade_days": 7}
 LIVE_OWNER = {"running", "stalling", "finalizing", "claimed"}
 UNSURE = "its fade data could not be read; retry later"
+# A native delegation or Cron owner whose record Hermes already purged reads as "unknown"; that only protects a goal this long.
+OWNER_UNKNOWN_DAYS = 30
+_warned = set()
 
 
 def settings(home):
@@ -133,25 +138,32 @@ class Fade:
         if status in LIVE_OWNER:
             return "its owner is still running"
         if status == "unknown" and (goal.get("owner") or {}).get("kind") in {"native_delegation", "cron"}:
-            return "its owner's status could not be read"
+            if self.now < self.last_activity(goal) + OWNER_UNKNOWN_DAYS * DAY:
+                return "its owner's status could not be read"
+            if goal["id"] not in _warned:
+                _warned.add(goal["id"])
+                log.warning("fade: owner status of goal %s is still unreadable after %d days; it follows the normal fade path", goal["id"], OWNER_UNKNOWN_DAYS)
         for child in self.children(goal):
             reason = self.exemption(child)
             if reason:
                 return f"an active subgoal is exempt ({reason[3:] if reason.startswith('it ') else reason})"
         return None
 
-    def asked(self, key, goal_id):
+    def asked(self, key, goal_id, since):
         """None when the dormancy question for this goal was delivered at least a day ago, else why the cancel must wait.
         Only status "sent" counts: an expired, failed, cancelled, dismissed or unknown notice never reached the user."""
         rows = self._query("SELECT data FROM records WHERE kind='notification' AND id=?", (digest(key),))
         if not rows:
             return "the dormancy question has not been asked yet"
         row = rows[0]
-        if row.get("status") != "sent" or row.get("goal_id") != goal_id:
+        if type(row.get("created")) not in (int, float):
+            return UNSURE  # this goal's question is unreadable; other goals are unaffected
+        if row["created"] < since:  # a question staged before the goal went dormant is not that question
+            return "the dormancy question has not been asked yet"
+        sent = row.get("dispatched_at")
+        if row.get("status") != "sent" or row.get("goal_id") != goal_id or sent is None:
             return "the dormancy question has not been delivered yet"
-        sent = row.get("dispatched_at", row.get("created"))
         if type(sent) not in (int, float):
-            self.unsure = True
             return UNSURE
         if sent > self.now - DAY:
             return "the dormancy question was sent less than a day ago"
@@ -161,8 +173,8 @@ class Fade:
         """None for a goal that is not active; otherwise state, dormant_since, fade_at, fade_due, ask_key, wait, exempt."""
         try:
             return self._of(goal)
-        except Exception:  # malformed stored values (for example a text timestamp): do not fade, do not crash callers
-            self.unsure = True
+        except Exception as exc:  # malformed stored values (for example a text timestamp): do not fade, do not crash callers
+            log.warning("fade: stored data for goal %s could not be read (%s: %s); it will not fade", goal.get("id"), type(exc).__name__, exc)
             return None if goal.get("status") != "active" else {"state": "active", "dormant_since": None, "fade_at": None, "fade_due": False,
                                                                   "ask_key": None, "wait": UNSURE, "exempt": UNSURE}
 
@@ -181,7 +193,7 @@ class Fade:
             return view
         fade_days = self.cfg["goal_fade_days"]
         key = ask_key(goal["id"], since)
-        view.update(state="dormant", dormant_since=since, ask_key=key, wait=self.asked(key, goal['id']))
+        view.update(state="dormant", dormant_since=since, ask_key=key, wait=self.asked(key, goal['id'], since))
         if fade_days is not None:
             view["fade_at"] = since + fade_days * DAY
             view["fade_due"] = self.now >= view["fade_at"] and view["wait"] is None and not self.unsure

@@ -10,7 +10,7 @@ from unittest.mock import patch
 from hermes_muse import wake_gate
 from hermes_muse.content_io import DomainError
 from hermes_muse.contracts import FIELDS
-from hermes_muse.fade import Fade
+from hermes_muse.fade import Fade, ask_key
 from hermes_muse.followup import context as followup_context, snapshot
 from hermes_muse.service import Companion
 from hermes_muse.views import Views
@@ -344,7 +344,7 @@ class AskBeforeCancel(FadeCase):
             self.assertEqual(self.store.goal(key)[0]["status"], "active")
         with self.store.transaction() as db:  # the patrol delivers them
             for row in rows.values():
-                self.store.put(db, "notification", row["id"], {**row, "status": "sent"})
+                self.store.put(db, "notification", row["id"], {**row, "status": "sent", "dispatched_at": self.now})
         self.at(40.5)
         with self.assertRaises(DomainError) as soon:
             self.service.fade_goal({"id": "old0", "status": "cancelled"})
@@ -382,7 +382,9 @@ class OnlyADeliveredQuestionCounts(FadeCase):
                 self.service.fade_goal({"id": "g", "status": "cancelled"})
             self.assertIn("has not been delivered yet", str(caught.exception))
             self.assertEqual(self.store.goal("g")[0]["status"], "active")
-        self.put(row, status="sent", created=self.now - 2 * DAY)
+        self.put(row, status="sent", created=self.now - 2 * DAY)  # sent but never dispatched: nothing shows it reached the user
+        self.assertFalse(self.state()["fade_due"])
+        self.put(row, status="sent", created=self.now - 2 * DAY, dispatched_at=self.now - 2 * DAY)
         self.assertTrue(self.state()["fade_due"])
 
     def test_the_day_counts_from_delivery_not_creation(self):
@@ -393,8 +395,9 @@ class OnlyADeliveredQuestionCounts(FadeCase):
         self.assertIn("less than a day ago", self.state()["wait"])
         self.put(row, status="sent", created=self.now - 3 * DAY, dispatched_at=self.now - 25 * 3600)
         self.assertTrue(self.state()["fade_due"])
-        self.put(row, status="sent", created=self.now - 3600)  # no dispatched_at: falls back to created
+        self.put(row, status="sent", created=self.now - 3 * DAY)  # no dispatched_at: there is no fallback to created
         self.assertFalse(self.state()["fade_due"])
+        self.assertIn("has not been delivered yet", self.state()["wait"])
 
     def test_a_notice_for_another_goal_does_not_count(self):
         row = self.idle_goal()
@@ -411,7 +414,7 @@ class OnlyADeliveredQuestionCounts(FadeCase):
         state = self.state()
         self.assertFalse(state["fade_due"])
         self.assertIn("could not be read", state["wait"])
-        self.put(row, status="sent", created=self.now - 2 * DAY)
+        self.put(row, status="sent", created=self.now - 2 * DAY, dispatched_at=self.now - 2 * DAY)
         self.assertTrue(self.state()["fade_due"])
         self.goal("w")
         self.watch("w", "never")
@@ -430,6 +433,55 @@ class OnlyADeliveredQuestionCounts(FadeCase):
         self.assertIn("owner's status could not be read", state["exempt"])
         with patch("hermes_muse.followup.owner_status", return_value="unassigned"):
             self.assertEqual(self.state("unowned")["state"], "dormant")
+
+
+class QuestionMustFollowDormancy(FadeCase):
+    def test_a_question_staged_before_dormancy_does_not_count(self):
+        self.goal()
+        key = ask_key("g", self.t0 + 7 * DAY)  # the key is predictable from the goal's last activity
+        row = self.service.notification_add({"event_key": key, "message": "Weather is nice today", "rationale": "x", "sources": ["goal:g"], "goal_id": "g",
+                                             "verified_at": self.now, "expires": self.now + 30 * DAY})
+        with self.store.transaction() as db:
+            self.store.put(db, "notification", row["id"], {**row, "status": "sent", "dispatched_at": self.now})
+        self.at(15)
+        state = self.state()
+        self.assertEqual((state["ask_key"], state["fade_due"]), (key, False))
+        self.assertIn("has not been asked yet", state["wait"])
+        with self.assertRaises(DomainError):
+            self.service.fade_goal({"id": "g", "status": "cancelled"})
+        self.assertEqual(self.store.goal("g")[0]["status"], "active")
+
+    def test_bad_record_is_logged_and_does_not_affect_later_goals(self):
+        self.goal("bad"); self.goal("good")
+        self.at(10)
+        goals = self.store.goals()
+        for goal in goals:
+            if goal["id"] == "bad":
+                goal["created"] = "yesterday"
+        fade = Fade(self.home, goals, self.now)
+        with self.assertLogs("hermes_muse.fade", "WARNING") as logged:
+            first = fade.of(next(g for g in goals if g["id"] == "bad"))
+        self.assertIn("goal bad", logged.output[0])
+        self.assertEqual((first["state"], first["fade_due"]), ("active", False))
+        self.assertEqual(fade.of(next(g for g in goals if g["id"] == "good"))["state"], "dormant")  # evaluated after the bad one
+
+    def test_owner_that_cannot_be_read_protects_a_goal_only_for_thirty_days(self):
+        self.goal("owned", owner={"kind": "native_delegation", "id": "deleg_gone"})
+        __import__("hermes_muse.fade", fromlist=["_warned"])._warned.clear()
+        with patch("hermes_muse.followup.owner_status", return_value="unknown"):
+            self.at(29.9)
+            self.assertIn("could not be read", self.state("owned")["exempt"])
+            with self.assertLogs("hermes_muse.fade", "WARNING") as logged:
+                self.at(30.1)
+                state = self.state("owned")
+            self.assertEqual(state["state"], "dormant")
+            self.assertIn("still unreadable", logged.output[0])
+            self.at(400)
+            self.assertEqual(self.state("owned")["state"], "dormant")
+            self.assertEqual(self.state("owned")["wait"], "the dormancy question has not been asked yet")  # still asked first
+            self.ask("owned")
+            self.at(402)
+            self.assertTrue(self.state("owned")["fade_due"])
 
 
 class UnreadableMeansNoFade(FadeCase):

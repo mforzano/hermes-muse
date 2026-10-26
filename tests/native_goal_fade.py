@@ -137,6 +137,17 @@ def run(home):
                 refused = call('goal_update', {'id': 'waiting2', 'status': 'cancelled'}, False, session='cron-night', task=night)
                 assert 'has not been delivered yet' in refused['error'], (status, refused)
                 assert runtime.store.goal('waiting2')[0]['status'] == 'active'
+            # A question the nightly review staged before the goal went dormant (its key is predictable) is not that question.
+            early = call('notification_add', {'event_key': rows['mid']['ask_key'], 'message': 'Weather is nice today', 'rationale': 'x', 'sources': ['goal:mid'], 'goal_id': 'mid',
+                                              'verified_at': iso(time.time()), 'expires': iso(time.time() + 3 * DAY), 'request_id': 'fade-early-ask', 'expected_revision': 'absent'},
+                         session='cron-night', task=night)
+            early_row = runtime.store.read('notification', early['id'])
+            with runtime.store.transaction() as store_db:
+                runtime.store.put(store_db, 'notification', early['id'], {**early_row, 'status': 'sent', 'created': rows['mid']['dormant_since'] - DAY, 'dispatched_at': time.time() - 3 * DAY})
+            runtime.service.clock = lambda: real_clock() + 5 * DAY  # mid is now past its cancel time and its "question" was delivered long ago
+            early_refused = call('goal_update', {'id': 'mid', 'status': 'cancelled'}, False, session='cron-night', task=night)
+            runtime.service.clock = real_clock
+            assert 'has not been asked yet' in early_refused['error'] and runtime.store.goal('mid')[0]['status'] == 'active', early_refused
             # The question is asked and delivered; a day later the cancel is allowed.
             ask = runtime.service.notification_add({'event_key': rows['old']['ask_key'], 'message': 'Still want this?', 'rationale': 'dormant', 'sources': ['goal:old'], 'goal_id': 'old',
                                                     'verified_at': time.time(), 'expires': time.time() + 3 * DAY})
@@ -144,7 +155,7 @@ def run(home):
                 runtime.store.put(store_db, 'notification', ask['id'], {**ask, 'status': 'candidate'})
             assert 'not been delivered yet' in call('goal_update', cancel, False, session='cron-night', task=night)['error']
             with runtime.store.transaction() as store_db:
-                runtime.store.put(store_db, 'notification', ask['id'], {**ask, 'status': 'sent', 'created': time.time() - 2 * DAY})
+                runtime.store.put(store_db, 'notification', ask['id'], {**ask, 'status': 'sent', 'created': time.time() - 2 * DAY, 'dispatched_at': time.time() - 2 * DAY})
             assert call('content_read', {'kind': 'goal', 'id': 'old'}, session='cron-night', task=night)  # still readable
             # The eligible goal is cancelled with the canonical note; the caller's note cannot replace it.
             done = call('goal_update', {**cancel, 'note': 'my own words'}, session='cron-night', task=night)
