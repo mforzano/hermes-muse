@@ -8,8 +8,8 @@ from .guidance import (EXAMPLES, ENUMS, IDENTIFIER_ACTIONS, KIND_WORDS, NOTHING,
 from .store import epoch
 
 FIELDS = {
-    "context": "section job window cursor limit id offset length revision part",
-    "status": "section job window cursor limit id offset length revision part",
+    "context": "section job window cursor limit id offset length revision part status",
+    "status": "section job window cursor limit id offset length revision part status",
     "conversation_read": "session_id revision offset read_only since until descriptor",
     "content_read": "kind id resource offset length revision cursor limit topic query part",
     "content_write": "kind id resource body expected_revision request_id signal_id",
@@ -20,7 +20,7 @@ FIELDS = {
     "interest_record": "signal_id title id expires rationale",
     "idea_add": "title rationale goal_id sources expires",
     "feedback": "kind id action signal_id until",
-    "preferences": "start_hour end_hour ordinary_per_day time_sensitive_per_day blocked_topics feed_brief deliver weather_context signal_id",
+    "preferences": "start_hour end_hour ordinary_per_day time_sensitive_per_day blocked_topics feed_brief deliver weather_context goal_dormant_days goal_fade_days signal_id",
     "notification_add": "event_key message rationale sources verified_at expires goal_id interest_id priority priority_reason issue_key source_snapshot supersedes signal_id watch_id final_result topic",
     "notification_refresh": "id verified_at sources message priority priority_reason source_snapshot",
     "notification_review": "id conversation_revisions verdict reason",

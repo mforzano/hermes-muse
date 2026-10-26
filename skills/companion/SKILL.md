@@ -1,7 +1,7 @@
 ---
 name: companion
 description: Goals, proactive reminders, calendar views, memory upkeep, Feed and research in the current Hermes profile.
-version: 0.3.13
+version: 0.3.14
 ---
 # Companion
 
@@ -19,7 +19,7 @@ Choose the relevant procedure:
 Own accepted outcomes: persist a goal, inspect results, explain them and mark done.
 Ordinary questions do not need goals. Respect changed user intent; never resend an
 external write with unknown outcome. Children/Cron inspect parent work but cannot
-change parent goals, except the nightly review's capped goal_create (see goals.md). A parent task_id does not make it a child.
+change parent goals, except the nightly review's capped goal_create and its cancel of a faded goal (see goals.md). A parent task_id does not make it a child.
 
 Read context/status sections as needed and follow real pagination. Correct bad
 arguments and recover transient reads; report genuine gaps. Do not broaden source

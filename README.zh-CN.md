@@ -1,4 +1,4 @@
-# Hermes Muse 0.3.13
+# Hermes Muse 0.3.14
 
 [English](README.md) · [设计文档](docs/DESIGN.md) · [验收清单](docs/ACCEPTANCE.md)
 
@@ -105,7 +105,7 @@ Skill 随插件注册，文件保留在插件目录。主对话按需读取其�
 | --- | --- | --- |
 | muse-proactive-watch | 每 30 分钟 | 来源检查记录、有价值的提醒、证据和交付状态 |
 | muse-memory-upkeep | 每小时 | 新事实、人物和群组资料 |
-| muse-nightly-review | 每天 03:20 | 对齐记录、目标补录（补上尚无目标的已接受请求，每次最多5个）、目标研究、Ideas、工作经验和技能复盘 |
+| muse-nightly-review | 每天 03:20 | 对齐记录、目标补录（补上尚无目标的已接受请求，每次最多5个）、目标淡出（休眠目标只问一次，宽限期后取消）、目标研究、Ideas、工作经验和技能复盘 |
 | muse-feed-pulse | 每小时 | 本地 Feed 文章 |
 | muse-weekly-governance-review | 周日 21:15 | 实际帮助、执行情况和调整建议的复盘 |
 | muse-monthly-system-audit | 每月 1 日 10:40 | 用户需求、提示词和运行流程的简短审计 |

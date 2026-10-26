@@ -270,6 +270,8 @@ def main():
         followup_checks(base / "followup")
         from native_goal_intake import run as goal_intake_checks
         goal_intake_checks(base / "goal-intake")
+        from native_goal_fade import run as goal_fade_checks
+        goal_fade_checks(base / "goal-fade")
         from native_compatibility_smoke import run as compatibility_checks
         compatibility_checks(base / "compatibility")
         from tool_client import close_containers

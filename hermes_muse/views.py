@@ -137,11 +137,12 @@ def validate_tools_note(body):
 
 
 class Views:
-    def __init__(self, home, *, allow_hidden=False, session_id=None):
+    def __init__(self, home, *, allow_hidden=False, session_id=None, now=None):
         self.home = Path(home).resolve()
         self.files = Files(self.home)
         self.allow_hidden = allow_hidden
         self.session_id = session_id
+        self.now = now
 
     def manifest(self):
         try:
@@ -378,19 +379,21 @@ class Views:
             if type(limit) is not int or not 1 <= limit <= 100:
                 raise DomainError("invalid_argument", "limit must be 1..100")
             status = data.get("status")
-            if status is not None and (kind != "goal" or status not in {"open", "closed"}):
+            if status is not None and (kind != "goal" or status not in {"open", "closed", "dormant"}):
                 raise DomainError(
-                    "invalid_argument", "status=open|closed applies only to goals"
+                    "invalid_argument", "status=open|closed|dormant applies only to goals"
                 )
-            items = []
+            items, goals = [], {}
             for item in self.keys(kind, key):
                 body, metadata, rev = self.object(
                     kind,
                     key if kind == "goal_file" else item,
                     item if kind == "goal_file" else None,
                 )
-                if status and (metadata.get("status") == "active") != (status == "open"):
+                if status and (metadata.get("status") == "active") != (status != "closed"):
                     continue
+                if kind == "goal":
+                    goals[item] = metadata
                 if data.get("topic") and data["topic"] not in {
                     metadata.get("goal_id"),
                     metadata.get("interest_id"),
@@ -446,6 +449,14 @@ class Views:
                     }
                 )
             if kind == "goal":
+                from .fade import Fade
+                fade = Fade(self.home, list(goals.values()), self.now)
+                for row in items:
+                    state = fade.of(goals[row["id"]])
+                    if state and state["state"] == "dormant":
+                        row.update(dormant_since=state["dormant_since"], fade_at=state["fade_at"], fade_due=state["fade_due"])
+                if status == "dormant":
+                    items = [row for row in items if "dormant_since" in row]
                 # Needs-you, blocked, in progress; closed goals last, newest first.
                 def goal_order(r):
                     if r.get("status") != "active":

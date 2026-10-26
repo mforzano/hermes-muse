@@ -164,7 +164,10 @@ def collect(store, job, now, since):
     signals = sorted((r for r in _records(home, "signal") if not is_background_message(r.get("text"))),
                      key=lambda r: r["created"])
     cursor = _record(home, "cursor", job)
+    from .fade import Fade
     goals = store.goals()
+    fade = Fade(home, goals, now)
+    goals = [g for g in goals if not fade.dormant(g)]  # dormant goals neither wake nor count as active
     notices = [r for r in _records(home, "notification")
                if r.get("status") in {"candidate", "pending"} and r.get("expires", 0) > now]
     interests = [r for r in _records(home, "interest")

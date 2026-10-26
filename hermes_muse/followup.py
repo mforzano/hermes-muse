@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from .content_io import DomainError, Files
+from .fade import Fade
 from .views import Views
 
 
@@ -79,12 +80,11 @@ def snapshot(home, *, now=None, session_id=None, cursor='', limit=25):
         raise DomainError('invalid_argument', 'Use a goal ID cursor and limit 1..50')
     view = Views(home)
     view.manifest()
-    due = []
-    for key in view.keys('goal'):
-        _, goal, _ = view.object('goal', key)
-        if (goal['status'] == 'active' and (not session_id or goal.get('session_id') == session_id)
-                and goal.get('next_check_at', 0) <= now):
-            due.append(goal)
+    goals = [view.object('goal', key)[1] for key in view.keys('goal')]
+    fade = Fade(view.home, goals, now)
+    due = [goal for goal in goals
+           if (goal['status'] == 'active' and (not session_id or goal.get('session_id') == session_id)
+               and goal.get('next_check_at', 0) <= now and not fade.dormant(goal))]
     selected = [g for g in due if g['id'] > cursor][:limit]
     items = []
     from .responses import LIMIT
@@ -98,7 +98,7 @@ def snapshot(home, *, now=None, session_id=None, cursor='', limit=25):
         items.append(item)
     return {'items': items, 'due_total': len(due),
             'next_cursor': items[-1]['id'] if items and any(g['id'] > items[-1]['id'] for g in due) else None,
-            'pagination': 'Live goal IDs in order; restart a pass to include newly added earlier IDs.',
+            'pagination': 'Dormant goals (see context section=goal) are left out. Live goal IDs in order; restart a pass to include newly added earlier IDs.',
             'instruction': 'Inspect owner results, tell the user, then goal_update(status=done,note=...). Unknown writes are never automatically retried.'}
 
 

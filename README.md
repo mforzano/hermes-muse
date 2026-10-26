@@ -1,4 +1,4 @@
-# Hermes Muse 0.3.13
+# Hermes Muse 0.3.14
 
 [简体中文](README.zh-CN.md) · [Design](docs/DESIGN.md) · [Acceptance guide](docs/ACCEPTANCE.md)
 
@@ -95,7 +95,9 @@ explained to the user, call `goal_update(id=..., status="done", note="...")`.
 Optional owner handles link native delegation, Cron, Paseo or external work; checking
 an owner never dispatches again or automatically completes a goal. Due active goals
 appear in `context(section="followups")`; ordinary turns get at most a short reminder.
-Children and Cron can inspect/report, while private parent conversations own goals. The one exception is the nightly review's intake step, which may call `goal_create` (requires `signal_id`, at most 5 per run) for accepted requests no goal covers; every other goal write from Cron or a child is rejected.
+Children and Cron can inspect/report, while private parent conversations own goals. The one exception is the nightly review's intake step, which may call `goal_create` (requires `signal_id`, at most 5 per run) for accepted requests no goal covers; it may also cancel a goal that has faded (below); every other goal write from Cron or a child is rejected.
+**Fade.** A goal that is still `active` but has had no activity for `goal_dormant_days` (default 7) is dormant: it leaves `context(section=followups)`, the reminder hint and the wake gate's due checks, and shows `dormant_since` in the goal list (`status=dormant` lists only these). Activity is derived, not stored: creating or updating the goal (progress, owner, deadline, next check, subgoal), or a user message that contains the goal's ID or title. A future deadline, an enabled unexpired watch or a running owner exempts a goal; waiting-for-user and blocked goals are not exempt. The nightly review asks once per goal (a notice with the fixed key `goal-fade-ask:<id>`), and `goal_fade_days` (default 7) after dormancy cancels it with a note; the service re-checks eligibility before cancelling and never touches an external agent. A parent can revive a faded goal with `goal_update(status="active")`. Both settings are preferences (whole days 1-365; `null` turns that stage off).
+
 Goals need no request ID, reply hash, handoff or caller scope token. An optional integer
 expected_revision prevents stale writes and returns the current goal on conflict.
 
@@ -130,7 +132,7 @@ Delegates are instructed to remain read-only under inherited host permissions; t
 | --- | --- | --- |
 | muse-proactive-watch | Every 30 minutes | Source coverage, worthwhile reminders, evidence and delivery state |
 | muse-memory-upkeep | Hourly | New facts and people/group notes |
-| muse-nightly-review | Daily at 03:20 | Alignment, goal intake (accepted requests no goal covers, at most 5), goal research, Ideas, working lessons and skill review |
+| muse-nightly-review | Daily at 03:20 | Alignment, goal intake (accepted requests no goal covers, at most 5), goal fade (one question, then cancel after the grace days), goal research, Ideas, working lessons and skill review |
 | muse-feed-pulse | Hourly | Local Feed articles |
 | muse-weekly-governance-review | Sunday at 21:15 | A concrete review of usefulness, execution and proposed adjustments |
 | muse-monthly-system-audit | First day of the month at 10:40 | A short audit of priorities, instructions and recurring work |

@@ -130,18 +130,19 @@ class Runtime:
             from agent.delegation_context import is_delegated_child_context
             delegated = is_delegated_child_context()
             goal_write = action in {'goal_create', 'goal_update'} or action == 'forget' and data.get('kind') == 'goal'
-            intake = None
+            nightly = None
             if goal_write and (delegated or info['cron'] or info.get('platform') in {'cron', 'delegate', 'subagent'} or not kwargs.get('session_id')):
-                # The sole exception: goal_create from the nightly review Cron. Cron identity comes from the
-                # session; task_id only names which Cron job, since the real parent also carries a task_id.
-                if action == 'goal_create' and not delegated and kwargs.get('session_id') \
+                # The only exceptions: goal_create (intake) and goal_update (auto-fade, re-checked by the service) from
+                # the nightly review Cron. Cron identity comes from the session; task_id only names which Cron job,
+                # since the real parent also carries a task_id.
+                if action in {'goal_create', 'goal_update'} and not delegated and kwargs.get('session_id') \
                         and (info.get('platform') == 'cron' or info['cron'] and info.get('platform') not in {'delegate', 'subagent'}):
                     with profile_scope(self.home):
                         run = self.service.runs.bind(kwargs.get('task_id'))
-                    intake = run if run and run['job'] == 'nightly-review' else None
-                if not intake:
+                    nightly = run if run and run['job'] == 'nightly-review' else None
+                if not nightly:
                     raise DomainError('permission_denied', 'Only a private parent conversation can change goals.' + (
-                        ' From the nightly review only goal_create (with signal_id) is allowed: name this goal in the run_complete summary instead.'
+                        ' From the nightly review only goal_create (with signal_id) and goal_update(status=cancelled) for a fade_due goal are allowed: name this goal in the run_complete summary instead.'
                         if info['cron'] or info.get('platform') == 'cron' else ''))
             # Children inherit the native profile/user scope. Reading needs no
             # plugin grant service; global writes and lifecycle refresh stay parent-owned.
@@ -207,10 +208,12 @@ class Runtime:
                 elif action == "installation_prepare":
                     from .installation import prepare
                     result = prepare(self, data, kwargs.get("session_id", ""), kwargs.get("turn_id", ""))
-                elif action == 'goal_create' and intake:
-                    result = self.service.intake_goal_create(data, intake)
+                elif action == 'goal_create' and nightly:
+                    result = self.service.intake_goal_create(data, nightly)
                 elif action == 'goal_create':
                     result = self.service.goal_create(data, session_id=kwargs.get('session_id', ''))
+                elif action == 'goal_update' and nightly:
+                    result = self.service.fade_goal(data)
                 elif action == 'goal_update':
                     result = self.service.goal_update(data)
                 elif action in {"context", "status"}:

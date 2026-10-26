@@ -69,11 +69,12 @@ def run(home):
             _, second = execution('nightly-review')
             call('goal_create', goal('night-0', signal_id='u'), False, session='cron-night', task=second)
             assert call('goal_create', goal('night-5', signal_id='u'), session='cron-night', task=second)['status'] == 'active'
-            # Every other goal write stays parent-only for the nightly job.
+            # Every other goal write stays parent-only for the nightly job (since 0.3.14 goal_update is limited to the guarded
+            # auto-fade cancel, which refuses a goal that has not faded: see native_goal_fade.py).
             for action, data in (('goal_update', {'id': 'night-0', 'status': 'cancelled'}), ('goal_update', {'id': 'parent-goal', 'owner': None}),
                                  ('forget', {'kind': 'goal', 'id': 'night-0', 'signal_id': 'u', 'request_id': 'forget-night-0', 'expected_revision': call('content_read', {'kind': 'goal', 'id': 'night-0'}, session='cron-night', task=second)['revision']})):
                 denied = call(action, data, False, session='cron-night', task=second)
-                assert denied['code'] == 'permission_denied', denied
+                assert denied['code'] == ('invalid_argument' if action == 'goal_update' else 'permission_denied'), denied
             assert runtime.store.goal('night-0')[0]['status'] == 'active' and runtime.store.goal('parent-goal')[0]['revision'] == 1
             # Other Cron jobs, task-less Cron sessions and child tasks cannot create goals.
             _, patrol = execution('proactive-watch')

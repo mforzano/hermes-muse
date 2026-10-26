@@ -15,7 +15,8 @@ from .store import DAY, GOVERNANCE_JOBS, bounded, digest, epoch, identifier, is_
 
 DEFAULT_PREFERENCES = {"start_hour": 9, "end_hour": 22, "ordinary_per_day": None,
                        "time_sensitive_per_day": 3, "blocked_topics": [], "feed_brief": "",
-                       "deliver": None, "weather_context": False}
+                       "deliver": None, "weather_context": False,
+                       "goal_dormant_days": 7, "goal_fade_days": 7}
 # A reviewed relevant notice held this long by conversation churn/activity is released
 # to the remaining gates (quiet hours, budget, snooze, topic opt-out, dedup).
 HOLD_RELEASE = 3600
@@ -45,6 +46,9 @@ class Companion:
             raise ValueError("deliver must be a non-empty string or null")
         if type(prefs["weather_context"]) is not bool:
             raise ValueError("weather_context must be true or false")
+        for key in ("goal_dormant_days", "goal_fade_days"):
+            if prefs[key] is not None and (type(prefs[key]) is not int or not 1 <= prefs[key] <= 365):
+                raise ValueError(f"Invalid preference: {key}")
         return prefs
 
     def preference_update(self, data, *, cron=False):
@@ -74,6 +78,11 @@ class Companion:
             if type(prefs["weather_context"]) is not bool:
                 raise fail("preferences", "data.weather_context", "must be true or false", expected="true (send the configured location to a third-party weather service) or false (default, no weather lookups)",
                            got=prefs["weather_context"], fix="send data.weather_context as the JSON boolean true or false")
+            for key, meaning in (("goal_dormant_days", "idle days before an active goal turns dormant; null turns goal fading off"),
+                                 ("goal_fade_days", "days a dormant goal waits before the nightly review cancels it; null never cancels")):
+                if prefs[key] is not None and (type(prefs[key]) is not int or not 1 <= prefs[key] <= 365):
+                    raise fail("preferences", "data." + key, "is out of range", expected=f"a whole number of days from 1 to 365 ({meaning}); default 7",
+                               got=prefs[key], fix=f"send data.{key} as a whole number from 1 to 365, or null to turn that stage off")
             if not isinstance(prefs["feed_brief"], str) or len(prefs["feed_brief"]) > 12000:
                 raise fail("preferences", "data.feed_brief", "must be text of at most 12000 characters", got=prefs["feed_brief"], fix="send a shorter plain-text brief")
             path = self.store.path("PROACTIVE_PREFERENCES.md")
@@ -168,6 +177,27 @@ class Companion:
         except BaseException:
             reserve(-1)
             raise
+
+    def fade_goal(self, data):
+        """The nightly review's only goal_update: cancel a goal the server itself finds faded (never trusts the caller)."""
+        from .fade import Fade
+        extra = set(data) - {'id', 'status', 'note', 'expected_revision'}
+        if extra or data.get('status') != 'cancelled' or not data.get('id'):
+            raise fail('goal_update', 'data', 'is limited to auto-fade in the nightly review',
+                       expected='exactly {id, status: "cancelled"} (note and expected_revision optional)',
+                       got=sorted(data), fix='send only id and status="cancelled" for a goal listed with fade_due=true; name any other change in the run_complete summary')
+        record, _ = self.store.goal(identifier(data['id']))
+        fade = Fade(self.store.home, self.store.goals(), self.clock())
+        state = fade.of(record)
+        if not state or not state['fade_due']:
+            why = ('it is not active' if not state else f"it is exempt because {state['exempt']}" if state['exempt']
+                   else 'fading is off for it' if state['fade_at'] is None and state['state'] == 'dormant'
+                   else 'it is dormant but the cancel time has not come' if state['state'] == 'dormant' else 'it is not dormant')
+            raise fail('goal_update', 'data.id', 'is not eligible for auto-fade: ' + why, expected='a goal returned by context(section=goal,status=dormant) with fade_due=true',
+                       got=data['id'], fix='skip this goal; re-list dormant goals and cancel only rows with fade_due=true')
+        idle = int((self.clock() - fade.last_activity(record)) // DAY)
+        return self.goal_update({'id': record['id'], 'status': 'cancelled', 'expected_revision': record['revision'],
+                                 'note': f'no user activity for {idle} days; auto-faded'})
 
     def goal_update(self, data):
         from .content_io import DomainError

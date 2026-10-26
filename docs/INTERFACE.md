@@ -1,4 +1,4 @@
-# Muse 0.3.13 interface
+# Muse 0.3.14 interface
 
 Single tool: `muse_manage(action,data)`. Profile/home come from Hermes, never caller parameters.
 Goals need no request ID or caller scope token. Optional goal expected_revision is one integer; conflicts return current goal.
@@ -8,19 +8,19 @@ Content page revisions and non-goal mutation journals retain their existing boun
 
 | Action | Fields | Write/version contract |
 |---|---|---|
-| `context` | `section job window cursor limit id offset length revision part` | Action-specific fields or pure read |
-| `status` | `section job window cursor limit id offset length revision part` | Action-specific fields or pure read |
+| `context` | `section job window cursor limit id offset length revision part status` | Action-specific fields or pure read |
+| `status` | `section job window cursor limit id offset length revision part status` | Action-specific fields or pure read |
 | `conversation_read` | `session_id revision offset read_only since until descriptor` | Action-specific fields or pure read |
 | `content_read` | `kind id resource offset length revision cursor limit topic query part` | Action-specific fields or pure read |
 | `content_write` | `kind id resource body expected_revision request_id signal_id` | Body revision + request ID |
 | `memory_feedback_review` | `receipt_id decision reason expected_revision request_id` | Receipt integer revision + request ID |
 | `installation_prepare` | `operation signal_id expected_revision request_id` | Installation revision + request ID |
 | `goal_create` | `signal_id title description completion_criteria id parent_id deadline external_ref owner` | Private parent only, plus the nightly-review Cron (requires `signal_id`, at most 5 per run); starts at revision 1 |
-| `goal_update` | `id progress note status owner waiting_user blocked next_check_at expected_revision research_review_at description completion_criteria` | Private parent only; optional integer revision |
+| `goal_update` | `id progress note status owner waiting_user blocked next_check_at expected_revision research_review_at description completion_criteria` | Private parent only (the nightly-review Cron may send only `{id, status:"cancelled"}` for a goal listed with `fade_due`; the service re-checks and writes the note); optional integer revision |
 | `interest_record` | `signal_id title id expires rationale expected_revision request_id` | Request ID + natural key |
 | `idea_add` | `title rationale goal_id sources expires expected_revision request_id` | Request ID + natural key |
 | `feedback` | `kind id action signal_id until expected_revision request_id` | Required revision + request ID |
-| `preferences` | `start_hour end_hour ordinary_per_day time_sensitive_per_day blocked_topics feed_brief deliver weather_context signal_id expected_revision request_id` | Required revision + request ID |
+| `preferences` | `start_hour end_hour ordinary_per_day time_sensitive_per_day blocked_topics feed_brief deliver weather_context goal_dormant_days goal_fade_days signal_id expected_revision request_id` | Required revision + request ID |
 | `notification_add` | `event_key message rationale sources verified_at expires goal_id interest_id priority priority_reason issue_key source_snapshot supersedes signal_id watch_id final_result expected_revision request_id` | Request ID + natural key |
 | `notification_refresh` | `id verified_at sources message priority priority_reason source_snapshot expected_revision request_id` | Required revision + request ID |
 | `notification_review` | `id verdict reason expected_revision request_id` (`conversation_revisions` optional, ignored) | Required revision + request ID |
@@ -49,8 +49,8 @@ Content page revisions and non-goal mutation journals retain their existing boun
 | `research_status` | `id request_id` | Optional replay request ID |
 | `forget` | `kind object_kind id resource signal_id expected_revision request_id` | Required revision + request ID |
 
-Due followups: `context(section=followups,cursor?,limit?)` returns active due goals and read-only owner status. Completed owners need parent review, not automatic goal completion.
-Ordinary parent task_id values are accepted. Native session kind and delegated context reject child/Cron goal mutations, except `goal_create` from the running nightly-review execution (Cron session plus host-bound job; `signal_id` required; 5 per execution, `size_limit` on `data` beyond that).
+Due followups: `context(section=followups,cursor?,limit?)` returns active due goals (not dormant ones) and read-only owner status. Dormancy is derived, never a status: `context(section=goal)` rows of a dormant goal carry `dormant_since`, `fade_at`, `fade_due`, and `context(section=goal,status=open|closed|dormant)` filters (`dormant` lists only those). Preferences `goal_dormant_days` and `goal_fade_days` (whole days 1-365, defaults 7 and 7; `null` turns dormancy, respectively automatic cancel, off). Completed owners need parent review, not automatic goal completion.
+Ordinary parent task_id values are accepted. Native session kind and delegated context reject child/Cron goal mutations, except `goal_create` from the running nightly-review execution (Cron session plus host-bound job; `signal_id` required; 5 per execution, `size_limit` on `data` beyond that) and `goal_update` with only `id` and `status="cancelled"` from that execution for a goal whose fade is due (re-checked server-side; otherwise an error naming the reason).
 Request budget512 KiB, final response256 KiB. Follow real cursors; oversized committed non-goal results expose content_ref.
 Notification review, quiet hours, actual transport receipts and unknown-write no-resend behavior remain unchanged.
 Offline migration/rollback: `python -m hermes_muse.migration --home <profile-home> [--rollback]`; back up and stop writers.

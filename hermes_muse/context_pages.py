@@ -133,14 +133,14 @@ def check_review(service, data, db, old, up_to, through):
 
 
 def context(service, data, *, view=None):
-    views = Views(service.store.home)
+    views = Views(service.store.home, now=service.clock())
     section = data.get('section', 'overview')
     if section == 'followups':
         from .followup import snapshot
         # Followup pages hold at most 50 goals; larger requests page with next_cursor.
         return snapshot(service.store.home, now=service.clock(), cursor=data.get('cursor', ''), limit=min(limit(data), 50))
     if section in COLLECTIONS:
-        return views.read({'kind': section, **{k: v for k, v in data.items() if k in {'cursor','limit','id','offset','length','revision','part'}}})
+        return views.read({'kind': section, **{k: v for k, v in data.items() if k in {'cursor','limit','id','offset','length','revision','part','status'}}})
     if section == 'signals':
         return signals(service, data)
     if section == 'conversations':
