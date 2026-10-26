@@ -52,7 +52,7 @@ class FadeCase(unittest.TestCase):
         row = self.service.notification_add({"event_key": self.state(key)["ask_key"], "message": "Still want this?", "rationale": "dormant", "sources": [f"goal:{key}"],
                                              "goal_id": key, "verified_at": self.now, "expires": self.now + 3 * DAY})
         with self.store.transaction() as db:
-            self.store.put(db, "notification", row["id"], {**row, "status": status})
+            self.store.put(db, "notification", row["id"], {**row, "status": status, **({"dispatched_at": self.now} if status == "sent" else {})})
         return row
 
     def watch(self, goal_id, expires):
@@ -359,6 +359,77 @@ class AskBeforeCancel(FadeCase):
         row = Views(self.home, now=self.now).read({"kind": "goal", "status": "dormant"})["items"][0]
         self.assertIn("not been asked yet", row["fade_wait"])
         self.assertRegex(row["ask_key"], r"^goal-fade-ask:g:")
+
+
+class OnlyADeliveredQuestionCounts(FadeCase):
+    def idle_goal(self, key="g"):
+        self.goal(key)
+        self.at(40)
+        return self.ask(key, status="candidate")
+
+    def put(self, row, **changes):
+        with self.store.transaction() as db:
+            self.store.put(db, "notification", row["id"], {**row, **changes})
+
+    def test_every_state_but_sent_leaves_the_goal_dormant(self):
+        row = self.idle_goal()
+        self.at(43)
+        for status in ("candidate", "pending", "queued", "dispatching", "transport_queued", "expired", "failed", "cancelled", "dismissed", "unknown", "done", "stopped", "accepted", "suppressed"):
+            self.put(row, status=status, created=self.now - 2 * DAY)
+            state = self.state()
+            self.assertEqual((state["state"], state["fade_due"]), ("dormant", False), status)
+            with self.assertRaises(DomainError, msg=status) as caught:
+                self.service.fade_goal({"id": "g", "status": "cancelled"})
+            self.assertIn("has not been delivered yet", str(caught.exception))
+            self.assertEqual(self.store.goal("g")[0]["status"], "active")
+        self.put(row, status="sent", created=self.now - 2 * DAY)
+        self.assertTrue(self.state()["fade_due"])
+
+    def test_the_day_counts_from_delivery_not_creation(self):
+        row = self.idle_goal()
+        self.at(43)
+        self.put(row, status="sent", created=self.now - 3 * DAY, dispatched_at=self.now - 3600)
+        self.assertFalse(self.state()["fade_due"])
+        self.assertIn("less than a day ago", self.state()["wait"])
+        self.put(row, status="sent", created=self.now - 3 * DAY, dispatched_at=self.now - 25 * 3600)
+        self.assertTrue(self.state()["fade_due"])
+        self.put(row, status="sent", created=self.now - 3600)  # no dispatched_at: falls back to created
+        self.assertFalse(self.state()["fade_due"])
+
+    def test_a_notice_for_another_goal_does_not_count(self):
+        row = self.idle_goal()
+        self.goal("other")
+        self.at(43)
+        self.put(row, status="sent", created=self.now - 2 * DAY, goal_id="other")
+        self.assertFalse(self.state()["fade_due"])
+        self.assertIn("has not been delivered yet", self.state()["wait"])
+
+    def test_malformed_values_mean_do_not_fade_and_never_raise(self):
+        row = self.idle_goal()
+        self.at(43)
+        self.put(row, status="sent", created="yesterday", dispatched_at="yesterday")
+        state = self.state()
+        self.assertFalse(state["fade_due"])
+        self.assertIn("could not be read", state["wait"])
+        self.put(row, status="sent", created=self.now - 2 * DAY)
+        self.assertTrue(self.state()["fade_due"])
+        self.goal("w")
+        self.watch("w", "never")
+        self.watch_active = staticmethod(lambda job_id, goal_id: False)
+        self.assertEqual(self.state("w")["state"], "active")  # a text expiry cannot be compared: no fade, no TypeError
+        self.assertIn("could not be read", self.state("w")["exempt"])
+        self.assertEqual([g["id"] for g in wake_gate.collect(self.store, "proactive-watch", self.now, self.now - 3600)["goals"]].count("w"), 1)
+
+    def test_owner_status_that_cannot_be_read_does_not_fade(self):
+        self.goal("owned", owner={"kind": "cron", "id": "job-1"})
+        self.goal("unowned")
+        self.at(20)
+        with patch("hermes_muse.followup.owner_status", return_value="unknown"):
+            state = self.state("owned")
+        self.assertEqual(state["state"], "active")
+        self.assertIn("owner's status could not be read", state["exempt"])
+        with patch("hermes_muse.followup.owner_status", return_value="unassigned"):
+            self.assertEqual(self.state("unowned")["state"], "dormant")
 
 
 class UnreadableMeansNoFade(FadeCase):

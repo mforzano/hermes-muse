@@ -120,6 +120,23 @@ def run(home):
             assert (runtime.service.preferences()['goal_dormant_days'], runtime.service.preferences()['goal_fade_days']) == (7, 7)
             pinned = call('goal_create', {'title': 'Pinned', 'description': 'd', 'completion_criteria': 'c', 'signal_id': 'u', 'no_fade': True, 'id': 'sig'}, False, session='cron-night', task=night)
             assert pinned['field'] == 'data.no_fade' and not (home / 'muse/workspace/goals/sig').exists(), pinned
+            # A question the nightly review adds and resolves itself, or one that expired unsent, never counts as asked.
+            iso = lambda t: datetime.fromtimestamp(t, timezone.utc).isoformat()
+            forged = call('notification_add', {'event_key': rows['waiting2']['ask_key'], 'message': 'Still want this?', 'rationale': 'dormant', 'sources': ['goal:waiting2'],
+                                               'goal_id': 'waiting2', 'verified_at': iso(time.time()), 'expires': iso(time.time() + 3 * DAY),
+                                               'request_id': 'fade-forged-ask', 'expected_revision': 'absent'}, session='cron-night', task=night)
+            notice_id = forged['id']
+            notice_revision = call('content_read', {'kind': 'notice', 'id': notice_id}, session='cron-night', task=night)['revision']
+            resolved = call('notification_resolve', {'id': notice_id, 'verified_at': iso(time.time()), 'sources': ['goal:waiting2'], 'reason': 'No longer relevant',
+                                                     'request_id': 'fade-forged-resolve', 'expected_revision': notice_revision}, session='cron-night', task=night)
+            row = runtime.store.read('notification', notice_id)
+            assert row['status'] != 'sent', row
+            for status in (row['status'], 'expired', 'failed', 'dismissed', 'unknown'):
+                with runtime.store.transaction() as store_db:
+                    runtime.store.put(store_db, 'notification', notice_id, {**row, 'status': status, 'created': time.time() - 3 * DAY})
+                refused = call('goal_update', {'id': 'waiting2', 'status': 'cancelled'}, False, session='cron-night', task=night)
+                assert 'has not been delivered yet' in refused['error'], (status, refused)
+                assert runtime.store.goal('waiting2')[0]['status'] == 'active'
             # The question is asked and delivered; a day later the cancel is allowed.
             ask = runtime.service.notification_add({'event_key': rows['old']['ask_key'], 'message': 'Still want this?', 'rationale': 'dormant', 'sources': ['goal:old'], 'goal_id': 'old',
                                                     'verified_at': time.time(), 'expires': time.time() + 3 * DAY})

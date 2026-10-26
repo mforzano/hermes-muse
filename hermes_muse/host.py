@@ -323,7 +323,7 @@ class HermesHost:
         updates = []
         for row in self.store.all("notification"):
             reconcilable = row["status"] in {"dispatching", "queued", "transport_queued"}
-            reconcilable |= (row["status"] == "unknown" and row.get("direct_delivery") and row.get("output_finalized"))
+            reconcilable |= bool(row["status"] == "unknown" and row.get("direct_delivery") and row.get("output_finalized"))
             if not reconcilable or not row.get("job_id"):
                 continue
             with profile_scope(self.home):

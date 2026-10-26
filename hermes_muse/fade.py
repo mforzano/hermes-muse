@@ -18,8 +18,6 @@ from .store import DAY, digest
 
 DEFAULTS = {"goal_dormant_days": 7, "goal_fade_days": 7}
 LIVE_OWNER = {"running", "stalling", "finalizing", "claimed"}
-# An ask notice in one of these states has not reached the user yet.
-UNSENT = {"candidate", "pending", "queued", "dispatching", "transport_queued"}
 UNSURE = "its fade data could not be read; retry later"
 
 
@@ -131,27 +129,44 @@ class Fade:
             except Exception:  # unreadable watch state: do not fade
                 self.unsure = True
         from .followup import owner_status
-        if owner_status(self.home, goal.get("owner")) in LIVE_OWNER:
+        status = owner_status(self.home, goal.get("owner"))
+        if status in LIVE_OWNER:
             return "its owner is still running"
+        if status == "unknown" and (goal.get("owner") or {}).get("kind") in {"native_delegation", "cron"}:
+            return "its owner's status could not be read"
         for child in self.children(goal):
             reason = self.exemption(child)
             if reason:
                 return f"an active subgoal is exempt ({reason[3:] if reason.startswith('it ') else reason})"
         return None
 
-    def asked(self, key):
-        """None when the dormancy question was delivered at least a day ago, else why the cancel must wait."""
+    def asked(self, key, goal_id):
+        """None when the dormancy question for this goal was delivered at least a day ago, else why the cancel must wait.
+        Only status "sent" counts: an expired, failed, cancelled, dismissed or unknown notice never reached the user."""
         rows = self._query("SELECT data FROM records WHERE kind='notification' AND id=?", (digest(key),))
         if not rows:
             return "the dormancy question has not been asked yet"
-        if rows[0].get("status") in UNSENT:
+        row = rows[0]
+        if row.get("status") != "sent" or row.get("goal_id") != goal_id:
             return "the dormancy question has not been delivered yet"
-        if rows[0].get("created", self.now) > self.now - DAY:
+        sent = row.get("dispatched_at", row.get("created"))
+        if type(sent) not in (int, float):
+            self.unsure = True
+            return UNSURE
+        if sent > self.now - DAY:
             return "the dormancy question was sent less than a day ago"
         return None
 
     def of(self, goal):
         """None for a goal that is not active; otherwise state, dormant_since, fade_at, fade_due, ask_key, wait, exempt."""
+        try:
+            return self._of(goal)
+        except Exception:  # malformed stored values (for example a text timestamp): do not fade, do not crash callers
+            self.unsure = True
+            return None if goal.get("status") != "active" else {"state": "active", "dormant_since": None, "fade_at": None, "fade_due": False,
+                                                                  "ask_key": None, "wait": UNSURE, "exempt": UNSURE}
+
+    def _of(self, goal):
         if goal.get("status") != "active":
             return None
         view = {"state": "active", "dormant_since": None, "fade_at": None, "fade_due": False, "ask_key": None, "wait": None, "exempt": None}
@@ -166,7 +181,7 @@ class Fade:
             return view
         fade_days = self.cfg["goal_fade_days"]
         key = ask_key(goal["id"], since)
-        view.update(state="dormant", dormant_since=since, ask_key=key, wait=self.asked(key))
+        view.update(state="dormant", dormant_since=since, ask_key=key, wait=self.asked(key, goal['id']))
         if fade_days is not None:
             view["fade_at"] = since + fade_days * DAY
             view["fade_due"] = self.now >= view["fade_at"] and view["wait"] is None and not self.unsure
