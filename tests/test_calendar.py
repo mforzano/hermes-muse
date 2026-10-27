@@ -78,8 +78,12 @@ class CalendarTests(unittest.TestCase):
         self.assertEqual(self.query['utc_offset_seconds'], 28800)
         self.assertEqual(self.query['end'], '2026-11-11T12:00:00+08:00')
         self.assertIn('DST transitions unavailable', self.query['timezone_note'])
-        result = self.view(self.source([self.event()]))
+        source = self.source([self.event()])
+        source['calendars'][0]['window'] = {k: v for k, v in self.query.items() if k != 'timezone_note'}
+        result = self.view(source)
         self.assertTrue(result['complete'], result['gaps'])
+        source['calendars'][0]['window']['end'] = '2026-10-19T12:00:00+08:00'
+        self.assertFalse(self.view(source)['complete'])
         self.assertEqual(result['events'][0]['local_start'], '2026-10-20T22:00:00+08:00')
         self.query = self.service.calendar_window({'mode': 'month'})
         self.assertEqual(self.query['start'], '2026-10-01T00:00:00+08:00')

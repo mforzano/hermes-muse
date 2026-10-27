@@ -79,6 +79,14 @@ class RunTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.runs.finish(None, {'outcome': 'complete', 'summary': 'Forged'})
 
+    def test_last_complete_remains_visible_after_new_partial_attempt(self):
+        self.store.write('run', 'earlier', {'id': 'earlier', 'job_id': 'hourly', 'job': 'memory-upkeep',
+            'started': self.now - 3600, 'status': 'complete', 'stages': {'review': {'complete': True}}})
+        run = self.start('hourly')
+        self.runs.finalize(run)
+        self.assertEqual({'earlier', run['id']}, {row['id'] for row in self.runs.recent()})
+        self.assertEqual('partial', self.store.read('run', run['id'])['status'])
+
     def test_new_attempt_does_not_hide_previous_partial_work(self):
         run = self.start('hourly')
         self.runs.finalize(run)

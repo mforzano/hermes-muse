@@ -1,4 +1,4 @@
-# Muse 0.3.14 interface
+# Muse 0.3.15 interface
 
 Single tool: `muse_manage(action,data)`. Profile/home come from Hermes, never caller parameters.
 Goals need no request ID or caller scope token. Optional goal expected_revision is one integer; conflicts return current goal.

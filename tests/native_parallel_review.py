@@ -98,7 +98,7 @@ def run(home):
                 assert read('content_read',{'kind':'goal','id':'g','home':str(home/'profiles/other')},False)['code']=='invalid_argument'
                 assert read('conversation_read',{'session_id':'group'},False)['code']=='permission_denied'
                 for action,data in [('operations_commit',{'batch':batch['batch'],'reviews':[{'slot':assignment['slot'],'summary':'not permitted'}]}),
-                                    ('content_write',{}),('operations_read',{}),('operations_batch',{}),('research_status',{'id':'unknown'}),
+                                    ('content_write',{'kind':'note','id':'daily:2026-01-01','body':'Denied child write','expected_revision':'absent','request_id':'child-write-probe'}),('operations_read',{}),('operations_batch',{}),('research_status',{'id':'unknown'}),
                                     ('run_complete',{'outcome':'complete','summary':'not permitted'})]:
                     assert read(action,data,False)['code']=='permission_denied'
                 history=read('conversation_read',{'session_id':'parent','since':0,'until':time.time()})

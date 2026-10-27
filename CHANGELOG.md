@@ -1,3 +1,10 @@
+# 0.3.15 — maintenance recovery (unreleased)
+
+- Exclude trusted Curator background turns from user authority and retain legacy Curator evidence outside the signal inbox. Resolve long originals with a narrow native lookup, including unchanged compression copies, before paging them.
+- Deduplicate unchanged native message-UID copies, exclude successful instruction reads, link result/call evidence, and recover original audit-owner receipts without relaunch or automatic acceptance. Keep continuous-prefix review and existing page/concurrency limits.
+- Require real watch review metadata with actionable legacy recovery; document complete review/run calls. Compare calendar windows consistently on machine fields and preserve source/coverage validation.
+- Expose bounded current/latest/last-complete run references and independent signal backlog metadata. Keep unresolved business gaps in governance summaries; no new jobs, providers, permissions or delivery path.
+
 # 0.3.14 — goal fade: dormant after 7 idle days, cancelled 7 days later after a delivered question (2026-10-26)
 
 Goals never left `active` by themselves, so abandoned ones kept attracting follow-ups and patrol attention. Released together with 0.3.13 (its entry below).

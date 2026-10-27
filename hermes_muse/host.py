@@ -19,6 +19,16 @@ JOBS = {"proactive-watch": "*/30 * * * *", "memory-upkeep": "0 * * * *",
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def watch_instructions(key, goal_id):
+    return ("Check its status and your stop condition first. Prepare evidence with notification_add. "
+            "Stop and call watch_stop when the promised condition is satisfied. "
+            f"Before final preparation, call review_complete with job={key}, goal_id={goal_id}, "
+            "stop_condition copied exactly from below, source_check_ids from this run's actual reads, and summary. "
+            "Then call run_complete with outcome/summary/gaps only; use partial for unfinished coverage. "
+            "As your last step call notification_prepare and return its final_response exactly; "
+            "this job delivers that response. With nothing approved return [SILENT].\n")
+
+
 @contextmanager
 def profile_scope(home):
     from hermes_constants import set_hermes_home_override, reset_hermes_home_override
@@ -185,16 +195,12 @@ class HermesHost:
                     update_job(job["id"], {"deliver": "bot-chat"})
                 old = ("Check its status and your stop condition first. Never send directly; prepare evidence with notification_add and notification_queue. "
                        "Stop and call watch_stop when the promised condition is satisfied. Return [SILENT].\n")
-                new = ("Check its status and your stop condition first. Prepare evidence with notification_add. "
-                       "Stop and call watch_stop when the promised condition is satisfied. "
-                       "As your last step call notification_prepare and return its final_response exactly; "
-                       "this job delivers that response. With nothing approved return [SILENT].\n")
                 for job_id, owned in record["jobs"].items():
                     if not owned["key"].startswith("watch-"):
                         continue
                     watch = get_job(job_id)
-                    if watch and old in watch.get("prompt", ""):
-                        update_job(job_id, {"prompt": watch["prompt"].replace(old, new, 1),
+                    if watch and owned.get("owner") and old in watch.get("prompt", ""):
+                        update_job(job_id, {"prompt": watch["prompt"].replace(old, watch_instructions(owned['key'], owned['owner']), 1),
                                             "deliver": "bot-chat" if watch.get("deliver") == "local" else watch.get("deliver")})
                 record["direct_patrol_delivery"] = True
                 self.save_manifest(record)
@@ -212,6 +218,34 @@ class HermesHost:
                 update_job(job_id, {"next_run_at": at, "manual_run_at": at})
                 return True
         return False
+
+    def signal_original(self, row):
+        """Resolve a legacy excerpt without loading the conversation's entire later history."""
+        from .operations import GROUPS, reader
+        from .store import digest
+        path = self.home / "state.db"
+        if not path.exists():
+            return {"available": False, "messages": []}
+        with reader(path) as db:
+            session = db.execute("SELECT chat_type FROM sessions WHERE id=?", (row["session_id"],)).fetchone()
+            if not session or str(session["chat_type"] or "").lower() in GROUPS:
+                return {"available": False, "messages": []}
+            columns = {col[1] for col in db.execute("PRAGMA table_info(messages)")}
+            uid = "message_uid" if "message_uid" in columns else "NULL AS message_uid"
+            active = "AND (active=1 OR compacted=1) " if {"active", "compacted"} <= columns else ""
+            matches = {}
+            for message in db.execute(
+                    f"SELECT id,content,timestamp,{uid} FROM messages WHERE session_id=? "
+                    "AND role='user' AND timestamp BETWEEN ? AND ? "
+                    "AND COALESCE(display_kind,'')!='hidden' AND (tool_calls IS NULL OR tool_calls='[]') "
+                    + active + "ORDER BY id",
+                    (row["session_id"], row["created"] - 300, row["created"] + 300)):
+                text = message["content"]
+                if isinstance(text, str) and text.startswith(row["text"]):
+                    # Compression copies share a UID; distinct real turns remain ambiguous.
+                    key = (message["message_uid"] or message["id"], digest(text))
+                    matches.setdefault(key, {"id": message["id"], "role": "user", "text": text, "at": message["timestamp"]})
+        return {"available": True, "messages": list(matches.values())}
 
     def conversation(self, session_id, since):
         from .conversation import read_conversation
@@ -260,10 +294,7 @@ class HermesHost:
             raise ValueError("Installation is prepared for disable/remove; no new watch allowed")
         key = "watch-" + uuid.uuid4().hex[:12]
         prompt = ("Read hermes-muse:companion including its execution/recovery and communication procedures, and muse_manage context. Work only on goal " + goal["id"] + ". "
-                  "Check its status and your stop condition first. Prepare evidence with notification_add. "
-                  "Stop and call watch_stop when the promised condition is satisfied. "
-                  "As your last step call notification_prepare and return its final_response exactly; "
-                  "this job delivers that response. With nothing approved return [SILENT].\n"
+                  + watch_instructions(key, goal["id"])
                   + prompt_text + "\nStop condition: " + stop)
         job = self._owned_job(key, {"name": "muse-" + key, "schedule": data.get("schedule", "every 30m"), "prompt": prompt,
                                    "skills": [f"{PLUGIN}:companion"], "deliver": self.default_deliver()}, owner=goal["id"], expires=expires)

@@ -314,10 +314,24 @@ with tempfile.TemporaryDirectory(prefix="muse-native-contracts-") as directory:
     assert "data.query_window" in typed["error"] and "data.scope" in typed["error"] and typed["retryable"] is False, typed
     assert "data.window" in call("calendar_view", {}, ok=False)["error"]
     key = rt.host.manifest()["jobs"][watch["id"]]["key"]
+    legacy = rt.host.manifest()
+    saved_condition = legacy["jobs"][watch["id"]].pop("stop_condition")
+    rt.host.save_manifest(legacy)
+    legacy_error = call("review_complete", {
+        "job": key, "goal_id": "g", "summary": "Cannot invent a legacy condition",
+        "stop_condition": saved_condition, "source_check_ids": [source["id"]]},
+        ok=False, sid="watch-session", task=task)
+    assert "no saved watch condition" in legacy_error["error"], legacy_error
+    legacy["jobs"][watch["id"]]["stop_condition"] = saved_condition
+    rt.host.save_manifest(legacy)
+    missing_condition = call("review_complete", {
+        "job": key, "goal_id": "g", "summary": "Missing condition", "source_check_ids": [source["id"]]},
+        ok=False, sid="watch-session", task=task)
+    assert "data.stop_condition" in missing_condition["error"], missing_condition
     reviewed = call(
         "review_complete",
         {
-            "job": key,
+            # The host already owns this Cron task; its job key is derivable.
             "goal_id": "g",
             "summary": "Actual synthetic goal and source checked",
             "stop_condition": "Fixture complete",

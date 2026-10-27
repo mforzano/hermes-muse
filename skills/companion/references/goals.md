@@ -14,6 +14,7 @@ interest; an Idea stays a suggestion until accepted. Preserve the user's criteri
 - feedback: kind, id, action, signal_id, until?. Distinguish accept/done/dismiss/stop/snooze.
 - watch_create: goal_id, signal_id, schedule?, prompt, stop_condition, expires?. Only explicitly requested monitoring. New repeating watches must be provably at least30 minutes apart; once is exempt. Respect cron.allow_agent_scheduling.
 - watch_stop: job_id. Pauses only Muse-owned watches; never change user pauses or unrelated jobs.
+- Watch completion: content_read(kind=installation,id=current) supplies the owned watch key, owner and saved stop_condition. After reading this run's actual sources, call review_complete with that job key, goal_id, the exact saved stop_condition, source_check_ids and summary (no up_to needed for watches); then run_complete with outcome/summary/gaps, before final notification preparation. A source check must be checked and started in this run to support complete. A legacy watch without a saved condition remains partial until its parent restores the originally authorized condition; never invent one or create another watch.
 
 Review stale research after30 days without closing a goal merely because it went
 quiet. Never add a watch for every goal or interest. Follow [followup](followup.md)

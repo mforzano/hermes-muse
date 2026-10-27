@@ -1,4 +1,6 @@
 import json
+import sqlite3
+from contextlib import closing
 import tempfile
 import unittest
 from pathlib import Path
@@ -132,8 +134,40 @@ class ContextPagesTests(unittest.TestCase):
         with self.assertRaises(DomainError):context(self.service,data)
         self.assertEqual(self.store.read('cursor','memory-upkeep',0),0)
 
+    def test_native_long_signal_pages_compacted_copies_without_scanning_later_history(self):
+        from hermes_muse.host import HermesHost
+        original = "user attachment\n" + "evidence " * 52000
+        path = self.store.home / 'state.db'
+        with closing(sqlite3.connect(path)) as db, db:
+            db.executescript('''CREATE TABLE sessions(id TEXT PRIMARY KEY,chat_type TEXT);
+                CREATE TABLE messages(id INTEGER PRIMARY KEY,session_id TEXT,role TEXT,content TEXT,
+                    timestamp REAL,message_uid TEXT,display_kind TEXT,tool_calls TEXT,active INTEGER,compacted INTEGER);''')
+            db.execute("INSERT INTO sessions VALUES('s','private')")
+            db.executemany('INSERT INTO messages VALUES(?,?,?,?,?,?,?,?,?,?)', [
+                (1, 's', 'user', original, self.now, 'original', None, None, 0, 1),
+                (2, 's', 'user', original, self.now, 'original', None, None, 1, 0),
+                (3, 's', 'user', original, self.now + 3600, 'later', None, None, 1, 0)])
+        self.service.host = HermesHost(self.store)
+        self.service.host.conversation = lambda *a: self.fail('Long signals must not load later conversation history')
+        self.service.signal('long', 's', original)
+        first = context(self.service, {'section': 'signals', 'job': 'nightly-review'})
+        args = {'section': 'signals', 'job': 'nightly-review', 'window': first['window'], 'id': 'long'}
+        pieces, offset = [], 0
+        while offset is not None:
+            part = context(self.service, {**args, 'offset': offset})
+            pieces.append(part['body']); offset = part['next_offset']
+        self.assertEqual(''.join(pieces), original)
+        checkpoint = {'job': 'nightly-review', 'window': first['window'], 'through': first['through'],
+                      'up_to': first['through'], 'summary': 'Read the full original attachment'}
+        with closing(sqlite3.connect(path)) as db, db:
+            db.execute('INSERT INTO messages VALUES(?,?,?,?,?,?,?,?,?,?)',
+                       (4, 's', 'user', original, self.now, 'distinct-turn', None, None, 1, 0))
+        with self.assertRaisesRegex(DomainError, 'missing/ambiguous'):
+            self.service.review_complete(checkpoint, require_window=True)
+        self.assertEqual(self.store.read('cursor', 'nightly-review', 0), 0)
+
     def test_large_metadata_and_discovery_are_consumable(self):
-        self.store.write('run','huge',{'id':'huge','status':'partial','summary':'x'*500000,'stages':{}})
+        self.store.write('run','huge',{'id':'huge','job':'memory-upkeep','started':self.now,'status':'partial','summary':'x'*500000,'stages':{}})
         view=Views(self.store.home);p=view.read({'kind':'run','id':'huge'})
         self.assertFalse(p['metadata_complete']);ref=p['metadata_ref']['data'];off=0;body=''
         while off is not None:
@@ -141,6 +175,7 @@ class ContextPagesTests(unittest.TestCase):
         self.assertEqual(len(json.loads(body)['summary']),500000)
         self.assertLess(len(json.dumps(context(self.service,{})).encode()),12000)
         self.assertIn('operation_review', context(self.service,{}))
+        self.assertEqual(context(self.service,{})['task_runs'][0]['content_ref']['data']['id'], 'huge')
         self.store.save_goal({'id':'large-goal','title':'Goal','status':'active','progress':['x'*50000],
                               'revision':1,'owner':{'kind':'native_delegation','id':'native-owner'}}, '# Goal')
         projected=view.read({'kind':'goal','id':'large-goal'})

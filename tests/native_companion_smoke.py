@@ -125,10 +125,10 @@ def run(home):
         runtime.host.save_manifest(record)
         update_job(patrol_id, {"deliver": "local"})
         watch_before = get_job(owned["id"])
-        new_header = ("Check its status and your stop condition first. Prepare evidence with notification_add. "
-                      "Stop and call watch_stop when the promised condition is satisfied. "
-                      "As your last step call notification_prepare and return its final_response exactly; "
-                      "this job delivers that response. With nothing approved return [SILENT].\n")
+        prefix = "Check its status and your stop condition first. "
+        new_header = prefix + watch_before['prompt'].split(prefix, 1)[1].split('\n', 1)[0] + '\n'
+        assert 'review_complete' in new_header and 'run_complete' in new_header
+        assert runtime.host.manifest()['jobs'][owned['id']]['key'] in new_header
         old_header = ("Check its status and your stop condition first. Never send directly; prepare evidence with notification_add and notification_queue. "
                       "Stop and call watch_stop when the promised condition is satisfied. Return [SILENT].\n")
         assert new_header in watch_before["prompt"]

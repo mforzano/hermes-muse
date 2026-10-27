@@ -117,4 +117,6 @@ class Runs:
         for row in rows:
             category = "active" if row["status"] in {"running", "ready"} else "ended"
             latest.setdefault((row["job"], category), row)
-        return list(latest.values())
+            if row["status"] == "complete":
+                latest.setdefault((row["job"], "last_complete"), row)
+        return list({row["id"]: row for row in latest.values()}.values())

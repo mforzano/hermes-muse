@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-VERSION = "0.3.14"
+VERSION = "0.3.15"
 PLUGIN = "hermes-muse"
 DAY = 86400
 GOVERNANCE_JOBS = ("weekly-governance-review", "monthly-system-audit")
@@ -49,6 +49,7 @@ def bounded(value, limit=8000):
 
 def is_background_message(text):
     return isinstance(text, str) and text.lstrip().startswith((
+        'You are running as Hermes\' background skill CURATOR.',
         '[Cronjob "', '[ASYNC DELEGATION ', '[IMPORTANT:', '[Hermes Muse notification ',
         '[Hermes Muse background evidence]', '[Hermes Muse internal delivery]',
     ))

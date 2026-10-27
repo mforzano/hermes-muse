@@ -1,7 +1,7 @@
 ---
 name: companion
 description: Goals, proactive reminders, calendar views, memory upkeep, Feed and research in the current Hermes profile.
-version: 0.3.14
+version: 0.3.15
 ---
 # Companion
 
@@ -29,6 +29,14 @@ quiet hours, notification review/dedup and actual delivery receipts remain autho
 
 Use review_complete for each job's processed prefix. In Cron, run_complete records
 complete/partial and remaining gaps; index reads are not substantive review.
+Use the host-bound job in context/task_runs for review_complete; an owned Cron
+may omit job and the host fills its existing key (an explicit mismatch is rejected).
+run_complete takes only
+outcome, summary, gaps and optional request_id (never job/window/through).
+When the host requires tool_call, one complete invocation is
+`{"calls":[{"name":"muse_manage","arguments":{"action":"run_complete","data":{"outcome":"partial","summary":"Saved reviewed work","gaps":["Unread source evidence; resume its saved checkpoint"]}}}]}`.
+Every entry needs name and arguments; correct the returned field-level fix rather
+than repeating an invalid call. Preserve the host's loop guard and unknown outcomes.
 At the start of each Muse Cron run, call muse_manage with
 `{"action":"content_read","data":{"kind":"working_lessons","id":"current"}}`
 and follow its pagination before acting. Apply the relevant verified conventions.

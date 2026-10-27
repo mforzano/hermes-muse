@@ -24,6 +24,9 @@ class Host:
         self.woken = []
         self.destination = {"platform": "test", "chat_id": "private"}
 
+    def signal_original(self, row):
+        return self.conversation(row["session_id"], row["created"] - 300)
+
     def route(self, session_id=None):
         return self.destination
 
@@ -397,6 +400,25 @@ class CompanionTests(unittest.TestCase):
         self.assertIsNotNone(updated.read("signal", self.signal))
         Store(self.temp.name)
         self.assertEqual(len(updated.all("background_signal")), 1)
+
+    def test_curator_legacy_migration_keeps_evidence_and_both_cursors(self):
+        row = {"id": "curator", "session_id": "curator-session", "created": self.now,
+               "text": "You are running as Hermes' background skill CURATOR. " + "x" * 7940,
+               "truncated": True}
+        self.store.write("signal", row["id"], row)
+        for job in ("memory-upkeep", "nightly-review"):
+            self.store.write("cursor", job, self.now - 1)
+        with self.store.transaction() as db:
+            with self.assertRaisesRegex(ValueError, "original user signal"):
+                self.service.require_signal(db, row["id"])
+        updated = Store(self.temp.name)
+        self.assertIsNone(updated.read("signal", row["id"]))
+        self.assertEqual(updated.read("background_signal", row["id"]), row)
+        for job in ("memory-upkeep", "nightly-review"):
+            self.assertEqual(updated.read("cursor", job), self.now - 1)
+        Store(self.temp.name)
+        self.assertEqual(updated.read("background_signal", row["id"]), row)
+        self.assertIsNotNone(updated.read("signal", self.signal))
 
     def test_cron_context_limits_raw_signals_to_its_own_purpose(self):
         for n in range(12):
@@ -966,6 +988,27 @@ class HookTests(unittest.TestCase):
                 self.assertFalse(runtime.timers)
                 runtime.pre_turn(session_id="bot", turn_id="human", user_message="Explain the [ASYNC DELEGATION COMPLETE] message")
                 self.assertEqual(len(runtime.store.all("signal")), 1)
+
+    def test_trusted_curator_platform_never_captures_user_intent(self):
+        from hermes_muse.runtime import Runtime
+        with tempfile.TemporaryDirectory() as home:
+            prepare(home)
+            runtime = Runtime(object(), home)
+            self.addCleanup(runtime.close)
+            info = {"cron": False, "chat_type": "private", "platform": "", "chat_id": ""}
+            with patch("hermes_muse.runtime.session_info", return_value=info):
+                self.assertIsNone(runtime.pre_turn(session_id="curation", turn_id="background",
+                    platform="curator", user_message="Consolidate these skills"))
+                self.assertFalse(runtime.store.all("signal"))
+                with patch("hermes_muse.runtime.session_info", return_value={**info, 'platform': 'curator'}):
+                    denied = json.loads(runtime.handle({'action': 'goal_create', 'data': {
+                        'title': 'Not a user request', 'description': 'Background work', 'completion_criteria': 'No authority'}},
+                        session_id='curation'))
+                self.assertEqual(denied['code'], 'permission_denied')
+                self.assertFalse(runtime.store.goals())
+                runtime.pre_turn(session_id="human", turn_id="real", platform="cli",
+                    user_message="Explain what the Curator does")
+                self.assertEqual([r["id"] for r in runtime.store.all("signal")], ["real"])
 
     def test_background_group_and_child_turns_do_not_renew_interest(self):
         from hermes_muse.runtime import Runtime

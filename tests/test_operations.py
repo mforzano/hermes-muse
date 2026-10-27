@@ -155,6 +155,31 @@ class OperationTests(OperationFixture):
         self.assertEqual([failure], [e['id'] for e in page['events']])
         self.assertEqual('skill_view', page['events'][0]['related_call']['call']['function']['name'])
 
+    def test_compression_copies_deduplicate_only_identical_stable_effects(self):
+        self.db.execute('ALTER TABLE messages ADD COLUMN message_uid TEXT')
+        original = self.call('original')
+        self.db.execute('UPDATE messages SET message_uid=? WHERE id=?', ('stable', original))
+        self.db.commit()
+        self.finish(self.ops.read({}))
+        self.db.execute('INSERT INTO messages(session_id,role,content,tool_calls,tool_call_id,tool_name,timestamp,message_uid) '
+                        'SELECT session_id,role,content,tool_calls,tool_call_id,tool_name,timestamp,message_uid FROM messages WHERE id=?', (original,))
+        self.db.commit()
+        duplicate_page = self.ops.read({})
+        self.assertFalse(duplicate_page['events'])
+        self.finish(duplicate_page)
+        changed = self.call('changed', args={'path': 'another-file'})
+        self.db.execute('UPDATE messages SET message_uid=? WHERE id=?', ('stable', changed))
+        self.db.commit()
+        self.assertEqual([changed], [e['id'] for e in self.ops.read({})['events']])
+
+    def test_instruction_content_reads_skip_successes_but_keep_failures_and_real_data(self):
+        self.call('lessons', name='muse_manage', args={'action': 'content_read', 'data': {'kind': 'working_lessons'}})
+        self.message(role='tool', text='{"ok":true,"result":{"body":"instructions"}}', call_id='lessons')
+        self.call('failed-lessons', name='muse_manage', args={'action': 'content_read', 'data': {'kind': 'working_lessons'}})
+        failed = self.message(role='tool', text='{"ok":false,"error":"read failed"}', call_id='failed-lessons')
+        note = self.call('note', name='muse_manage', args={'action': 'content_read', 'data': {'kind': 'note'}})
+        self.assertEqual([failed, note], [e['id'] for e in self.ops.read({})['events']])
+
     def test_failed_read_and_missing_ledger_never_advance(self):
         self.call()
         (self.home / 'cron/executions.db').unlink()

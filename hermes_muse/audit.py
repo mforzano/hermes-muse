@@ -36,12 +36,16 @@ class Audit:
     def public(self, wave):
         tasks = []
         pending = []
+        owner_results = {}
         for p in wave["pages"]:
             if p["reviewed"]:
                 continue
             dispatch = self.store.read("operation_dispatch", p["receipt"], {})
             if dispatch.get("state") in {"pending", "active", "unknown", "finished"}:
                 pending.append({"slot": p["slot"], "receipt": p["receipt"], **dispatch})
+                identity = (dispatch.get("session_id"), dispatch.get("tool_call_id"))
+                if identity not in owner_results:
+                    owner_results[identity] = self.ops.dispatch_result(dispatch)
                 continue
             tasks.append({"receipt": p["receipt"], "batch": wave["number"], "slot": p["slot"], "events": p["events"], "executions": p["executions"],
                           "dispatchable": True, "review_mode": "parallel",
@@ -55,7 +59,8 @@ class Audit:
         from .delegation import concurrency_limit
         tasks = tasks[:concurrency_limit()]
         return {**self.progress(wave), "available": True, "batch": wave["number"], "through": wave["through"], "assignments": tasks, "pending_owners": pending,
-                "instruction": "Pass assignment.task to muse_manage delegate for parallel current-profile evidence review within the user concurrency limit. Children read full paged evidence and return conclusions only; parent checks refs/gaps, saves findings and commits fully reviewed slots. If delegation is unavailable, parent reads the same evidence directly. Preserve pending original owners; never relaunch unknown work. Before host exhaustion, save partial progress and resume this batch later."}
+                "owner_results": [r for r in owner_results.values() if r],
+                "instruction": "Pass assignment.task to muse_manage delegate for parallel current-profile evidence review within the user concurrency limit. Children read full paged evidence and return conclusions only; parent checks refs/gaps, saves findings and commits fully reviewed slots. If delegation is unavailable, parent reads the same evidence directly. Preserve pending original owners; never relaunch unknown work. Parent checks returned refs and conclusions, including recovered owner_results, before committing. If an original result is unavailable, read the same receipt directly rather than redispatching. Before host exhaustion, save partial progress and resume this batch later."}
 
 
     def commit(self, data):

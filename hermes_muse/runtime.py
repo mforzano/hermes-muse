@@ -62,10 +62,20 @@ class Runtime:
             from .contracts import tidy
             if isinstance(args, dict) and isinstance(args.get("data"), dict):
                 args = {**args, "data": tidy(args.get("action"), args["data"])}
+                if args.get('action') == 'review_complete' and 'job' not in args['data']:
+                    parts = str(kwargs.get('task_id') or '').split(':', 2)
+                    if len(parts) == 3 and parts[0] == 'cron':
+                        owned = self.host.manifest()['jobs'].get(parts[1])
+                        if owned:
+                            args = {**args, 'data': {**args['data'], 'job': owned['key']}}
             preflight(args)
-            if not private_session(session_info()):
+            info = session_info()
+            if not private_session(info):
                 from .content_io import DomainError
                 raise DomainError('permission_denied', 'Personal Muse data is available in private/direct conversations only')
+            if info.get('platform') == 'curator':
+                from .content_io import DomainError
+                raise DomainError('permission_denied', 'Curator background runs manage skills, not personal companion state; return their result to the parent')
             from agent.delegation_context import is_delegated_child_context
             # Pure reads never create result records, including rejected child calls.
             reads = {'content_read', 'feed_list', 'calendar_window', 'calendar_view', 'operations_evidence', 'conversation_read'}
@@ -254,6 +264,11 @@ class Runtime:
                         raise ValueError("Review checkpoint must belong to this Cron job")
                     if run and run["job"].startswith("watch-"):
                         owned = self.host.manifest()["jobs"].get(run["job_id"], {})
+                        if not owned.get("stop_condition"):
+                            from .guidance import fail
+                            raise fail("review_complete", "data.stop_condition", "has no saved watch condition to compare",
+                                       expected="the stop condition saved by watch_create", got=None,
+                                       fix="the parent must restore this legacy watch's condition from its original authorization; keep this run partial, do not invent a condition or relaunch the watch")
                         goal, _ = self.store.goal(owned["owner"])
                         refs = data.get("source_check_ids")
                         if (data.get("goal_id") != goal["id"] or not isinstance(refs, list) or not refs
@@ -385,7 +400,7 @@ class Runtime:
                     self.service.operations.track(session_id, kwargs.get("task_id"))
         text = user_message if isinstance(user_message, str) else json.dumps(user_message, ensure_ascii=False)
         from agent.delegation_context import is_delegated_child_context
-        if self.closed or parent_session_id or info["cron"] or platform in {"cron", "delegate", "subagent", "webhook", "msgraph_webhook", "kanban"} or not private_session(info):
+        if self.closed or parent_session_id or info["cron"] or platform in {"cron", "delegate", "subagent", "curator", "webhook", "msgraph_webhook", "kanban"} or not private_session(info):
             return None
         if text.lstrip().startswith(('[Cronjob "', "[Hermes Muse notification ", MARKER)):
             return {"context": receiving_instructions()}

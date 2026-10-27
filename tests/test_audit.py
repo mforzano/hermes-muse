@@ -39,6 +39,8 @@ class AuditTests(OperationFixture):
         receipt = self.store.read('meta', 'operation_wave')['pages'][0]['receipt']
         index = self.ops.evidence({'receipt': receipt})
         self.assertTrue(any(e['truncated'] for e in index['events']))
+        projected_result = next(e for e in index['events'] if e['ref'] == f'message:{result}')
+        self.assertEqual(projected_result['related_ref'], f'message:{result - 1}')
         pieces, offset = [], 0
         while offset is not None:
             part = self.ops.evidence({'receipt': receipt, 'ref': f'message:{result}', 'offset': offset})
@@ -73,6 +75,23 @@ class AuditTests(OperationFixture):
         with self.assertRaisesRegex(ValueError, 'missing'):
             Audit(self.ops).commit({'batch': batch['batch'], 'reviews': [{'slot': 1, 'summary': 'Cannot verify deleted native evidence'}]})
 
+
+    def test_recovers_original_dispatch_result_without_relaunch_or_auto_commit(self):
+        self.call()
+        audit = Audit(self.ops)
+        batch = audit.batch()
+        original = {'results': [{'status': 'completed', 'summary': 'Reviewed original intent and effects'}]}
+        self.call('dispatch-call', name='muse_manage', args={'action': 'delegate'})
+        result_id = self.message(role='tool', text=json.dumps({'ok': True, 'result': original}), call_id='dispatch-call')
+        self.db.execute("UPDATE messages SET tool_name='muse_manage' WHERE id=?", (result_id,))
+        self.db.commit()
+        audit.dispatch({'tasks': [batch['assignments'][0]['task']]},
+                       lambda: {'delegation_id': 'original-owner'}, session_id='main', tool_call_id='dispatch-call')
+        resumed = audit.batch()
+        self.assertFalse(resumed['assignments'])
+        self.assertEqual(resumed['owner_results'][0]['envelope']['result'], original)
+        self.assertEqual(self.ops.checkpoint()['message_id'], 0)
+        self.assertFalse(self.store.read('meta', 'operation_wave')['done'])
 
     def test_active_and_unknown_receipts_never_launch_another_worker(self):
         self.call()

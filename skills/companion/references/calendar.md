@@ -14,7 +14,7 @@ Use the returned `source_resource` as the stable source identity's resource: `ca
 
 Read the full overlap interval for every discovered in-scope calendar, completing every continuation page. Translate the helper's boundaries to the documented connector query without weakening overlap coverage. Use native expanded-instance queries: recurring masters alone are insufficient. Include single-instance moves/exceptions, cancellations and multi-day/cross-midnight events. If the connector cannot supply those semantics, record that calendar partial with the specific limitation. A changed-items cursor may supplement the interval read; it cannot replace revisiting still-upcoming events across all 30 days.
 
-Call `muse_manage calendar_view` with `{window:<unchanged calendar_window result>, discovery_complete:<boolean>, sources:[...]}`. It performs no connector calls and saves no events, notices or checkpoints. Normalize actual connector receipts into this contract; never invent success, IDs, dates or pagination evidence:
+Call `muse_manage calendar_view` with `{window:<unchanged calendar_window result>, discovery_complete:<boolean>, sources:[...]}`. It performs no connector calls and saves no events, notices or checkpoints. Reuse the entire returned window object for the top-level query and every calendars[].window; do not retype, translate or selectively copy its fields. The descriptive timezone_note is ignored consistently in comparisons; all query/timezone/bounds fields must still match. Normalize actual connector receipts into this contract; never invent success, IDs, dates or pagination evidence:
 
 ```json
 {

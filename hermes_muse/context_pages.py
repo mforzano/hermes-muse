@@ -47,7 +47,7 @@ def signal_refs(store, after, through, db=None):
 
 def original_signal(service, row):
     # Legacy inbox rows have no native message ID. Correlate narrowly or fail closed.
-    state = service.host.conversation(row['session_id'], row['created'] - 300)
+    state = service.host.signal_original(row)
     matches = [m for m in state.get('messages', []) if m.get('role') == 'user'
                and m.get('text', '').startswith(row['text'])
                and abs((m.get('at') or 0) - row['created']) <= 300]
@@ -153,13 +153,23 @@ def context(service, data, *, view=None):
         raise DomainError('invalid_argument', f"data.section {section!r} is not a section. Valid sections: {', '.join((*COLLECTIONS, 'conversations', 'followups', 'signals'))}. "
                           "Preferences and installation are not sections: content_read {kind:'preferences'|'installation', id:'current'}. "
                           "Arguments go inside data, e.g. {action:'context', data:{section:'notice', limit:25}}. Fix: set data.section to a valid section.", field='data.section')
+    signal_reviews = {}
+    signal_rows = [r for r in service.store.all('signal') if not is_background_message(r.get('text'))]
+    for job in JOBS:
+        checkpoint = service.store.read('cursor', job, 0)
+        pending = [r['created'] for r in signal_rows if r['created'] > checkpoint]
+        signal_reviews[job] = {'action': 'context', 'data': {'section': 'signals', 'job': job, 'limit': 25},
+                               'processed_through': checkpoint, 'pending': len(pending),
+                               'oldest_pending': min(pending) if pending else None}
     return {'now': service.clock(), 'job': view,
+            'task_runs': [{'id': r['id'], 'job': r['job'], 'status': r['status'], 'started': r['started'],
+                           'content_ref': {'action': 'content_read', 'data': {'kind': 'run', 'id': r['id']}}}
+                          for r in service.runs.recent()],
             'read_semantics': 'Bounded index. Collection pages use content_read revisions; signal windows freeze through and record served ranges.',
             'sections': {k: {'action': 'context', 'data': {'section': k, 'limit': 25}} for k in (*COLLECTIONS, 'conversations', 'followups')},
             'operation_review': {'checkpoint': service.store.read('meta', 'operation_cursor'), 'findings_ref': {'action': 'context', 'data': {'section': 'finding'}}},
             'reviews': {job: service.store.read('meta', 'last_review:' + job) for job in GOVERNANCE_JOBS},
-            'signal_reviews': {j: {'action': 'context', 'data': {'section': 'signals', 'job': j, 'limit': 25},
-                                   'processed_through': service.store.read('cursor', j, 0)} for j in JOBS},
+            'signal_reviews': signal_reviews,
             'preferences_ref': {'action': 'content_read', 'data': {'kind': 'preferences', 'id': 'current'}},
             'installation_ref': {'action': 'content_read', 'data': {'kind': 'installation', 'id': 'current'}},
             'instruction': 'Follow every section cursor. Read signal bodies before review_complete; no index is completion. Notification review requires the newest text of each tracked conversation. Existing followup unknown owners are inspected, never redispatched.'}

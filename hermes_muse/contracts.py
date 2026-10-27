@@ -178,6 +178,7 @@ def validate(action, data):
         required["signal_id"] = "text"
     if action == "review_complete" and str(data.get("job", "")).startswith("watch-"):
         required.pop("up_to")  # A watch checkpoint names its goal/source checks, not a signal cursor.
+        required.update(goal_id="text", stop_condition="text", source_check_ids="list")
     absent = [n for n, k in required.items() if data.get(n) is None or k == "text" and not data[n].strip()]
     if action == "source_check" and "source" in absent:
         present = [k for k in ("connection", "account", "resource") if k in data]

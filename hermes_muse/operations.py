@@ -10,6 +10,7 @@ from .store import DAY, bounded, digest, epoch
 
 GROUPS = {"group", "supergroup", "channel", "guild", "room"}
 INSPECTION = {"context", "status", "conversation_read", "operations_read", "operations_complete", "operations_batch", "operations_evidence", "operations_commit", "finding_record"}
+INSTRUCTION_CONTENT = {"working_lessons", "tools"}
 
 
 @contextmanager
@@ -36,7 +37,8 @@ def inspection(call):
             nested = args.get("calls")
             return bool(nested) and isinstance(nested, list) and all(
                 inspection({"function": item}) for item in nested)
-        return (fn.get("name") == "muse_manage" and args.get("action") in INSPECTION
+        return (fn.get("name") == "muse_manage" and (args.get("action") in INSPECTION
+                    or args.get("action") == "content_read" and (args.get("data") or {}).get("kind") in INSTRUCTION_CONTENT)
                 or fn.get("name") in {"skill_view", "tool_search", "tool_describe"})
     except (AttributeError, TypeError, ValueError):
         return False
@@ -62,6 +64,7 @@ def preview(event):
     action = linked or event.get("tool_calls") or []
     return {"ref": event["ref"], "session_id": event.get("session_id"), "role": event.get("role"),
             "tool_name": event.get("tool_name"), "call_preview": json.dumps(action, ensure_ascii=False)[:1200],
+            "related_ref": "message:" + str(event["related_call"]["message_id"]) if linked else None,
             "chars": len(text), "excerpt": text[:1200], "truncated": len(text) > 1200}
 
 
@@ -128,7 +131,10 @@ class Operations:
                 # Scan by insertion ID: late tool results must be reviewed even when their call is older.
                 end = cursor["message_id"]
                 page_chars = 0
-                rows = db.execute("SELECT id,session_id,role,content,tool_calls,tool_call_id,tool_name,timestamp "
+                columns = {r[1] for r in db.execute("PRAGMA table_info(messages)")}
+                uid = ",message_uid" if "message_uid" in columns else ""
+                originals = {}
+                rows = db.execute("SELECT id,session_id,role,content,tool_calls,tool_call_id,tool_name,timestamp" + uid + " "
                                   "FROM messages WHERE id>? AND id<=? AND timestamp>=? "
                                   "AND (role='tool' OR tool_calls IS NOT NULL) ORDER BY id",
                                   (end, through, cursor["since"]))
@@ -137,6 +143,19 @@ class Operations:
                     if row["session_id"] not in eligible or row["timestamp"] < cursor["since"]:
                         end = row["id"]
                         continue
+                    if row.get("message_uid"):
+                        sid = row["session_id"]
+                        if sid not in originals:
+                            originals[sid] = dict(db.execute(
+                                "SELECT message_uid,MIN(id) FROM messages WHERE session_id=? AND id<=? "
+                                "AND timestamp>=? AND message_uid IS NOT NULL GROUP BY message_uid",
+                                (sid, through, cursor["since"])))
+                        original_id = originals[sid][row["message_uid"]]
+                        if original_id < row["id"]:
+                            original = db.execute("SELECT role,content,tool_calls,tool_call_id,tool_name,timestamp FROM messages WHERE id=?", (original_id,)).fetchone()
+                            if original and all(row[k] == original[k] for k in original.keys()):
+                                end = row["id"]
+                                continue
                     selected = [c for c in calls(row) if not inspection(c)]
                     related = None
                     if row["role"] == "tool" and row.get("tool_call_id"):
@@ -222,6 +241,18 @@ class Operations:
             self.store.put(db, "meta", "operation_cursor", updated)
             return {"reviewed": True, "already_reviewed": duplicate, "checkpoint": updated, "more": more, "through": boundary,
                     "instruction": "Only this page is reviewed. Call operations_read with data={} now; the remaining snapshot is preserved automatically." if more else "The operation snapshot is reviewed; future arrivals belong to the next pass."}
+
+    def dispatch_result(self, dispatch):
+        """Recover the original parent tool receipt, never relaunch an unknown worker."""
+        if not dispatch.get("session_id") or not dispatch.get("tool_call_id"):
+            return None
+        with reader(self.store.home / "state.db") as db:
+            row = db.execute("SELECT id,content FROM messages WHERE session_id=? AND role='tool' "
+                             "AND tool_name='muse_manage' AND tool_call_id=? ORDER BY id DESC LIMIT 1",
+                             (dispatch["session_id"], dispatch["tool_call_id"])).fetchone()
+        if row:
+            return {"ref": "message:" + str(row["id"]), "envelope": json.loads(row["content"])}
+        return None
 
     def evidence(self, data):
         """Read only references issued to an audit page, without copying a transcript to plugin state."""

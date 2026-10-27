@@ -82,6 +82,11 @@ def validate_window(value, path="data.window", action="calendar_view"):
     return instant(value["start"]).astimezone(UTC), instant(value["end"]).astimezone(UTC), zone
 
 
+def window_values(value):
+    """Compare query semantics, not the descriptive timezone note."""
+    return {k: v for k, v in value.items() if k != "timezone_note"} if isinstance(value, dict) else None
+
+
 def canonical_window(value):
     """The calendar_window result a validated query_window stands for (restores the descriptive timezone_note)."""
     zone = resolve_zone(value)
@@ -243,7 +248,7 @@ def assemble(data, now):
         for resource in resource_rows:
             rid = resource["id"]
             matches = [read for read in reads if read.get("resource_id") == rid]
-            if len(matches) != 1 or matches[0].get("window") != query:
+            if len(matches) != 1 or window_values(matches[0].get("window")) != window_values(query):
                 problems.append(title + "/" + rid + ": calendars[] needs exactly one read with resource_id=" + rid + " whose window is identical to data.window (missing, duplicated or different window)")
                 continue
             raw, failures, read_times = pages(matches[0], now, title + "/" + rid, since)
