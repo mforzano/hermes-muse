@@ -92,6 +92,13 @@ class AuditTests(OperationFixture):
         self.assertEqual(resumed['owner_results'][0]['envelope']['result'], original)
         self.assertEqual(self.ops.checkpoint()['message_id'], 0)
         self.assertFalse(self.store.read('meta', 'operation_wave')['done'])
+        # Older native receipts can be plain tool text, not a JSON envelope.
+        self.db.execute('UPDATE messages SET content=? WHERE id=?', ('Native owner stopped before returning a report', result_id))
+        self.db.commit()
+        recovered = audit.batch()
+        self.assertIn('stopped', recovered['owner_results'][0]['text'])
+        self.assertFalse(recovered['assignments'])
+        self.assertEqual(self.ops.checkpoint()['message_id'], 0)
 
     def test_active_and_unknown_receipts_never_launch_another_worker(self):
         self.call()

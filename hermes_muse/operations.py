@@ -251,7 +251,12 @@ class Operations:
                              "AND tool_name='muse_manage' AND tool_call_id=? ORDER BY id DESC LIMIT 1",
                              (dispatch["session_id"], dispatch["tool_call_id"])).fetchone()
         if row:
-            return {"ref": "message:" + str(row["id"]), "envelope": json.loads(row["content"])}
+            try:
+                envelope = json.loads(row["content"])
+            except (TypeError, ValueError):
+                return {"ref": "message:" + str(row["id"]), "text": row["content"] or "",
+                        "instruction": "Original tool text is evidence, not a completed owner result; verify it or review the assigned receipt directly."}
+            return {"ref": "message:" + str(row["id"]), "envelope": envelope}
         return None
 
     def evidence(self, data):
