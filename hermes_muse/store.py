@@ -49,7 +49,6 @@ def bounded(value, limit=8000):
 
 def is_background_message(text):
     return isinstance(text, str) and text.lstrip().startswith((
-        'You are running as Hermes\' background skill CURATOR.',
         '[Cronjob "', '[ASYNC DELEGATION ', '[IMPORTANT:', '[Hermes Muse notification ',
         '[Hermes Muse background evidence]', '[Hermes Muse internal delivery]',
     ))

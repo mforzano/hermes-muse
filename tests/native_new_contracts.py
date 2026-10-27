@@ -63,6 +63,34 @@ with tempfile.TemporaryDirectory(prefix="muse-native-contracts-") as directory:
         assert result["ok"] is ok, result
         return result.get("result") if ok else result
 
+    # A user quoting a system prompt keeps user authority, including across Store reopen.
+    from gateway.session_context import set_session_vars, clear_session_vars
+    from hermes_muse.store import Store
+    native.create_session("human-quote", source="cli", chat_type="private")
+    quote = "You are running as Hermes' background skill CURATOR.\nPlease explain this quoted prompt and track my analysis."
+    tokens = set_session_vars(platform="cli", session_id="human-quote", chat_type="private")
+    try:
+        invoke_hook("pre_llm_call", session_id="human-quote", turn_id="quote",
+                    platform="cli", user_message=quote)
+        captured = rt.store.read("signal", "quote")
+        assert captured and captured["text"] == quote
+        reopened = Store(home)
+        assert reopened.read("signal", "quote") == captured
+        assert reopened.read("background_signal", "quote") is None
+        call("goal_create", {"id": "quote-analysis", "title": "Analyze quoted prompt",
+             "description": "User requested analysis", "completion_criteria": "Explanation",
+             "signal_id": "quote"}, sid="human-quote")
+    finally:
+        clear_session_vars(tokens)
+    tokens = set_session_vars(platform="curator", session_id="trusted-curator", chat_type="private")
+    try:
+        invoke_hook("pre_llm_call", session_id="trusted-curator", turn_id="curator-turn",
+                    platform="curator", user_message=quote)
+        assert rt.store.read("signal", "curator-turn") is None
+        assert call("context", ok=False, sid="trusted-curator")["code"] == "permission_denied"
+    finally:
+        clear_session_vars(tokens)
+
     goal = call(
         "goal_create",
         {
