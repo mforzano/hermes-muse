@@ -175,6 +175,8 @@ class OperationTests(OperationFixture):
     def test_instruction_content_reads_skip_successes_but_keep_failures_and_real_data(self):
         self.call('lessons', name='muse_manage', args={'action': 'content_read', 'data': {'kind': 'working_lessons'}})
         self.message(role='tool', text='{"ok":true,"result":{"body":"instructions"}}', call_id='lessons')
+        self.call('tools', name='muse_manage', args={'action': 'content_read', 'data': {'kind': 'tools_note'}})
+        self.message(role='tool', text='{"ok":true,"result":{"body":"tool recipes"}}', call_id='tools')
         self.call('failed-lessons', name='muse_manage', args={'action': 'content_read', 'data': {'kind': 'working_lessons'}})
         failed = self.message(role='tool', text='{"ok":false,"error":"read failed"}', call_id='failed-lessons')
         note = self.call('note', name='muse_manage', args={'action': 'content_read', 'data': {'kind': 'note'}})

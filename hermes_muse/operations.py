@@ -10,7 +10,7 @@ from .store import DAY, bounded, digest, epoch
 
 GROUPS = {"group", "supergroup", "channel", "guild", "room"}
 INSPECTION = {"context", "status", "conversation_read", "operations_read", "operations_complete", "operations_batch", "operations_evidence", "operations_commit", "finding_record"}
-INSTRUCTION_CONTENT = {"working_lessons", "tools"}
+INSTRUCTION_CONTENT = {"working_lessons", "tools_note"}
 
 
 @contextmanager
