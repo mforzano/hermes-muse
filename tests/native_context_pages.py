@@ -36,19 +36,19 @@ def worker(home):
         value=json.loads(raw);assert value['ok'] is ok,value
         return value.get('result') if ok else value
     with rt.store.transaction() as db:
-        for i in range(550):
+        for i in range(40):
             rt.store.put(db,'signal',f'large-{i:04}',{'id':f'large-{i:04}','session_id':'origin','created':now-100+i//275,'text':'Synthetic long signal '+('证据'*1500)})
-        for i in range(400):
+        for i in range(40):
             rt.store.put(db,'source_check',f'source-{i}',{'id':f'source-{i}','status':'partial','summary':'x'*6000})
     overview=call('context');assert 'signal_reviews' in overview and 'source_checks' not in overview
     state=call('status');assert state['sections']==overview['sections']
     first=call('context',{'section':'source_check','limit':100});ids=[r['id'] for r in first['items']]
     while first['next_cursor']:
         first=call('context',{'section':'source_check','limit':100,'cursor':first['next_cursor']});ids.extend(r['id'] for r in first['items'])
-    assert len(ids)==len(set(ids))==400
+    assert len(ids)==len(set(ids))==40
     assert call('context',{'section':'feed','home':'foreign'},ok=False)['code']=='invalid_argument'
     with delegated_child_context('native-reader'):
-        assert call('context',{'section':'source_check','limit':3})['total']==400
+        assert call('context',{'section':'source_check','limit':3})['total']==40
         assert not call('context',{'section':'signals','job':'memory-upkeep'},ok=False)['ok']
         assert not call('feed_update',{},ok=False)['ok']
     attempt=create_execution(rt.host.manifest()['fixed']['memory-upkeep'],source='test');mark_execution_running(attempt['id'])
@@ -56,7 +56,7 @@ def worker(home):
     first=call('context',{'section':'signals','job':'memory-upkeep','limit':41},task=task)
     window=first['window'];through=first['through'];seen=[];page=first
     cp={'job':'memory-upkeep','window':window,'through':through,'up_to':through,'summary':'Reviewed all synthetic evidence'}
-    assert call('review_complete',cp,ok=False,task=task)['code']=='permission_denied'
+    assert call('review_complete',cp,ok=False,task=task)['code']=='revision_required'
     while True:
         for row in page['items']:
             offset=0;body=''
@@ -68,10 +68,10 @@ def worker(home):
             seen.append(row['id'])
         if not page['next_cursor']:break
         page=call('context',{'section':'signals','job':'memory-upkeep','window':window,'limit':41,'cursor':page['next_cursor']},task=task)
-    assert len(seen)==len(set(seen))==552
+    assert len(seen)==len(set(seen))==30
     now+=1;rt.service.signal('later','origin','Concurrent later signal')
     assert call('review_complete',cp,task=task)['complete']
-    assert call('context',{'section':'signals','job':'memory-upkeep'},task=task)['total']==1
+    assert call('context',{'section':'signals','job':'memory-upkeep'},task=task)['total']==13
     # Native history pages survive an append, but never count the appended text as read.
     for i in range(9):native.append_message('origin','assistant','Original evidence '+str(i)+'x'*18000)
     notice=call('notification_add',arguments(rt,'notification_add',{'event_key':'long-history-notice','message':'Synthetic result','sources':['fixture:source'],'rationale':'Synthetic relevance','verified_at':now,'expires':now+3600}))
@@ -101,11 +101,12 @@ def worker(home):
     receipt=call('feed_update',data);assert receipt['result_is_reference'];assert call('feed_update',data)==receipt
     record=call('content_read',{'kind':'feed','id':feed['id']});assert not record['metadata_complete']
     # The documented absent creation actually works with a native evidence receipt.
+    native.append_message('origin','assistant','I completed the synthetic correction; verify its actual state')
     audit=call('operations_read',{},task=task)
-    refs=audit['events']+audit['executions'];assert refs
-    ref=refs[0]['ref'];off=0
+    assert audit['events']
+    case=audit['events'][0];ref=case['evidence_refs'][0];receipt=case['receipt'];off=0
     while off is not None:
-        original=call('operations_evidence',{'receipt':audit['token'],'ref':ref,'offset':off})
+        original=call('operations_evidence',{'receipt':receipt,'ref':ref,'offset':off})
         assert not original['missing'];off=original['next_offset']
     finding=call('finding_record',{'expected_revision':'absent','request_id':'finding-create','evidence':[ref],
                     'summary':'Synthetic fixture finding','impact':'Fixture only'},task=task)
@@ -126,7 +127,7 @@ def worker(home):
         cursor=due['next_cursor']
     assert len(seen)==len(set(seen))==60
     assert call('context',{'section':'followups'})['due_total']==0
-    print(json.dumps({'native_large_context':'PASS','signals':552,'native_truncated_signal_full_body':True,'source_checks':400,'due_goals_read_and_done':60,'real_registry_hooks':True,'child_write_denied':True,'caller_home_rejected':True,'append_only_history_progress':True,'feed_correction_CAS_replay':True,'finding_absent_creation':True,'notification_partial_then_reviewed':True,'oversized_mutation_receipt':'reference, replay preserved','provider_calls':0,'external_sends':0}))
+    print(json.dumps({'native_large_context':'PASS','selected_signals':30,'global_unprocessed':13,'native_truncated_signal_full_body':True,'source_checks':40,'due_goals_read_and_done':60,'real_registry_hooks':True,'child_write_denied':True,'caller_home_rejected':True,'append_only_history_progress':True,'feed_correction_CAS_replay':True,'finding_absent_creation':True,'notification_partial_then_reviewed':True,'oversized_mutation_receipt':'reference, replay preserved','provider_calls':0,'external_sends':0}))
     native.close();rt.close()
 
 

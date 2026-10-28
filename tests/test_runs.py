@@ -38,15 +38,20 @@ class RunTests(unittest.TestCase):
         with closing(sqlite3.connect(self.path)) as db, db:
             db.execute("UPDATE executions SET status='completed'")
         self.assertEqual('partial', self.runs.recent()[0]['status'])
-        with self.assertRaisesRegex(ValueError, 'Operation review'):
-            self.runs.finish(run, {'outcome': 'complete', 'summary': 'Signals handled'})
+        ready=self.runs.finish(run, {'outcome':'complete','summary':'Selected signals handled; legacy raw audit remains unreviewed'})
+        self.assertEqual(ready['status'],'ready')
 
     def test_resume_operation_review_then_finalize_without_delivery_claim(self):
         run = self.start('hourly')
         self.runs.stage(run, 'review', {'complete': True})
-        partial = self.runs.finish(run, {'outcome': 'partial', 'summary': 'Signals saved', 'gaps': ['Operation pages remain; resume saved checkpoint']})
+        self.store.write('operation_snapshot','case-selected',{'reviewed':False})
+        self.runs.stage(run,'operations',{'receipts':['case-selected'],'complete':False})
+        with self.assertRaisesRegex(ValueError,'Selected consequence'):
+            self.runs.finish(run,{'outcome':'complete','summary':'Cannot hide selected unfinished work'})
+        partial = self.runs.finish(run, {'outcome': 'partial', 'summary': 'Signals saved', 'gaps': ['Selected case remains; resume its receipt']})
         self.assertEqual('partial', partial['status'])
-        self.runs.stage(run, 'operations', {'complete': True})
+        self.store.write('operation_snapshot','case-selected',{'reviewed':True})
+        self.runs.stage(run, 'operations', {'complete': True,'receipts':['case-selected']})
         ready = self.runs.finish(run, {'outcome': 'complete', 'summary': 'Snapshot now reviewed'})
         self.assertEqual('ready', ready['status'])
         self.runs.finalize(run)
@@ -64,6 +69,8 @@ class RunTests(unittest.TestCase):
             os.utime(self.store.path(name), (self.now - 60, self.now - 60))
         with self.assertRaisesRegex(ValueError, 'unchanged'):
             self.runs.finish(run, {'outcome': 'complete', 'summary': 'Done'})
+        unchanged=self.runs.finish(run,{'outcome':'complete','summary':'Confirmed no relevant change','unchanged_reason':'Existing verified artifacts remain current'})
+        self.assertTrue(unchanged['stages']['artifacts']['unchanged_reason'])
         for name in paths:
             os.utime(self.store.path(name), (self.now + 1, self.now + 1))
         ready = self.runs.finish(run, {'outcome': 'complete', 'summary': 'Confirmed alignment written; historical audit remains with hourly upkeep'})

@@ -503,8 +503,20 @@ def cron_run(home, key):
             return {"wakeAgent": goal["status"] == "active", "goal": goal["id"], "watch_id": pair[0]}
         except ValueError:
             return {"wakeAgent": False}
-    # Fixed jobs must inspect live sources/memory before deciding there is no work.
-    # Only owned watches retain their explicit lifecycle gate above.
+    if key == 'memory-upkeep':
+        from .context_pages import pending_signals
+        page = service.operations.read({}, compact=True)
+        findings = any(r.get('status') in {'open','repairing'} for r in store.all('operation_finding'))
+        last = store.read('meta','last_review:memory-upkeep',{}).get('at',0)
+        health = any(r.get('status')=='partial' and r.get('started',0)>last for r in store.all('run'))
+        try:
+            due = any(g.get('status')=='active' and any(g.get(k) is not None and epoch(g[k])<=time.time()
+                      for k in ('next_check_at','research_review_at')) for g in store.goals())
+        except (ValueError,TypeError,KeyError):
+            due = True  # An unreadable responsibility is not proof of an empty local pass.
+        if page.get('available') and not (pending_signals(store) or page['events'] or page['more'] or findings or due or health):
+            return {'wakeAgent':False,'job':key,'reason':'No new local signals/cases or due responsibilities; legacy raw history is unreviewed, not a wake reason.'}
+    # External-source tasks always inspect authorized live sources; no empty-source guess.
     result = {"wakeAgent": key in JOBS, "job": key, "started_at": stamp(),
               "instruction": "Call muse_manage context, inspect current sources using this job's Skill, then decide whether there is useful work. No worthwhile notification means [SILENT], not a skipped check."}
     # Optional and off by default; fails open (see wake_gate.py).

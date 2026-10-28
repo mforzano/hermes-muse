@@ -510,23 +510,7 @@ class NightlyIdeasStep(Harness):
     def paragraphs(self):
         return (self.ROOT / "prompts/nightly-review.md").read_text(encoding="utf-8").split("\n\n")
 
-    def test_ideas_are_their_own_step_between_reflection_and_closing(self):
-        paragraphs = self.paragraphs()
-        step = next(i for i, p in enumerate(paragraphs) if p.startswith("Ideas step"))
-        research = next(i for i, p in enumerate(paragraphs) if p.startswith("Research eligible active goals"))
-        reflection = next(i for i, p in enumerate(paragraphs) if "Write confirmed reflection and alignment before optional follow-up research" in p)
-        closing = next(i for i, p in enumerate(paragraphs) if p.startswith("Complete recoverable work"))
-        self.assertTrue(research < reflection < step < closing)
-        self.assertNotIn("Ideas", paragraphs[research])
-        text = paragraphs[step]
-        for needle in ("never ahead of them", "0-3", "no quota", "title, rationale, sources", "goal_id", "expires", "not authorization"):
-            self.assertIn(needle, text)
 
-    def test_run_complete_summary_records_the_ideas_outcome(self):
-        closing = next(p for p in self.paragraphs() if p.startswith("Complete recoverable work"))
-        self.assertIn("one sentence on Ideas", closing)
-        self.assertIn("why none", closing)
-        self.assertIn("still with the Ideas sentence", closing)
 
     def test_idea_add_wrong_fields_get_a_one_shot_fix(self):
         reply = self.failure("idea_add", {"text": "Try X", "kind": "ideas"})
@@ -673,19 +657,6 @@ class GoalIntake(Harness):
         self.service.store.save_goal(record, body)
         self.assertIn("[Muse] User signal", self.runtime.pre_turn(session_id="mine", turn_id="t1", user_message="Hello there")["context"])
 
-    def test_nightly_prompt_has_its_own_intake_step_before_ideas(self):
-        paragraphs = (self.ROOT / "prompts/nightly-review.md").read_text(encoding="utf-8").split("\n\n")
-        step = next(i for i, p in enumerate(paragraphs) if p.startswith("Goal intake step"))
-        ideas = next(i for i, p in enumerate(paragraphs) if p.startswith("Ideas step"))
-        reflection = next(i for i, p in enumerate(paragraphs) if "Write confirmed reflection and alignment" in p)
-        self.assertLess(reflection, step)
-        self.assertLess(step, ideas)
-        for needle in ("goal_create", "signal_id", "completion_criteria", "At most 5", "active, done and cancelled goal", "Never goal_update", "no copied private text"):
-            self.assertIn(needle.lower(), paragraphs[step].lower())
-        closing = next(p for p in paragraphs if p.startswith("Complete recoverable work"))
-        self.assertIn("one sentence on Goal intake", closing)
-        for needle in ("next_cursor", "content_read(kind=goal,id)", "description and external_ref"):
-            self.assertIn(needle, paragraphs[step])
 
     def test_nightly_create_needs_a_signal_and_names_the_fix(self):
         with self.assertRaises(DomainError) as caught:

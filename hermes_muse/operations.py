@@ -25,7 +25,10 @@ def reader(path):
 
 def calls(row):
     value = row.get("tool_calls") or []
-    return json.loads(value) if isinstance(value, str) else value
+    value = json.loads(value) if isinstance(value, str) else value
+    if not isinstance(value,list) or any(not isinstance(item,dict) for item in value):
+        raise ValueError('Native tool_calls is not a structured call array')
+    return value
 
 
 def inspection(call):
@@ -53,19 +56,9 @@ def failed_result(content):
     if isinstance(value, dict):
         return (value.get("ok") is False or value.get("success") is False
                 or value.get("isError") is True or bool(value.get("error"))
-                or value.get("status") in {"error", "failed"})
+                or value.get('status') in {'error','failed','unknown','outcome_unknown'}
+                or value.get('code') == 'outcome_unknown')
     return False
-
-
-def preview(event):
-    """An index, never a replacement for source evidence. Full bodies stay in native history."""
-    text = json.dumps(event, ensure_ascii=False)
-    linked = event.get("related_call", {}).get("call")
-    action = linked or event.get("tool_calls") or []
-    return {"ref": event["ref"], "session_id": event.get("session_id"), "role": event.get("role"),
-            "tool_name": event.get("tool_name"), "call_preview": json.dumps(action, ensure_ascii=False)[:1200],
-            "related_ref": "message:" + str(event["related_call"]["message_id"]) if linked else None,
-            "chars": len(text), "excerpt": text[:1200], "truncated": len(text) > 1200}
 
 
 class Operations:
@@ -78,277 +71,262 @@ class Operations:
         if session_id and len(parts) == 3 and parts[0] == "cron" and parts[1] in self.host.manifest()["jobs"]:
             self.store.write("operation_session", session_id, {"id": session_id, "job_id": parts[1], "execution_id": parts[2]})
 
+    def policy(self):
+        """One explainable boundary; the legacy cursor/wave are evidence, never reviewed."""
+        existing=self.store.read('meta','operation_policy')
+        if existing:return existing
+        with self.store.transaction() as state:
+            policy = self.store.get(state, 'meta', 'operation_policy')
+            if policy:
+                return policy
+            old = self.store.get(state, 'meta', 'operation_cursor')
+            ceiling = 0
+            if old and (self.store.home/'state.db').exists():
+                with reader(self.store.home/'state.db') as native:
+                    ceiling = native.execute('SELECT COALESCE(MAX(id),0) FROM messages').fetchone()[0]
+            wave=self.store.get(state,'meta','operation_wave')
+            owners=[self.store.get(state,'operation_dispatch',p['receipt']) for p in (wave or {}).get('pages',[])]
+            policy = {'version': 'consequential-v1', 'started': self.clock(), 'scan_after': ceiling,
+                      'since': self.clock()-DAY, 'legacy': {'cursor': old,
+                      'wave':wave,'owners':[o for o in owners if o], 'reviewed': False},
+                      'limits': 'Selected consequential cases and bounded opaque samples, not a full tool-log audit. Hidden opaque side effects may be missed.'}
+            self.store.put(state,'meta','operation_policy',policy)
+            return policy
+
     def checkpoint(self):
-        with self.store.transaction() as db:
-            row = self.store.get(db, "meta", "operation_cursor")
-            if row is None:
-                row = {"message_id": 0, "since": self.clock() - DAY, "execution_through": self.clock() - DAY}
-                self.store.put(db, "meta", "operation_cursor", row)
-            return row
+        return self.policy()
 
     def summary(self):
-        return {"checkpoint": self.store.read("meta", "operation_cursor"),
-                "findings": self.store.all("operation_finding"),
-                "instruction": "Use operations_read for native tool evidence; no operation audit is implied by a conversation/signal cursor."}
+        findings=[r for r in self.store.all('operation_finding') if r.get('status') in {'open','repairing'}]
+        return {'selection': self.policy(), 'findings': [{k:r.get(k) for k in ('id','status','updated')} for r in findings[:12]],
+                'open_finding_count':len(findings),
+                'instruction': 'Review current health, unresolved findings and selected cases, not all historical tool rows. Legacy history remains unreviewed; full finding bodies are available by id.'}
+
+    @staticmethod
+    def reason(call):
+        fn = call.get('function',call)
+        name = fn.get('name','')
+        args = fn.get('arguments',{})
+        try:
+            args = json.loads(args) if isinstance(args,str) else args
+        except (ValueError,TypeError):
+            return 'unknown_arguments'
+        if not isinstance(args,dict):
+            return 'unknown_arguments'
+        if name == 'tool_call':
+            nested = args.get('calls')
+            if not isinstance(nested,list):
+                return 'unknown_arguments'
+            reasons = [Operations.reason(c) for c in nested if isinstance(c,dict)]
+            return next((r for r in reasons if r and r != 'opaque_sample'), 'opaque_sample' if 'opaque_sample' in reasons else None)
+        if name == 'muse_manage':
+            action = args.get('action','')
+            if action in {'goal_create','goal_update','watch_create','watch_stop','forget','feedback','preferences','feed_update','content_write','notification_add','notification_refresh','notification_prepare','notification_queue','notification_handoff','notification_resolve'}:
+                return 'structured_write'
+            return None
+        if inspection(call) or name in {'read','read_file','list_files','glob','grep','web_search','web_extract','fetch_content'}:
+            return None
+        short_name=name.rsplit('__',1)[-1]
+        if short_name in {'write','edit','write_file','edit_file','apply_patch','delete_file','send_message','send_email','send_mail'} or args.get('action',args.get('operation')) in {'send','create','update','delete','write','edit','publish'}:
+            return 'structured_write'
+        # A terminal name or zero exit code cannot prove absence of side effects.
+        if name in {'terminal','execute_code','shell','bash'}:
+            return 'opaque_execution'
+        return 'opaque_sample'
 
     def read(self, data, *, page_cursor=None, compact=False):
-        cursor, now = self.checkpoint(), self.clock()
-        result = {"available": True, "events": [], "executions": [], "gaps": [],
-                  "scope_since": cursor["since"], "findings": [] if compact else self.store.all("operation_finding")}
-        native_path = self.store.home / "state.db"
-        if not native_path.exists():
-            return {**result, "available": False, "gaps": ["Native session database is unavailable; no audit checkpoint advanced."]}
-        jobs = self.host.manifest()["jobs"]
-        roots = {s["id"] for s in self.store.all("session")} | {s["id"] for s in self.store.all("operation_session")}
+        if 'up_to' in data or data.get('through') is not None:
+            raise ValueError('Consequential review selects cases; omit legacy through/up_to boundaries. Old raw-log cursors remain unreviewed.')
+        policy, now = self.policy(), self.clock()
+        result = {'available': True, 'events': [], 'executions': [], 'gaps': [],
+                  'scope': 'selected_cases', 'findings': [] if compact else self.summary()['findings']}
+        path = self.store.home/'state.db'
+        if not path.exists():
+            return {**result, 'available': False, 'gaps': ['Native history unavailable; no scan or review advanced.']}
+        roots = {r['id'] for r in self.store.all('session')} | {r['id'] for r in self.store.all('operation_session')}
+        jobs = self.host.manifest()['jobs']
         try:
-            with reader(native_path) as db:
-                sessions = {r["id"]: dict(r) for r in db.execute("SELECT id,parent_session_id,chat_type FROM sessions")}
-                eligible = set()
-                for sid in sessions:
-                    lineage, current = set(), sid
-                    matched, private = False, True
-                    while current in sessions and current not in lineage:
-                        lineage.add(current)
-                        item = sessions[current]
-                        private &= str(item.get("chat_type") or "").lower() not in GROUPS
-                        matched |= current in roots or any(current.startswith("cron_" + jid + "_") for jid in jobs)
-                        current = item.get("parent_session_id")
-                    if matched and private:
-                        eligible.add(sid)
-                ceiling = db.execute("SELECT COALESCE(MAX(id),0) FROM messages").fetchone()[0]
-                # Freeze the shared pass once; concurrent readers own separate page receipts.
-                with self.store.transaction() as state:
-                    cursor = self.store.get(state, "meta", "operation_cursor")
-                    if "through" not in cursor:
-                        cursor = {**cursor, "through": ceiling}
-                        self.store.put(state, "meta", "operation_cursor", cursor)
-                if page_cursor is not None:
-                    cursor = page_cursor
-                expected = cursor.get("through", ceiling)
-                through = data.get("through", expected)
-                if type(through) is not int or through != expected or not cursor["message_id"] <= through <= ceiling:
-                    raise ValueError(f"Continue the frozen snapshot through {expected}; up_to is only a page checkpoint, not its boundary")
-                # Scan by insertion ID: late tool results must be reviewed even when their call is older.
-                end = cursor["message_id"]
-                page_chars = 0
-                columns = {r[1] for r in db.execute("PRAGMA table_info(messages)")}
-                uid = ",message_uid" if "message_uid" in columns else ""
-                originals = {}
-                rows = db.execute("SELECT id,session_id,role,content,tool_calls,tool_call_id,tool_name,timestamp" + uid + " "
-                                  "FROM messages WHERE id>? AND id<=? AND timestamp>=? "
-                                  "AND (role='tool' OR tool_calls IS NOT NULL) ORDER BY id",
-                                  (end, through, cursor["since"]))
-                for raw in rows:
-                    row = dict(raw)
-                    if row["session_id"] not in eligible or row["timestamp"] < cursor["since"]:
-                        end = row["id"]
-                        continue
-                    if row.get("message_uid"):
-                        sid = row["session_id"]
-                        if sid not in originals:
-                            originals[sid] = dict(db.execute(
-                                "SELECT message_uid,MIN(id) FROM messages WHERE session_id=? AND id<=? "
-                                "AND timestamp>=? AND message_uid IS NOT NULL GROUP BY message_uid",
-                                (sid, through, cursor["since"])))
-                        original_id = originals[sid][row["message_uid"]]
-                        if original_id < row["id"]:
-                            original = db.execute("SELECT role,content,tool_calls,tool_call_id,tool_name,timestamp FROM messages WHERE id=?", (original_id,)).fetchone()
-                            if original and all(row[k] == original[k] for k in original.keys()):
-                                end = row["id"]
-                                continue
-                    selected = [c for c in calls(row) if not inspection(c)]
-                    related = None
-                    if row["role"] == "tool" and row.get("tool_call_id"):
-                        candidates = db.execute("SELECT id,tool_calls FROM messages WHERE session_id=? AND id<? "
-                                                "AND instr(tool_calls,?)>0 ORDER BY id DESC",
-                                                (row["session_id"], row["id"], row["tool_call_id"]))
-                        for candidate in candidates:
-                            match = next((c for c in calls(dict(candidate)) if c.get("id") == row["tool_call_id"]), None)
-                            if match:
-                                related = {"message_id": candidate["id"], "call": match}
-                                break
-                        if related and inspection(related["call"]) and not failed_result(row.get("content")):
-                            end = row["id"]
-                            continue
-                    if selected or row["role"] == "tool":
-                        event = {"ref": "message:" + str(row["id"]), **row, "tool_calls": selected}
-                        # Tool text remains untrusted evidence; never copy hidden reasoning into review context.
-                        if selected:
-                            event["content"] = None
-                        if related:
-                            event["related_call"] = related
-                        if compact:
-                            event = preview(event)
-                        size = len(json.dumps(event, ensure_ascii=False))
-                        if result["events"] and (len(result["events"]) >= 100 or page_chars + size > 64000):
-                            break
-                        result["events"].append(event)
-                        page_chars += size
-                    end = row["id"]
-                else:
-                    end = through
-                result.update(through=through, up_to=end, more=end < through)
-            ledger = self.store.home / "cron/executions.db"
-            if ledger.exists():
-                with reader(ledger) as db:
-                    for raw in db.execute("SELECT * FROM executions ORDER BY claimed_at"):
-                        row = dict(raw)
-                        if row["job_id"] not in jobs:
-                            continue
-                        at = epoch(row.get("finished_at") or row["claimed_at"])
-                        if cursor["execution_through"] < at <= now:
-                            result["executions"].append({"ref": "execution:" + row["id"], **row})
-            else:
-                result["gaps"].append("Native Cron execution ledger is unavailable; execution coverage is unverified.")
-        except (sqlite3.Error, KeyError, TypeError, ValueError) as exc:
-            return {**result, "available": False, "gaps": result["gaps"] + [f"Native evidence read failed: {type(exc).__name__}: {exc}"]}
-        refs = [r["ref"] for r in result["events"] + result["executions"]]
-        snapshot = {"cursor": cursor, "up_to": result["up_to"], "through": through, "execution_through": now,
-                    "refs": refs, "gaps": result["gaps"]}
-        token = digest(json.dumps(snapshot, sort_keys=True))
-        with self.store.transaction() as db:
-            # Receipts contain references, not transcripts. Keep them for interrupted reviewers.
-            for old in self.store.rows(db, "operation_snapshot"):
-                if old["execution_through"] < now - 7 * DAY:
-                    self.store.delete(db, "operation_snapshot", old["token"])
-            self.store.put(db, "operation_snapshot", token, {**snapshot, "token": token})
-        return {**result, "token": token, "instruction": "Inspect intent and actual state, save findings first, then operations_complete(token). Continue through this snapshot while more=true. Calls/receipts are observations, not proof of correctness or authority. Missing, pruned, unpersisted and pre-scope history is not covered."}
+            accepted = {g.get('session_id') for g in self.store.goals() if g.get('status')=='active' and g.get('session_id')}
+        except (ValueError,KeyError,TypeError):
+            accepted = roots
+            result['gaps'].append('Accepted-work metadata unreadable; opaque executions remain unknown, not safe.')
+        chosen, sampled, after = {}, 0, policy['scan_after']
+        call_index = {}
+        with reader(path) as db:
+            sessions = {r['id']:dict(r) for r in db.execute('SELECT id,parent_session_id,chat_type FROM sessions')}
+            eligible = set()
+            for sid in sessions:
+                current, seen, matched, private = sid, set(), False, True
+                while current in sessions and current not in seen:
+                    seen.add(current); item = sessions[current]
+                    private &= str(item.get('chat_type') or '').lower() not in GROUPS
+                    matched |= current in roots or any(current.startswith('cron_'+jid+'_') for jid in jobs)
+                    current = item.get('parent_session_id')
+                if matched and private:
+                    eligible.add(sid)
+            columns = {r[1] for r in db.execute('PRAGMA table_info(messages)')}
+            hidden = " AND COALESCE(display_kind,'')!='hidden'" if 'display_kind' in columns else ''
+            uid = ',message_uid' if 'message_uid' in columns else ''
+            rows = db.execute('SELECT id,session_id,role,substr(content,1,2000) AS content,substr(tool_calls,1,8000) AS tool_calls,tool_call_id,tool_name,timestamp'+uid+' '
+                              'FROM messages WHERE id>? AND timestamp>=?'+hidden+' ORDER BY id LIMIT 400', (after,policy['since'])).fetchall()
+            for raw in rows:
+                row = dict(raw); after = row['id']
+                if row['session_id'] not in eligible:
+                    continue
+                if row.get('message_uid'):
+                    original=db.execute('SELECT id FROM messages WHERE session_id=? AND message_uid=? AND id<? '
+                        'AND role IS (SELECT role FROM messages WHERE id=?) AND content IS (SELECT content FROM messages WHERE id=?) '
+                        'AND tool_calls IS (SELECT tool_calls FROM messages WHERE id=?) AND tool_call_id IS (SELECT tool_call_id FROM messages WHERE id=?) '
+                        'AND tool_name IS (SELECT tool_name FROM messages WHERE id=?) AND timestamp IS (SELECT timestamp FROM messages WHERE id=?) LIMIT 1',
+                        (row['session_id'],row['message_uid'],row['id'],*[row['id']]*6)).fetchone()
+                    if original:continue
+                reason, related = None, None
+                if row['role']=='tool':
+                    if failed_result(row['content']):
+                        reason='reported_failure_or_unknown'
+                    if row.get('tool_call_id'):
+                        cached=call_index.get((row['session_id'],row['tool_call_id']))
+                        if cached:
+                            related,match=cached;reason=reason or self.reason(match)
+                        else:
+                            for candidate in db.execute('SELECT id,tool_calls FROM messages WHERE session_id=? AND id<? AND instr(tool_calls,?)>0 ORDER BY id DESC', (row['session_id'],row['id'],row['tool_call_id'])):
+                                try:match=next((c for c in calls(dict(candidate)) if c.get('id')==row['tool_call_id']),None)
+                                except (ValueError,TypeError):continue
+                                if match:
+                                    related=candidate['id']; reason=reason or self.reason(match); break
+                elif row['tool_calls']:
+                    try:
+                        parsed=calls(row)
+                        for c in parsed:
+                            if c.get('id'):call_index[(row['session_id'],c['id'])]=(row['id'],c)
+                        reasons=[self.reason(c) for c in parsed]
+                        reason=next((r for r in reasons if r and r!='opaque_sample'),'opaque_sample' if 'opaque_sample' in reasons else None)
+                    except (ValueError,TypeError,AttributeError):
+                        reason='unknown_arguments'
+                elif row['role']=='assistant' and not any(row['session_id'].startswith('cron_'+jid+'_') for jid in jobs):
+                    import re
+                    if re.search(r'已完成|已发送|已保存|已更新|已修复|\b(completed|sent|saved|fixed)\b',row['content'] or '',re.I):
+                        reason='completion_claim_needs_verification'
+                if not reason:
+                    continue
+                if reason=='opaque_execution':
+                    reason='opaque_accepted_work' if row['session_id'] in accepted else 'opaque_sample'
+                if reason=='opaque_sample':
+                    if sampled>=2:continue
+                    sampled+=1
+                user=db.execute("SELECT id FROM messages WHERE session_id=? AND id<? AND role='user'"+hidden+" ORDER BY id DESC LIMIT 1",(row['session_id'],row['id'])).fetchone()
+                # One case per original user turn; calls/results and context stay linked once.
+                user_id=user['id'] if user else None
+                key=digest(row['session_id']+':'+str(user_id or related or row['id']))
+                case=chosen.setdefault(key,{'session_id':row['session_id'],'refs':[],'reasons':[], 'user_ref':'message:'+str(user_id) if user_id else None})
+                refs=['message:'+str(n) for n in [related,row['id']] if n]
+                for ref in refs:
+                    if ref not in case['refs']:case['refs'].append(ref)
+                if reason not in case['reasons']:case['reasons'].append(reason)
+                if len(chosen)>=12:break
+        ledger=self.store.home/'cron/executions.db'
+        if ledger.exists():
+            with reader(ledger) as db:
+                seen=set()
+                for raw in db.execute('SELECT * FROM executions ORDER BY claimed_at DESC LIMIT 1000'):
+                    execution=dict(raw); jid=execution['job_id']
+                    if jid not in jobs or jid in seen:continue
+                    seen.add(jid)
+                    if execution['status'] in {'failed','cancelled'} or execution.get('delivery_outcome')=='unknown':
+                        chosen[digest('health:'+jid)]={'session_id':None,'refs':['execution:'+execution['id']],
+                            'reasons':['unresolved_execution_or_delivery'],'user_ref':None}
+        with self.store.transaction() as state:
+            # Concurrent scans merge their references; never replace newer writes.
+            current=self.store.get(state,'meta','operation_policy')
+            current['scan_after']=max(current['scan_after'],after)
+            self.store.put(state,'meta','operation_policy',current)
+            for key,case in chosen.items():
+                token='case-'+key
+                old=self.store.get(state,'operation_snapshot',token,{})
+                refs=list(dict.fromkeys(old.get('refs',[])+case['refs']+([case['user_ref']] if case['user_ref'] else [])))
+                changed=refs!=old.get('refs')
+                reasons=list(dict.fromkeys(old.get('reasons',[])+case['reasons']))
+                self.store.put(state,'operation_snapshot',token,{**old,**case,'reasons':reasons,'token':token,'policy':current['version'],
+                    'refs':refs,'execution_through':now,'reviewed':False if changed else old.get('reviewed',False),'created':old.get('created',now)})
+        pending=[r for r in self.store.all('operation_snapshot') if r.get('policy')==policy['version'] and not r.get('reviewed')]
+        # Reserve a place for the oldest continuation; recent cases do not queue behind raw history.
+        pending.sort(key=lambda r:r['created'])
+        continuation=pending[:1]
+        rest=sorted(pending[1:],key=lambda r:(not any('failure' in k or 'unknown' in k or 'claim' in k for k in r['reasons']),-r['created']))
+        selected=continuation+rest[:11]
+        for case in selected:
+            result['events'].append({'ref':case['token'],'receipt':case['token'],'session_id':case['session_id'],
+                'reasons':case['reasons'],'evidence_refs':case['refs'],'user_context_ref':case.get('user_ref')})
+        result.update(checkpoint=self.policy(),more=bool(rows) and (after<rows[-1]['id'] or len(rows)==400),pending_cases=len(pending),opaque_samples=sampled,
+                      instruction='Selected cases only. Expand each case receipt, read relevant original context once, verify consequences and save findings. Complete only actually reviewed receipts. Unselected history is not certified safe.')
+        return result
 
     def complete(self, data):
-        if self.evidence({"receipt": data.get("token")})["missing"]:
-            raise ValueError("Native evidence is missing; keep the page partial")
+        token=data.get('token');bounded(data.get('summary'),2000)
         with self.store.transaction() as db:
-            snapshot = self.store.get(db, "operation_snapshot", data.get("token"), {})
-            if not snapshot:  # Finish a page issued before the upgrade without resetting its cursor.
-                snapshot = self.store.get(db, "meta", "operation_snapshot", {})
-            current = self.store.get(db, "meta", "operation_cursor")
-            if (not snapshot or data.get("token") != snapshot.get("token") or not current
-                    or current["since"] != snapshot["cursor"]["since"]
-                    or current["message_id"] < snapshot["cursor"]["message_id"]):
-                raise ValueError("Stale or unknown operation snapshot; read again")
-            if snapshot["gaps"]:
-                raise ValueError("Evidence coverage is incomplete; preserve the checkpoint and resolve the gap")
-            bounded(data.get("summary"), 2000)
-            duplicate = current["message_id"] >= snapshot["up_to"]
-            updated = {**current, "message_id": max(current["message_id"], snapshot["up_to"]),
-                       "execution_through": max(current["execution_through"], snapshot["execution_through"])}
-            boundary = current.get("through", snapshot["through"])
-            more = updated["message_id"] < boundary
-            if more:
-                updated["through"] = boundary
-            else:
-                updated.pop("through", None)
-            self.store.put(db, "meta", "operation_cursor", updated)
-            return {"reviewed": True, "already_reviewed": duplicate, "checkpoint": updated, "more": more, "through": boundary,
-                    "instruction": "Only this page is reviewed. Call operations_read with data={} now; the remaining snapshot is preserved automatically." if more else "The operation snapshot is reviewed; future arrivals belong to the next pass."}
+            row=self.store.get(db,'operation_snapshot',token,{})
+            if row.get('policy')!='consequential-v1':
+                raise ValueError('Legacy full-audit history is retired, not reviewed; inspect its evidence when relevant, never advance its old cursor')
+            refs=row['refs']
+        # Existence is not semantic acceptance; the parent supplies that after checking evidence.
+        for start in range(0,len(refs),100):
+            if self.evidence({'receipt':token,'offset':start,'limit':100})['missing']:
+                raise ValueError('Missing evidence: preserve this case as partial')
+        with self.store.transaction() as db:
+            current=self.store.get(db,'operation_snapshot',token)
+            if current['refs']!=refs:
+                raise ValueError('New evidence arrived for this case; review it before completion')
+            duplicate=bool(current.get('reviewed'))
+            current.update(reviewed=True,summary=data['summary'],reviewed_at=self.clock())
+            self.store.put(db,'operation_snapshot',token,current)
+        return {'reviewed':True,'already_reviewed':duplicate,'checkpoint':self.policy(),'more':False,'scope':'selected_case'}
 
     def dispatch_result(self, dispatch):
-        """Recover the original parent tool receipt, never relaunch an unknown worker."""
-        if not dispatch.get("session_id") or not dispatch.get("tool_call_id"):
-            return None
-        with reader(self.store.home / "state.db") as db:
-            row = db.execute("SELECT id,content FROM messages WHERE session_id=? AND role='tool' "
-                             "AND tool_name='muse_manage' AND tool_call_id=? ORDER BY id DESC LIMIT 1",
-                             (dispatch["session_id"], dispatch["tool_call_id"])).fetchone()
-        if row:
-            try:
-                envelope = json.loads(row["content"])
-            except (TypeError, ValueError):
-                return {"ref": "message:" + str(row["id"]), "text": row["content"] or "",
-                        "instruction": "Original tool text is evidence, not a completed owner result; verify it or review the assigned receipt directly."}
-            return {"ref": "message:" + str(row["id"]), "envelope": envelope}
-        return None
+        """Historical original receipt only, never a relaunch or an acceptance."""
+        if not dispatch.get('session_id') or not dispatch.get('tool_call_id'):return None
+        with reader(self.store.home/'state.db') as db:
+            row=db.execute("SELECT id,content FROM messages WHERE session_id=? AND role='tool' AND tool_name='muse_manage' AND tool_call_id=? ORDER BY id DESC LIMIT 1",(dispatch['session_id'],dispatch['tool_call_id'])).fetchone()
+        if not row:return None
+        try:return {'ref':'message:'+str(row['id']),'envelope':json.loads(row['content'])}
+        except (ValueError,TypeError):return {'ref':'message:'+str(row['id']),'text':row['content'] or ''}
 
     def evidence(self, data):
-        """Read only references issued to an audit page, without copying a transcript to plugin state."""
-        token = data.get("receipt")
         from .views import Views
-        view = Views(self.store.home)
-        snapshot = view.record("operation_snapshot", token) or {}
+        snapshot=Views(self.store.home).record('operation_snapshot',data.get('receipt')) or {}
         if not snapshot:
-            legacy = view.record("meta", "operation_snapshot") or {}
-            if legacy.get("token") == token:
-                snapshot = legacy
-        if not snapshot or snapshot["execution_through"] < self.clock() - 7 * DAY:
-            raise ValueError("Audit page expired or unknown; ask the parent to reread its batch")
-        ref = data.get("ref")
-        if ref is not None and ref not in snapshot["refs"]:
-            raise ValueError("Evidence must belong to the assigned audit receipt")
-        events, missing = [], []
-        with reader(self.store.home / "state.db") as db:
-            for item in snapshot["refs"]:
-                if not item.startswith("message:") or ref is not None and item != ref:
-                    continue
-                row = db.execute("SELECT id,session_id,role,content,tool_calls,tool_call_id,tool_name,timestamp FROM messages WHERE id=?", (int(item.split(":")[1]),)).fetchone()
-                if row is None:
-                    missing.append(item)
-                    continue
-                row = dict(row)
-                row["ref"] = item
-                row["tool_calls"] = [c for c in calls(row) if not inspection(c)]
-                if row["role"] == "assistant":
-                    row["content"] = None  # Never expose reasoning from tool-bearing assistant rows.
-                if row.get("tool_call_id"):
-                    for candidate in db.execute("SELECT id,tool_calls FROM messages WHERE session_id=? AND id<? AND instr(tool_calls,?)>0 ORDER BY id DESC", (row["session_id"], row["id"], row["tool_call_id"])):
-                        match = next((c for c in calls(dict(candidate)) if c.get("id") == row["tool_call_id"]), None)
-                        if match:
-                            row["related_call"] = {"message_id": candidate["id"], "call": match}
-                            break
-                # Context for a page boundary: original turn text is evidence, not new authority.
-                user = db.execute("SELECT id,content FROM messages WHERE session_id=? AND id<? AND role='user' ORDER BY id DESC LIMIT 1", (row["session_id"], row["id"])).fetchone()
-                if user:
-                    row["user_context"] = dict(user)
-                events.append(row)
-        executions = []
-        ledger = self.store.home / "cron/executions.db"
-        execution_refs = [r for r in snapshot["refs"] if r.startswith("execution:") and (ref is None or r == ref)]
-        if execution_refs and ledger.exists():
-            with reader(ledger) as db:
-                for item in execution_refs:
-                    row = db.execute("SELECT * FROM executions WHERE id=?", (item.split(":", 1)[1],)).fetchone()
-                    if row:
-                        executions.append({"ref": item, **dict(row)})
-                    else:
-                        missing.append(item)
-        elif execution_refs:
-            missing.extend(execution_refs)
-        wave = view.record("meta", "operation_wave") or {}
-        slot = next((p["slot"] for p in wave.get("pages", []) if p["receipt"] == token), None)
-        identity = {"receipt": token, "batch": wave.get("number") if slot else None, "slot": slot,
-                    "expected_refs": snapshot["refs"], "returned_refs": [r["ref"] for r in events + executions],
-                    "historical_content": True, "observed_at": self.clock()}
-        since = epoch(data["since"]) if "since" in data else 0
-        until = epoch(data["until"]) if "until" in data else self.clock()
-        if not 0 <= since <= until:
-            raise ValueError("Use an ordered nonnegative evidence time window")
-        def selected(row):
-            at = row.get("timestamp")
-            if at is None:
-                at = epoch(row.get("finished_at") or row["claimed_at"])
-            return (since <= at <= until
-                    and (not data.get("session_id") or row.get("session_id") == data["session_id"])
-                    and (not data.get("job_id") or row.get("job_id") == data["job_id"]))
-        events, executions = [r for r in events if selected(r)], [r for r in executions if selected(r)]
-        if ref is None:
-            offset, limit = data.get("offset", 0), data.get("limit", 25)
-            if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 100:
-                raise ValueError("Evidence index needs offset>=0 and limit 1..100")
-            rows = [preview(e) for e in events] + executions
-            page = rows[offset:offset + limit]
-            event_refs = {r["ref"] for r in events}
-            return {**identity, "returned_refs": [r["ref"] for r in page],
-                    "events": [r for r in page if r["ref"] in event_refs],
-                    "executions": [r for r in page if r["ref"] not in event_refs], "missing": missing,
-                    "total": len(rows), "next_offset": offset + limit if offset + limit < len(rows) else None,
-                    "instruction": "Index only, not a substantive review. Page the index with next_offset; expand original bodies with receipt+ref and follow each body next_offset. Time/session/job filters only narrow this receipt, never expand its profile scope."}
-        if not events and not executions and not missing:
-            raise ValueError("Evidence ref does not match the requested time/session/job filters")
-        text = json.dumps((events + executions)[0], ensure_ascii=False) if events or executions else ""
-        offset, length = data.get("offset", 0), data.get("length", 12000)
-        if type(offset) is not int or offset < 0 or type(length) is not int or not 1 <= length <= 24000:
-            raise ValueError("Use a nonnegative offset and length 1..24000")
-        return {**identity, "ref": ref, "text": text[offset:offset + length], "offset": offset,
-                "next_offset": offset + length if offset + length < len(text) else None, "total_chars": len(text), "missing": missing}
+            raise ValueError('Unknown evidence receipt; ask the parent for its selected case')
+        refs=snapshot['refs']; ref=data.get('ref')
+        if ref is not None and ref not in refs:raise ValueError('Evidence must belong to this profile receipt')
+        offset,limit=data.get('offset',0),data.get('limit',25)
+        if type(offset) is not int or offset<0 or type(limit) is not int or not 1<=limit<=100:raise ValueError('Use offset>=0 and limit 1..100')
+        selected=[ref] if ref else refs[offset:offset+limit]
+        # Slice references BEFORE loading any native row. Index never loads bodies/context.
+        events,executions,missing=[],[],[]
+        for item in selected:
+            kind,ident=item.split(':',1)
+            path=self.store.home/('state.db' if kind=='message' else 'cron/executions.db')
+            if not path.exists():missing.append(item);continue
+            with reader(path) as db:
+                if kind=='message':
+                    cols='id,session_id,role,tool_call_id,tool_name,timestamp'
+                    if ref:cols+=',content,tool_calls'
+                    row=db.execute('SELECT '+cols+' FROM messages WHERE id=?',(int(ident),)).fetchone()
+                else:row=db.execute('SELECT * FROM executions WHERE id=?',(ident,)).fetchone()
+            if not row:missing.append(item);continue
+            row=dict(row);row['ref']=item
+            at=row.get('timestamp',epoch(row.get('finished_at') or row.get('claimed_at') or 0))
+            if data.get('session_id') and row.get('session_id')!=data['session_id'] or data.get('job_id') and row.get('job_id')!=data['job_id'] or at<epoch(data.get('since',0)) or at>epoch(data.get('until',self.clock())):continue
+            if kind=='message' and ref and row.get('tool_calls'):
+                row['content']=None
+            (events if kind=='message' else executions).append(row)
+        identity={'receipt':data['receipt'],'expected_ref_count':len(refs),'returned_refs':[r['ref'] for r in events+executions],
+                  'missing':missing,'historical_content':True,'observed_at':self.clock(),'user_context_ref':snapshot.get('user_ref')}
+        if not ref:return {**identity,'events':events,'executions':executions,'total':len(refs),'next_offset':offset+limit if offset+limit<len(refs) else None}
+        if not events and not executions and not missing:raise ValueError('Evidence does not match the requested filters')
+        text=json.dumps((events+executions)[0],ensure_ascii=False) if events or executions else ''
+        length=data.get('length',12000)
+        if type(length) is not int or not 1<=length<=24000:raise ValueError('Use length 1..24000')
+        return {**identity,'ref':ref,'text':text[offset:offset+length],'offset':offset,'next_offset':offset+length if offset+length<len(text) else None,'total_chars':len(text)}
 
     def finding(self, data):
         with self.store.transaction() as db:

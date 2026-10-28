@@ -8,8 +8,8 @@ Content page revisions and non-goal mutation journals retain their existing boun
 
 | Action | Fields | Write/version contract |
 |---|---|---|
-| `context` | `section job window cursor limit id offset length revision part status` | Action-specific fields or pure read |
-| `status` | `section job window cursor limit id offset length revision part status` | Action-specific fields or pure read |
+| `context` | `section job window cursor limit id ids offset length revision part status` | Action-specific fields or pure read |
+| `status` | `section job window cursor limit id ids offset length revision part status` | Action-specific fields or pure read |
 | `conversation_read` | `session_id revision offset read_only since until descriptor` | Action-specific fields or pure read |
 | `content_read` | `kind id resource offset length revision cursor limit topic query part` | Action-specific fields or pure read |
 | `content_write` | `kind id resource body expected_revision request_id signal_id` | Body revision + request ID |
@@ -36,14 +36,14 @@ Content page revisions and non-goal mutation journals retain their existing boun
 | `calendar_window` | `mode` | Action-specific fields or pure read |
 | `calendar_view` | `window sources discovery_complete` | Action-specific fields or pure read |
 | `source_check` | `source started_at? status scope summary expected_resources checked_resources cursor query_window observed_at source_id alias_reason expected_revision request_id` | Required revision + request ID |
-| `operations_read` | `through request_id` | Optional replay request ID |
+| `operations_read` | `request_id` (legacy through is rejected) | Optional replay request ID |
 | `operations_batch` | `request_id` | Optional replay request ID |
 | `operations_evidence` | `receipt ref offset length limit session_id job_id since until` | Action-specific fields or pure read |
 | `operations_complete` | `token summary request_id` | Optional replay request ID |
 | `operations_commit` | `batch reviews request_id` | Optional replay request ID |
 | `finding_record` | `id evidence summary impact status verification disclosure no_notice_reason expected_revision request_id` | Required revision + request ID |
-| `review_complete` | `job up_to through summary goal_id stop_condition source_check_ids window request_id` | Optional replay request ID |
-| `run_complete` | `outcome summary gaps request_id` | Optional replay request ID |
+| `review_complete` | `job up_to? through summary goal_id stop_condition source_check_ids window ids request_id` | Optional replay request ID |
+| `run_complete` | `outcome summary gaps unchanged_reason request_id` | Optional replay request ID |
 | `delegate` | `goal_id goal tasks context output_schema images action subagent_id message request_id` | Optional replay request ID |
 | `research_start` | `items goal_id context request_id` | Optional replay request ID |
 | `research_status` | `id request_id` | Optional replay request ID |
@@ -56,3 +56,5 @@ Notification review, quiet hours, actual transport receipts and unknown-write no
 Offline migration/rollback: `python -m hermes_muse.migration --home <profile-home> [--rollback]`; back up and stop writers.
 
 Errors: `{ok:false, error, code, retryable, ...}`. `error` is self-contained: action, field path (`data.source.account`), expected type/format/values, what arrived and the repair. Optional extra fields: `field`, `fields`, `expected`, `received`, `hint`, `example` (a minimal correct call), plus `current_revision`/`read` on revision errors. Arguments beside `action`/`data` are answered with the corrected call (the tool schema does not reject extra top-level properties, so this message reaches the model). `source_check` may omit `started_at`: Muse uses the bound Cron run's start (the call time outside a run) and adds `started_at_defaulted` to the result; an explicit value wins and is validated as before. Misplaced fields (for example `account`/`connection` beside `source`, `task` on `delegate`, `revision` instead of `expected_revision`) are answered with their destination; other unsupported fields list the action's allowed fields. Python exceptions never surface: `KeyError`/`TypeError`/`AttributeError` become `invalid_argument` naming the action and field. `retryable:true` only for `revision_conflict`, `revision_required`, `cursor_expired`, `source_unavailable`; other non-retryable errors state that an unchanged resend fails again. Codes and successful results are unchanged.
+
+Selected maintenance: context signals for memory-upkeep returns a finite oldest/newest scope; ids batches read bodies and review_complete(ids) confirms only fully served/saved originals. The one upkeep marker is separate from source revision and the continuous cursor. Nightly review_complete(summary) records synthesis without advancing the legacy raw cursor. operations_read returns case receipts/evidence_refs; the evidence index loads only its requested reference slice, and original user context is an explicit shared ref. operations_complete confirms one selected case, never all old logs. operations_batch/commit are direct-parent compatibility facades, not parallel worker waves. Opaque sampling is not comprehensive side-effect detection. Legacy cursor/wave remain unreviewed history.

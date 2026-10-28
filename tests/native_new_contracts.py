@@ -391,19 +391,19 @@ with tempfile.TemporaryDirectory(prefix="muse-native-contracts-") as directory:
         "origin",
         "assistant",
         tool_calls=[
-            {"id": "fixture-read", "function": {"name": "read_file", "arguments": "{}"}}
+            {"id": "fixture-write", "function": {"name": "write_file", "arguments": "{}"}}
         ],
     )
     native.append_message(
         "origin",
         "tool",
-        json.dumps({"success": True, "content": "Synthetic evidence"}),
-        tool_name="read_file",
-        tool_call_id="fixture-read",
+        json.dumps({"success": False, "error": "Synthetic write failed"}),
+        tool_name="write_file",
+        tool_call_id="fixture-write",
     )
     page = call("operations_read")
     assert page["available"] and not page["gaps"], page
-    refs = [row["ref"] for row in page["events"] + page["executions"]]
+    refs = page['events'][0]['evidence_refs']
     assert refs
     finding = call(
         "finding_record",
@@ -422,7 +422,7 @@ with tempfile.TemporaryDirectory(prefix="muse-native-contracts-") as directory:
     call(
         "operations_complete",
         {
-            "token": page["token"],
+            "token": page['events'][0]['receipt'],
             "summary": "Inspected the synthetic user intent, call and persisted result",
         },
     )

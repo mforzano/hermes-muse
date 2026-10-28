@@ -198,7 +198,7 @@ def main():
                     native_db.append_message("native-history", "assistant", tool_calls=[{"id": "native-write", "function": {"name": "write_file", "arguments": '{"path":"goal.md"}'}}])
                     native_db.append_message("native-history", "tool", "Saved goal.md", tool_name="write_file", tool_call_id="native-write")
                     native_db.create_session("audit-child", source="delegate", parent_session_id="native-history", chat_type="private")
-                    native_db.append_message("audit-child", "tool", "Child result", tool_name="inspect", tool_call_id="child-call")
+                    native_db.append_message("audit-child", "tool", '{"ok":false,"error":"Child failed to verify"}', tool_name="inspect", tool_call_id="child-call")
                     native_db.close()
                     runtime.store.write("session", "native-history", {"id": "native-history", "last_signal": time.time()})
                     audit_response = json.loads(call_registered({"action": "operations_read"}))
@@ -206,7 +206,7 @@ def main():
                     audit = audit_response["result"]
                     assert audit["available"] and not audit["gaps"], audit
                     assert {"native-history", "audit-child"} <= {e["session_id"] for e in audit["events"]}, audit
-                    assert any(e.get("related_call", {}).get("call", {}).get("id") == "native-write" for e in audit["events"])
+                    assert any(len(e["evidence_refs"]) >= 3 for e in audit["events"])
                     assert all(e["session_id"] != "group-history" for e in audit["events"])
                     wave = json.loads(call_registered({"action": "operations_batch"}))["result"]
                     receipt = runtime.store.read("meta", "operation_wave")["pages"][0]["receipt"]
@@ -221,7 +221,7 @@ def main():
                     with patch("agent.subagent_lifecycle.get_active_subagent_parent", return_value=SimpleNamespace(iteration_budget=SimpleNamespace(remaining=3))):
                         deferred = json.loads(call_registered({"action": "operations_batch"}))["result"]
                         assert deferred["deferred"] and not deferred["assignments"]
-                    runtime.service.operations.complete({"token": audit["token"], "summary": "Native read-only operation evidence verified"})
+                    runtime.service.operations.complete({"token": audit["events"][0]["receipt"], "summary": "Native read-only operation evidence verified"})
                     history = read_conversation(home, "native-history", time.time() - 86400)
                     assert history["available"], history
                     assert any("diagnosis is finished" in m["text"] for m in history["messages"]), history
@@ -274,6 +274,8 @@ def main():
         goal_fade_checks(base / "goal-fade")
         from native_compatibility_smoke import run as compatibility_checks
         compatibility_checks(base / "compatibility")
+        subprocess.run([sys.executable,str(PROJECT/'tests/native_simplification.py')],check=True,
+                       env={**os.environ,'HERMES_DISABLE_LAZY_INSTALLS':'1'})
         from tool_client import close_containers
         close_containers()
         print("PASS: native registration, Skill, prompt, tools, six Cron jobs, real script gates, A->B->A isolation, idempotent reload, preserved native files and harmless removed-plugin launchers")

@@ -116,12 +116,8 @@ class Companion:
             previous = self.store.get(db, "session", session_id, {})
             self.store.put(db, "session", session_id, {**previous, "id": session_id,
                            "last_signal": now, "active": True, "route": route or previous.get("route"), "turn_id": turn_id})
-            # Signals are a bounded processing inbox. Durable facts belong in native memory.
-            old = sorted(self.store.rows(db, "signal"), key=lambda x: x["created"])
-            processed = min(self.store.get(db, "cursor", "memory-upkeep", 0), self.store.get(db, "cursor", "nightly-review", 0))
-            for row in old[:-500]:
-                if row["created"] <= processed:
-                    self.store.delete(db, "signal", row["id"])
+            # Unprocessed authority is never discarded to meet a row-count target.
+            # Native originals and the one upkeep marker retain provenance for later decisions.
 
     def require_signal(self, db, signal_id):
         row = self.store.get(db, "signal", bounded(signal_id, 160))
@@ -473,6 +469,7 @@ class Companion:
         return [r for r in signals if r["created"] <= signals[24]["created"]] if len(signals) > 25 else signals
 
     def context(self, view=None):
+        from .context_pages import pending_signals
         now = self.clock()
         goals = self.store.goals()
         interests = [r for r in self.store.all("interest") if r["expires"] > now and r.get("not_before", 0) <= now and r["status"] in {"active", "candidate", "accepted"}]
@@ -496,8 +493,8 @@ class Companion:
                 "goals": [g for g in goals if g["status"] == "active" and g["research_review_at"] > now],
                 "goals_needing_review": [g for g in goals if g["status"] == "active" and g["research_review_at"] <= now],
                 "interests_and_ideas": interests,
-                "new_user_signals": self.signal_batch([r for r in signals if r["created"] > cursor]) if view in {None, "memory-upkeep"} else [],
-                "nightly_user_signals": self.signal_batch([r for r in signals if r["created"] > nightly_cursor]) if view in {None, "nightly-review"} else [],
+                "new_user_signals": self.signal_batch(pending_signals(self.store)) if view in {None, "memory-upkeep"} else [],
+                "nightly_user_signals": [],
                 "review_backlog": {job: {"remaining": sum(r["created"] > value for r in signals), "through": stamp(now)}
                                    for job, value in (("memory-upkeep", cursor), ("nightly-review", nightly_cursor))},
                 "recent_user_context": [r for r in signals if r["created"] > now - DAY]
@@ -519,21 +516,34 @@ class Companion:
             raise ValueError("Unknown review job")
         if 'window' in data and job not in {'memory-upkeep', 'nightly-review'}:
             raise ValueError('window is only valid for memory-upkeep/nightly-review')
-        up_to = epoch(data["up_to"])
+        summary = bounded(data['summary'],2000)
         now = self.clock()
-        through = epoch(data.get("through", now))
+        if job == 'nightly-review':
+            if data.get('window'):
+                raise ValueError('Nightly now synthesizes confirmed changes; omit the retired raw-signal window. Exact original reads never confer new authority.')
+            with self.store.transaction() as db:
+                self.store.put(db,'meta','last_review:'+job,{'at':now,'summary':summary,'complete':True,'scope':'synthesis'})
+            return {'job':job,'through':stamp(now),'complete':True,'scope':'synthesis','remaining':0,
+                    'instruction':'Synthesis recorded, not a raw-signal review. Save meaningful artifacts or explain unchanged existing artifacts, then run_complete.'}
+        if job == 'memory-upkeep':
+            from .context_pages import check_review
+            with self.store.transaction() as db:
+                window=self.store.get(db,'review_window',data.get('window'),{})
+                through=epoch(data.get('through',window.get('through',now)))
+                if through>now or epoch(data.get('up_to',through))>through:
+                    raise ValueError('Review endpoint cannot exceed its frozen scope or current time')
+                old=self.store.get(db,'cursor',job,0)
+                result=check_review(self,data,db,old,epoch(data.get('up_to',through)),through)
+                self.store.put(db,'meta','last_review:'+job,{'at':now,'summary':summary,'scope':'selected_signals',**result})
+            return {'job':job,'through':stamp(through),'scope':'selected_signals',**result,
+                    'instruction':'Only selected, fully read signals were processed; backlog stays visible. Resume unfinished IDs or finish this actual scope.'}
+        up_to = epoch(data['up_to'])
+        through = epoch(data.get('through', now))
         if up_to > through or through > now:
             raise ValueError("Review cursor must not exceed its snapshot or the current time")
         with self.store.transaction() as db:
             old = self.store.get(db, "cursor", job, 0)
-            if require_window and job in {"memory-upkeep", "nightly-review"}:
-                from .context_pages import check_review
-                check_review(self, data, db, old, up_to, through)
-            if job in {"memory-upkeep", "nightly-review"}:
-                pending = sorted((s for s in self.store.rows(db, "signal") if s["created"] > old and not is_background_message(s.get("text"))), key=lambda s: s["created"])
-                if not require_window and len(pending) > 25 and up_to > self.signal_batch(pending)[-1]["created"]:
-                    raise ValueError("Cursor skips unseen signals; process the returned batch first")
-            remaining = [r for r in pending if max(old, up_to) < r["created"] <= through] if job in {"memory-upkeep", "nightly-review"} else []
+            remaining = []
             self.store.put(db, "cursor", job, max(old, up_to))
             self.store.put(db, "meta", "last_review:" + job, {"at": now, "summary": bounded(data["summary"], 2000),
                                                            "complete": not remaining, "scope": "checkpoint", "job_complete": False, "remaining": len(remaining)})

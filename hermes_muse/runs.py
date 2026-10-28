@@ -42,6 +42,9 @@ class Runs:
             return
         with self.store.transaction() as db:
             row = self.store.get(db, "run", run["id"])
+            if name=='operations' and evidence.get('scope')=='selected_cases':
+                receipts=list(dict.fromkeys(row['stages'].get(name,{}).get('receipts',[])+evidence.get('receipts',[])))
+                evidence={**evidence,'receipts':receipts,'complete':all(self.store.get(db,'operation_snapshot',token,{}).get('reviewed') for token in receipts)}
             row["stages"][name] = {"at": self.clock(), **evidence}
             self.store.put(db, "run", row["id"], row)
 
@@ -66,8 +69,9 @@ class Runs:
                     raise ValueError("Unfinished work must remain partial")
                 if not stages.get("review", {}).get("complete"):
                     raise ValueError("Finish this run's review_complete checkpoint first")
-                if row["job"] == "memory-upkeep" and not stages.get("operations", {}).get("complete"):
-                    raise ValueError("Operation review is unfinished; preserve its checkpoint and report partial")
+                selected=stages.get('operations',{}).get('receipts',[])
+                if selected and (not stages['operations'].get('complete') or any(not self.store.get(db,'operation_snapshot',token,{}).get('reviewed') for token in selected)):
+                    raise ValueError('Selected consequence cases remain unfinished; preserve partial scope, not a full-history completion claim')
                 if row["job"] in GOVERNANCE_JOBS:
                     from .content_io import Files, revision
                     raw = Files(self.store.home).read(f"workspace/reviews/{row['id']}.md")
@@ -77,11 +81,17 @@ class Runs:
                 if row["job"] == "nightly-review":
                     day = self.host.local_now(row["started"]).date().isoformat()
                     paths = [f"dreams/{day}.md", "dreams/alignment/derived/ALIGNMENT_SYNTHESIS.md"]
+                    unchanged = data.get('unchanged_reason')
+                    if unchanged:
+                        unchanged = bounded(unchanged,2000)
+                        if not self.store.path(paths[0]).is_file():
+                            existing=sorted(p for p in self.store.path('dreams').glob('????-??-??.md') if p.name[:10]<=day)
+                            if existing:paths[0]=str(existing[-1].relative_to(self.store.root))
                     for name in paths:
                         path = self.store.path(name)
-                        if not path.is_file() or path.stat().st_mtime < row["started"] or not path.read_text(encoding="utf-8").strip():
-                            raise ValueError(f"Nightly result missing or unchanged since this run began: {name}")
-                    stages["artifacts"] = {"at": self.clock(), "paths": paths}
+                        if not path.is_file() or not path.read_text(encoding='utf-8').strip() or (not unchanged and path.stat().st_mtime < row['started']):
+                            raise ValueError(f'Nightly result missing: {name}; save meaningful changes or explain why existing artifacts are unchanged')
+                    stages['artifacts'] = {'at':self.clock(),'paths':paths,'unchanged_reason':unchanged}
             row.update(status="ready" if outcome == "complete" else "partial", summary=summary, gaps=gaps)
             self.store.put(db, "run", row["id"], row)
         return {**row, "instruction": "Work recorded, not delivered. Finish notification preparation when applicable, then return the required final output. Partial work remains resumable at saved checkpoints."}

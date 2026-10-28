@@ -102,7 +102,7 @@ MORE_TEXT = {"message", "summary", "scope", "reason", "rationale", "content", "w
              "priority_reason", "schedule", "alias_reason", "token", "receipt", "job", "note", "progress", "goal", "context", "feedback"}
 INT = {"offset", "length", "limit", "batch"}
 BOOL = {"delete", "final_result", "read_only", "descriptor", "discovery_complete"}
-LIST = {"sources", "blocked_topics", "items", "reviews", "tasks", "gaps", "source_check_ids", "expected_resources", "checked_resources"}
+LIST = {"ids", "sources", "blocked_topics", "items", "reviews", "tasks", "gaps", "source_check_ids", "expected_resources", "checked_resources"}
 OBJECT = {"source", "query_window", "source_snapshot"}
 TIME = {"verified_at", "expires", "deadline", "next_check_at", "research_review_at", "started_at", "observed_at", "up_to"}
 TIME_BY_ACTION = {("feedback", "until"), ("operations_evidence", "since"), ("operations_evidence", "until")}

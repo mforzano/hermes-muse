@@ -184,6 +184,11 @@ Cause: the 13:00 patrol sent six source_checks in one parallel batch; each tripp
 
 ## 0.1.27 catalog compatibility
 
+- Replace full-row operation audits and default parallel worker waves with consequential cases, bounded opaque samples and direct parent review. Preserve legacy cursors/owners as explicitly unreviewed history, not completed work.
+- Process original user signals once, in finite scopes with batched bodies and revision-bound processed IDs; newer corrections can proceed while older input remains pending. Nightly synthesizes confirmed changes without a second raw queue.
+- Separate real run-scope outcomes from global pending history; keep meaningful nightly artifacts without mandatory mtime rewrites. Local maintenance may end quietly when no new or due responsibility exists.
+- Slice operation indexes before native reads and share original user context once. Reuse calendar coverage arguments, deriving omitted scope only from validated windows; retain non-calendar scope checks and source/notification permissions.
+
 Precise soft-inbox retention and instructed-read-only disclosures; Cron watch scheduling policy and explicit 4,000-character fields; native 30-minute default without changing explicit cadences. Conversation previews gain complete revision-checked chunk retrieval and range coverage that gates notices without advancing processing watermarks. Research/audit respect lower user concurrency while retaining every question/page. Public Cron delegation is used for compatible unpinned routes; pinned/unknown parent-routing exceptions remain explicitly unresolved. Includes the previously local 0.1.26 follow-through and calendar/Apple work, without deploying existing installations.
 
 

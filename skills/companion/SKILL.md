@@ -27,12 +27,13 @@ coverage beyond declared profile duties, or reduce in-scope coverage to save cal
 Check original intent against consequential writes. Native SOUL/memory ownership,
 quiet hours, notification review/dedup and actual delivery receipts remain authoritative.
 
-Use review_complete for each job's processed prefix. In Cron, run_complete records
+Use review_complete for the actual selected-signal scope or nightly synthesis.
+Global pending history remains separate. In Cron, run_complete records
 complete/partial and remaining gaps; index reads are not substantive review.
 Use the host-bound job in context/task_runs for review_complete; an owned Cron
 may omit job and the host fills its existing key (an explicit mismatch is rejected).
 run_complete takes only
-outcome, summary, gaps and optional request_id (never job/window/through).
+outcome, summary, gaps, optional unchanged_reason and request_id (never job/window/through).
 When the host requires tool_call, one complete invocation is
 `{"calls":[{"name":"muse_manage","arguments":{"action":"run_complete","data":{"outcome":"partial","summary":"Saved reviewed work","gaps":["Unread source evidence; resume its saved checkpoint"]}}}]}`.
 Every entry needs name and arguments; correct the returned field-level fix rather
@@ -40,7 +41,8 @@ than repeating an invalid call. Preserve the host's loop guard and unknown outco
 At the start of each Muse Cron run, call muse_manage with
 `{"action":"content_read","data":{"kind":"working_lessons","id":"current"}}`
 and follow its pagination before acting. Apply the relevant verified conventions.
-Hourly upkeep owns operation audit; other jobs check their own work. Keep Feed
+Hourly upkeep reviews consequential cases directly, not all operation rows or a
+parallel audit wave; other jobs check their own results. Keep Feed
 silent and return patrol final_response exactly; use [SILENT] after useful checks.
 
 Muse tools execute on the Hermes host/profile even when terminal.backend=docker.

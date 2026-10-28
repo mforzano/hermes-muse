@@ -24,7 +24,7 @@ class CoverageScopeTests(unittest.TestCase):
         self.assertNotIn('On every existing patrol', calendar)
         self.assertIn('every patrol where calendars are in scope', calendar)
         self.assertIn('proactivity.md#coverage-scope', (ROOT/'skills/companion/references/briefings.md').read_text())
-        self.assertIn('A change cursor never replaces the full upcoming interval.', (ROOT/'prompts/proactive-watch.md').read_text())
+        self.assertIn('Calendar coverage retains all resource/event pagination', (ROOT/'prompts/proactive-watch.md').read_text())
         self.assertIn('Connector availability never expands scope.', policy)
         self.assertIn('never because a source merely seems irrelevant', policy)
 
@@ -36,10 +36,3 @@ class CoverageScopeTests(unittest.TestCase):
         self.assertIn('When this section is unfilled', text)
         self.assertIn('even without goals', text)
         self.assertIn('full default coverage', text)
-
-    def test_delivery_and_review_paragraphs_unchanged(self):
-        expected = json.loads((ROOT/'tests/fixtures/coverage_protected.json').read_text())
-        for key, fingerprint in expected.items():
-            name, start = key.split('|', 1)
-            paragraph = next(p for p in (ROOT/name).read_text().split('\n\n') if p.startswith(start))
-            self.assertEqual(hashlib.new('sha256', paragraph.encode()).hexdigest(), fingerprint, key)

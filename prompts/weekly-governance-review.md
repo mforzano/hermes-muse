@@ -7,7 +7,7 @@ Present the findings directly to the user in their language. Lead with the most 
 
 This review proposes changes; it does not apply configuration, identity, memory, skill, user-file or Cron edits, nor run a separate full Skill audit. Save a concise summary up to 2000 characters with review_complete(job=weekly-governance-review, up_to=review start time, summary=...). The full report can be longer. Return that report for direct native delivery to this profile's Bot Chat. It will be handed over as internal findings for a user-facing response; do not acknowledge another task, create a second notice or send through another channel.
 
-Read operation_review findings and use the self-review procedure for focused evidence when needed. Check recurring mistakes, verified repairs and unresolved user impact; proposals remain proposals. Do not claim a full operation audit from a job status or invent errors to populate this review.
+Start with existing run/stage summaries, unresolved consequential findings, actual feedback and relevant changes. Use the self-review procedure only for a focused missing fact; do not repeat nightly intake or an all-log audit. Check recurring mistakes, verified repairs and unresolved user impact; proposals remain proposals. Do not claim a full operation audit from a job status or invent errors to populate this review.
 
 Use focused native evidence and existing findings, not another full operation-backlog scan. After saving review_complete, call run_complete with outcome=complete and summary, or outcome=partial with specific gaps and recovery steps, before returning the report.
 

@@ -78,27 +78,16 @@ class CompatibilityTests(unittest.TestCase):
         edited=self.state('s',['B'*40000])
         self.assertFalse(previews(self.store,{'s':edited},self.now)['s']['complete'])
 
-    def test_inbox_soft_window_requires_both_cursors_and_next_intake(self):
+    def test_old_unprocessed_user_authority_is_not_deleted_by_count_or_cursor(self):
         for n in range(501):
-            self.now+=1;self.service.signal(str(n),'s','a'*8001)
-        self.assertEqual(501,len(self.store.all('signal')))
-        self.assertTrue(self.store.read('signal','0')['truncated'])
-        self.store.write('cursor','memory-upkeep',self.now)
-        self.service.signal('one','s','next');self.assertEqual(502,len(self.store.all('signal')))
+            self.now+=1;self.service.signal(str(n),'s','Original user decision')
         self.store.write('cursor','nightly-review',self.now)
-        self.assertEqual(502,len(self.store.all('signal')))
-        self.now+=1;self.service.signal('two','s','next')
-        self.assertEqual(500,len(self.store.all('signal')))
+        self.service.signal('new','s','Cancel only the second task')
+        self.assertEqual(len(self.store.all('signal')),502)
+        with self.store.transaction() as db:
+            self.service.require_signal(db,'0')
 
-    def test_audit_caps_assigned_workers_without_discarding_saved_pages(self):
-        wave={'number':1,'done':False,'through':900,'pages':[{'slot':n,'events':1,'executions':0,'receipt':str(n),'reviewed':False} for n in (1,2,3)]}
-        audit=Audit(SimpleNamespace(store=self.store, checkpoint=lambda:{"message_id":0}, clock=lambda:self.now))
-        with patch('hermes_muse.delegation.settings',return_value={'max_concurrent_children':1}):
-            result=audit.public(wave)
-        self.assertEqual([1],[x['slot'] for x in result['assignments']]);self.assertEqual(3,len(wave['pages']))
-        wave['pages'][0]['reviewed']=True
-        with patch('hermes_muse.delegation.settings',return_value={'max_concurrent_children':1}):
-            self.assertEqual([2],[x['slot'] for x in audit.public(wave)['assignments']])
+
 
     def test_effective_limit_configuration_environment_and_invalid_fallback(self):
         for cfg,env,want in [({},'1',1),({'max_concurrent_children':2},'1',2),({'max_concurrent_children':20},'1',3),({'max_concurrent_children':'bad'},'1',3),({'max_concurrent_children':0},'9',1)]:

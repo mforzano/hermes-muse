@@ -54,35 +54,36 @@ class ContextPagesTests(unittest.TestCase):
             self.store.put(db, 'run', 'r1', {'id': 'r1', 'job': 'nightly-review', 'started': 123.0})
         self.assertEqual(views.read({'kind': 'idea'})['last_review_at'], 123.0)
 
-    def test_large_signal_window_ties_append_edit_and_checkpoint(self):
+    def test_selected_signals_batch_new_correction_and_ties_preserve_old_authority(self):
         with self.store.transaction() as db:
-            for i in range(220):
-                self.store.put(db, 'signal', str(i), {'id': str(i), 'session_id': 's', 'created': self.now-10+i//110, 'text': '证据' * 16000})
-        first = context(self.service, {'section':'signals','job':'memory-upkeep','limit':17})
-        token, through = first['window'], first['through']
-        checkpoint = {'job':'memory-upkeep','window':token,'through':through,'up_to':self.now-10,'summary':'Substantive review'}
-        with self.assertRaises(DomainError):self.service.review_complete(checkpoint, require_window=True)
-        ids=[];p=first
-        while True:
-            ids.extend(r['id'] for r in p['items'])
-            if not p['next_cursor']:break
-            p=context(self.service,{'section':'signals','job':'memory-upkeep','window':token,'cursor':p['next_cursor'],'limit':17})
-        self.assertEqual(len(set(ids)),220)
-        self.now+=1
-        self.store.write('signal','new',{'id':'new','session_id':'s','created':self.now,'text':'Later signal'})
-        for key in ids:
-            off=0
-            while off is not None:
-                p=context(self.service,{'section':'signals','job':'memory-upkeep','window':token,'id':key,'offset':off})
-                self.assertLess(len(json.dumps(p).encode()),256*1024)
-                off=p['next_offset']
-        r=self.service.review_complete(checkpoint,require_window=True)
-        self.assertEqual(r['remaining'],110)
-        r=self.service.review_complete({**checkpoint,'up_to':through},require_window=True)
-        self.assertTrue(r['complete'])
-        self.assertEqual(context(self.service,{'section':'signals','job':'memory-upkeep'})['total'],1)
-        row=self.store.read('signal','0');row['text']='Changed';self.store.write('signal','0',row)
-        with self.assertRaises(DomainError):context(self.service,{'section':'signals','job':'memory-upkeep','window':token})
+            for i in range(40):
+                self.store.put(db,'signal',str(i),{'id':str(i),'session_id':'s','created':self.now-100+i//2,'text':'User decision '+str(i)})
+        first=context(self.service,{'section':'signals','job':'memory-upkeep'})
+        self.assertEqual(first['total'],30)
+        data={'section':'signals','job':'memory-upkeep','window':first['window']}
+        cp={'job':'memory-upkeep','window':first['window'],'through':first['through'],'ids':['39'],'summary':'Saved a recent explicit correction'}
+        with self.assertRaises(DomainError):self.service.review_complete(cp,require_window=True)
+        context(self.service,{**data,'ids':['39']})
+        result=self.service.review_complete(cp,require_window=True)
+        self.assertFalse(result['complete'])
+        self.assertEqual(self.store.read('cursor','memory-upkeep',0),0)
+        self.assertIsNotNone(self.store.read('signal','39')['upkeep'])
+        reopened=context(self.service,{'section':'signals','job':'memory-upkeep'})
+        ids=[r['id'] for r in reopened['items']]
+        if reopened['next_cursor']:
+            ids += [r['id'] for r in context(self.service,{'section':'signals','job':'memory-upkeep','window':reopened['window'],'cursor':reopened['next_cursor']})['items']]
+        self.assertNotIn('39',ids)
+        self.assertIsNotNone(self.store.read('signal','0'))
+        with self.store.transaction() as db:
+            self.service.require_signal(db,'0')  # Old unprocessed authority does not expire.
+        first_part=context(self.service,{**data,'ids':['0','1']})
+        self.assertEqual(len(first_part['items']),2)
+        one=self.service.review_complete({**cp,'ids':['0']},require_window=True)
+        self.assertEqual(self.store.read('cursor','memory-upkeep',0),0)  # Same timestamp tie is unfinished.
+        self.service.review_complete({**cp,'ids':['1']},require_window=True)
+        self.assertEqual(self.store.read('cursor','memory-upkeep'),self.now-100)
+        changed=self.store.read('signal','1');changed['text']='A new correction';self.store.write('signal','1',changed)
+        with self.assertRaises(DomainError):context(self.service,data)
 
     def test_errors_name_valid_sections_and_followups_cap_their_own_limit(self):
         with self.assertRaises(DomainError) as caught:
@@ -150,21 +151,21 @@ class ContextPagesTests(unittest.TestCase):
         self.service.host = HermesHost(self.store)
         self.service.host.conversation = lambda *a: self.fail('Long signals must not load later conversation history')
         self.service.signal('long', 's', original)
-        first = context(self.service, {'section': 'signals', 'job': 'nightly-review'})
-        args = {'section': 'signals', 'job': 'nightly-review', 'window': first['window'], 'id': 'long'}
+        first = context(self.service, {'section': 'signals', 'job': 'memory-upkeep'})
+        args = {'section': 'signals', 'job': 'memory-upkeep', 'window': first['window'], 'id': 'long'}
         pieces, offset = [], 0
         while offset is not None:
             part = context(self.service, {**args, 'offset': offset})
             pieces.append(part['body']); offset = part['next_offset']
         self.assertEqual(''.join(pieces), original)
-        checkpoint = {'job': 'nightly-review', 'window': first['window'], 'through': first['through'],
+        checkpoint = {'job': 'memory-upkeep', 'window': first['window'], 'through': first['through'],
                       'up_to': first['through'], 'summary': 'Read the full original attachment'}
         with closing(sqlite3.connect(path)) as db, db:
             db.execute('INSERT INTO messages VALUES(?,?,?,?,?,?,?,?,?,?)',
                        (4, 's', 'user', original, self.now, 'distinct-turn', None, None, 1, 0))
         with self.assertRaisesRegex(DomainError, 'missing/ambiguous'):
             self.service.review_complete(checkpoint, require_window=True)
-        self.assertEqual(self.store.read('cursor', 'nightly-review', 0), 0)
+        self.assertEqual(self.store.read('cursor', 'memory-upkeep', 0), 0)
 
     def test_large_metadata_and_discovery_are_consumable(self):
         self.store.write('run','huge',{'id':'huge','job':'memory-upkeep','started':self.now,'status':'partial','summary':'x'*500000,'stages':{}})

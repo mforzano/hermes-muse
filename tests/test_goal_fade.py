@@ -583,17 +583,12 @@ class CronCannotMoveTheThresholds(FadeCase):
 
 
 class Prompts(unittest.TestCase):
-    def test_nightly_fade_step_sits_between_intake_and_ideas(self):
-        paragraphs = (ROOT / "prompts/nightly-review.md").read_text(encoding="utf-8").split("\n\n")
-        order = [next(i for i, p in enumerate(paragraphs) if p.startswith(start)) for start in ("Goal intake step", "Goal fade step", "Ideas step")]
-        self.assertEqual(order, sorted(order))
-        step = paragraphs[order[1]]
-        for needle in ("status=dormant", "ask_key", "fade_due=true", 'status="cancelled"', "never cancel a goal that is not listed"):
-            self.assertIn(needle, step)
-        closing = next(p for p in paragraphs if p.startswith("Complete recoverable work"))
-        self.assertIn("one sentence on Goal fade", closing)
-        self.assertIn("the Goal fade sentence", closing)
-        self.assertIn("dormant goals are not eligible", next(p for p in paragraphs if p.startswith("Research eligible")))
+    def test_nightly_preserves_guarded_intake_fade_and_optional_ideas(self):
+        text=(ROOT/'prompts/nightly-review.md').read_text()
+        self.assertLess(text.index('Goal intake:'),text.index('Goal fade:'))
+        self.assertLess(text.index('Goal fade:'),text.index('Ideas:'))
+        for key in ('signal_id','fade_due=true','ask_key','0–3','delivered-ask','confirmed'):
+            self.assertIn(key,text)
 
     def test_patrol_leaves_dormant_goals_alone(self):
         self.assertIn("dormant", (ROOT / "prompts/proactive-watch.md").read_text(encoding="utf-8"))

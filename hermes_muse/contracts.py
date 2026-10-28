@@ -8,7 +8,7 @@ from .guidance import (EXAMPLES, ENUMS, IDENTIFIER_ACTIONS, KIND_WORDS, NOTHING,
 from .store import epoch
 
 FIELDS = {
-    "context": "section job window cursor limit id offset length revision part status",
+    "context": "section job window cursor limit id ids offset length revision part status",
     "status": "section job window cursor limit id offset length revision part status",
     "conversation_read": "session_id revision offset read_only since until descriptor",
     "content_read": "kind id resource offset length revision cursor limit topic query part",
@@ -42,8 +42,8 @@ FIELDS = {
     "operations_complete": "token summary",
     "operations_commit": "batch reviews",
     "finding_record": "id evidence summary impact status verification disclosure no_notice_reason",
-    "review_complete": "job up_to through summary goal_id stop_condition source_check_ids window",
-    "run_complete": "outcome summary gaps",
+    "review_complete": "job up_to through summary goal_id stop_condition source_check_ids window ids",
+    "run_complete": "outcome summary gaps unchanged_reason",
     "delegate": "goal_id goal tasks context output_schema images action subagent_id message",
     "research_start": "items goal_id context",
     "research_status": "id",
@@ -136,6 +136,11 @@ def tidy(action, data):
     out = {k: v for k, v in data.items() if not (k in ("connection", "account", "resource") and v == source.get(k))}
     window = out.get("query_window")
     if source.get("resource") in CALENDAR_RESOURCES and isinstance(window, dict) and isinstance(window.get("observed_at"), str):
+        if 'scope' not in out:
+            import json
+            from .calendar import validate_window
+            validate_window(window, path='data.query_window', action='source_check')
+            out['scope'] = json.dumps(window, sort_keys=True, ensure_ascii=False)
         for name in ("started_at", "observed_at"):
             if out.get(name) is None:
                 out[name] = window["observed_at"]
@@ -176,6 +181,8 @@ def validate(action, data):
     required = dict(REQUIRED.get(action, {}))
     if action == "forget" and data.get("kind") != "content":
         required["signal_id"] = "text"
+    if action == 'review_complete' and data.get('job') in {'memory-upkeep','nightly-review'}:
+        required.pop('up_to',None)
     if action == "review_complete" and str(data.get("job", "")).startswith("watch-"):
         required.pop("up_to")  # A watch checkpoint names its goal/source checks, not a signal cursor.
         required.update(goal_id="text", stop_condition="text", source_check_ids="list")

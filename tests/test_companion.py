@@ -247,35 +247,7 @@ class CompanionTests(unittest.TestCase):
         self.assertTrue(self.dispatch(row["id"]))
         self.assertEqual(self.store.read("notification", row["id"])["source_snapshot"], snapshot)
 
-    def test_review_returns_remaining_snapshot_and_preserves_new_arrivals(self):
-        for i in range(53):
-            self.now += 1
-            self.user("Feedback " + str(i))
-        through = self.now
-        batch = self.service.context(view="nightly-review")["nightly_user_signals"]
-        self.now += 1
-        newer = self.user("This belongs to the next run")
-        processed = []
-        while batch:
-            processed.extend(r["id"] for r in batch)
-            result = self.service.review_complete({"job": "nightly-review", "through": through,
-                "up_to": batch[-1]["created"], "summary": "Saved this batch"})
-            batch = result["next_user_signals"]
-            self.assertEqual(result["complete"], result["remaining"] == 0)
-        self.assertEqual(len(set(processed)), 54)
-        self.assertNotIn(newer, processed)
-        self.assertEqual([r["id"] for r in self.service.context()["nightly_user_signals"]], [newer])
-        self.assertTrue(self.store.read("meta", "last_review:nightly-review")["complete"])
 
-    def test_review_timestamp_ties_are_not_lost(self):
-        for i in range(30):
-            self.user("Same timestamp " + str(i))
-        batch = self.service.context()["new_user_signals"]
-        self.assertEqual(len(batch), 31)
-        result = self.service.review_complete({"job": "memory-upkeep", "through": self.now,
-            "up_to": self.now, "summary": "Saved all tied messages"})
-        self.assertTrue(result["complete"])
-        self.assertEqual(result["next_user_signals"], [])
 
     def test_pending_explains_quiet_hours_and_evidence_can_change_urgency(self):
         self.now = datetime(2026, 10, 8, 23, tzinfo=timezone.utc).timestamp()
@@ -413,7 +385,7 @@ class CompanionTests(unittest.TestCase):
         self.assertTrue(all(len(r["text"]) > 1500 for r in patrol["recent_user_context"][1:]))
         feed = self.service.context(view="feed-pulse")
         self.assertFalse(feed["recent_user_context"] or feed["new_user_signals"] or feed["nightly_user_signals"])
-        self.assertTrue(self.service.context(view="nightly-review")["nightly_user_signals"])
+        self.assertEqual(self.service.context(view="nightly-review")["nightly_user_signals"], [])
 
     def test_source_change_without_goal_and_cancellation_before_delivery(self):
         self.assertEqual(self.service.context()["goals"], [])
@@ -430,18 +402,6 @@ class CompanionTests(unittest.TestCase):
             self.service.notification_resolve({"id": replacement["id"], "verified_at": self.now,
                 "sources": ["source"], "reason": "Cannot erase a dispatched outcome"})
 
-    def test_nightly_signals_survive_hourly_cursor_and_do_not_skip_batches(self):
-        self.service.review_complete({"job": "memory-upkeep", "up_to": self.now, "summary": "hourly done"})
-        self.assertEqual(self.service.context()["new_user_signals"], [])
-        self.assertEqual(self.service.context()["nightly_user_signals"][0]["id"], self.signal)
-        for i in range(30):
-            self.now += 1
-            self.user("Signal " + str(i))
-        with self.assertRaises(ValueError):
-            self.service.review_complete({"job": "nightly-review", "up_to": self.now, "summary": "skip"})
-        batch = self.service.context()["nightly_user_signals"]
-        self.service.review_complete({"job": "nightly-review", "up_to": batch[-1]["created"], "summary": "first batch"})
-        self.assertEqual(len(self.service.context()["nightly_user_signals"]), 6)
 
     def test_pending_notices_not_hidden_by_recent_terminal_history(self):
         pending = self.notice("pending")
@@ -615,12 +575,16 @@ class CompanionTests(unittest.TestCase):
         self.assertEqual(self.service.feed_add(args)["status"], "deleted")
 
     def test_failed_work_leaves_cursor_and_future_cursor_refused(self):
-        self.assertEqual(self.store.read("cursor", "memory-upkeep", 0), 0)
+        from hermes_muse.context_pages import context
+        scope=context(self.service,{'section':'signals','job':'memory-upkeep'})
         with self.assertRaises(ValueError):
-            self.service.review_complete({"job": "memory-upkeep", "up_to": self.now + 1, "summary": "invalid"})
-        self.assertEqual(self.store.read("cursor", "memory-upkeep", 0), 0)
-        self.service.review_complete({"job": "memory-upkeep", "up_to": self.now, "summary": "processed"})
-        self.assertEqual(self.service.context()["new_user_signals"], [])
+            self.service.review_complete({'job':'memory-upkeep','window':scope['window'],'up_to':self.now+1,'summary':'invalid'})
+        self.assertEqual(self.store.read('cursor','memory-upkeep',0),0)
+        context(self.service,{'section':'signals','job':'memory-upkeep','window':scope['window'],'id':self.signal})
+        self.service.review_complete({'job':'memory-upkeep','window':scope['window'],'ids':[self.signal],'summary':'Saved real facts'})
+        self.assertEqual(self.service.context()['new_user_signals'],[])
+        self.assertEqual(self.service.context()['nightly_user_signals'],[])
+
 
     def test_forget_removes_indexed_derivatives_without_erasure_claim(self):
         self.service.interest_record({"id": "topic", "title": "Topic", "signal_id": self.signal})
@@ -664,16 +628,6 @@ class CompanionTests(unittest.TestCase):
         self.service.notification_queue({"id": row["id"]})
         self.assertTrue(self.dispatch(row["id"]))
 
-    def test_cursor_cannot_skip_unseen_batch(self):
-        for i in range(30):
-            self.now += 1
-            self.user("Real user signal " + str(i))
-        with self.assertRaises(ValueError):
-            self.service.review_complete({"job": "memory-upkeep", "up_to": self.now, "summary": "Skipped batch"})
-        batch = self.service.context()["new_user_signals"]
-        self.assertEqual(len(batch), 25)
-        self.service.review_complete({"job": "memory-upkeep", "up_to": batch[-1]["created"], "summary": "First batch complete"})
-        self.assertEqual(len(self.service.context()["new_user_signals"]), 6)
 
     def test_native_receipt_unknown_is_never_assumed_sent(self):
         import sys

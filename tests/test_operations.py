@@ -47,220 +47,84 @@ class OperationFixture(unittest.TestCase):
 
 
 class OperationTests(OperationFixture):
-    def test_scopes_owned_silent_cron_children_and_excludes_groups_unrelated(self):
-        for sid, parent, kind in [('cron_owned_1', None, 'private'), ('child', 'cron_owned_1', 'private'),
-                                  ('group', 'main', 'group'), ('group-child', 'group', 'private'), ('other', None, 'private')]:
-            self.session(sid, parent, kind)
-            self.call(sid=sid)
-        page = self.ops.read({})
-        self.assertEqual({'cron_owned_1', 'child'}, {e['session_id'] for e in page['events']})
-        self.finish(page)
-        self.ops.track('rotated', 'cron:owned:execution1')
-        self.session('rotated')
-        self.call(sid='rotated')
-        self.assertIn('rotated', {e['session_id'] for e in self.ops.read({})['events']})
-        self.ops.track('other', 'cron:foreign:execution2')
-        self.assertIsNone(self.store.read('operation_session', 'other'))
+    def test_consequences_pair_context_and_claims_without_deep_successful_reads(self):
+        user=self.message(role='user',text='Please update the report')
+        self.call('read',name='read_file');self.message(role='tool',text='{"ok":true}',call_id='read')
+        write=self.call('write');result=self.message(role='tool',text='{"ok":false,"error":"disk full"}',call_id='write')
+        claim=self.message(text='I saved the report')
+        page=self.ops.read({});self.assertEqual(len(page['events']),1)
+        case=page['events'][0];self.assertIn('reported_failure_or_unknown',case['reasons'])
+        self.assertEqual(set(case['evidence_refs']),{'message:'+str(i) for i in (user,write,result,claim)})
+        body=self.ops.evidence({'receipt':case['receipt'],'ref':'message:'+str(result)})
+        self.assertNotIn('Please update',body['text'])
+        context=self.ops.evidence({'receipt':case['receipt'],'ref':'message:'+str(user)})
+        self.assertIn('Please update',context['text'])
+        self.assertEqual(self.ops.read({})['pending_cases'],1)
+        self.ops.complete({'token':case['receipt'],'summary':'Actual failed write and unsupported completion remain as a finding'})
+        self.assertFalse(self.ops.read({})['events'])
 
-    def test_late_result_includes_older_call_after_checkpoint(self):
-        call_id = self.call()
-        self.finish(self.ops.read({}))
-        result_id = self.message(role='tool', text='Saved goal.md', call_id='write1')
-        page = self.ops.read({})
-        self.assertEqual([result_id], [e['id'] for e in page['events']])
-        self.assertEqual(call_id, page['events'][0]['related_call']['message_id'])
-        self.assertEqual('Saved goal.md', page['events'][0]['content'])
+    def test_index_reads_only_current_page_and_never_copies_context_or_reasoning(self):
+        self.message(role='user',text='PRIVATE original intent')
+        for n in range(8):self.call(str(n))
+        self.message(text='PRIVATE hidden reasoning',tool_calls=[{'id':'x','function':{'name':'edit_file','arguments':'{}'}}])
+        case=self.ops.read({})['events'][0];queries=[]
+        from unittest.mock import patch
+        from hermes_muse.operations import reader
+        from contextlib import contextmanager
+        @contextmanager
+        def traced(path):
+            with reader(path) as db:
+                db.set_trace_callback(queries.append);yield db
+        before=(self.home/'muse/state.db').read_bytes()
+        with patch('hermes_muse.operations.reader',traced):
+            index=self.ops.evidence({'receipt':case['receipt'],'offset':2,'limit':2})
+        self.assertEqual(len(index['events']),2)
+        self.assertEqual(sum(q.startswith('SELECT') for q in queries),2)
+        self.assertFalse(any('content' in q or 'tool_calls' in q for q in queries))
+        self.assertEqual(before,(self.home/'muse/state.db').read_bytes())
+        ref=next(r for r in case['evidence_refs'] if r!='message:1')
+        self.assertNotIn('PRIVATE',self.ops.evidence({'receipt':case['receipt'],'ref':ref})['text'])
+        with self.assertRaises(ValueError):self.ops.evidence({'receipt':case['receipt'],'ref':'message:999'})
 
-    def test_pagination_snapshot_does_not_skip_new_arrivals_or_store_transcripts(self):
-        for n in range(103):
-            self.call(str(n))
-        first = self.ops.read({})
-        self.assertEqual(100, len(first['events']))
-        self.assertTrue(first['more'])
-        self.call('late')
-        completed = self.finish(first)
-        self.assertTrue(completed["more"])
-        # The live model confused a page endpoint with the snapshot endpoint; reject that shortcut.
-        self.assertFalse(self.ops.read({"through": first["up_to"]})["available"])
-        self.assertTrue(self.finish(first)["already_reviewed"])
-        second = self.ops.read({})
-        self.assertEqual(3, len(second['events']))
-        self.assertFalse(second['more'])
-        self.finish(second)
-        self.assertEqual(1, len(self.ops.read({})['events']))
-        with self.store.transaction() as d:
-            state = ' '.join(row[0] for row in d.execute('SELECT data FROM records'))
-        self.assertNotIn('goal.md', state)
-        self.assertNotIn('write_file', state)
+    def test_retirement_keeps_old_cursor_owners_and_open_findings_unreviewed(self):
+        self.store.write('meta','operation_cursor',{'message_id':2,'through':900,'since':self.now-100})
+        old={'number':339,'pages':[{'receipt':'old','reviewed':False}]}
+        self.store.write('meta','operation_wave',old)
+        self.store.write('operation_dispatch','old',{'state':'unknown'})
+        self.store.write('operation_finding','important',{'id':'important','status':'open','summary':'Unverified external write'})
+        with self.store.transaction() as db:self.store.delete(db,'meta','operation_policy')
+        self.call('old')
+        policy=self.ops.policy()
+        self.assertEqual(policy['legacy']['wave'],old);self.assertFalse(policy['legacy']['reviewed'])
+        self.assertEqual(self.store.read('meta','operation_cursor')['message_id'],2)
+        self.assertFalse(self.ops.read({})['events'])
+        self.assertEqual(self.ops.summary()['findings'][0]['status'],'open')
+        with self.assertRaises(ValueError):self.ops.complete({'token':'old','summary':'Not reviewed'})
+        self.call('new');self.assertTrue(self.ops.read({})['events'])
 
-    def test_inspection_does_not_audit_itself_or_expose_assistant_reasoning(self):
-        self.call('review', name='muse_manage', args={'action': 'operations_read'})
-        self.message(role='tool', text='PRIVATE EVIDENCE COPY', call_id='review')
-        self.message(text='Hidden analysis', tool_calls=[{'id': 'real', 'function': {'name': 'delete_file', 'arguments': '{}'}}])
-        page = self.ops.read({})
-        self.assertEqual(1, len(page['events']))
-        self.assertIsNone(page['events'][0]['content'])
-        self.assertNotIn('PRIVATE EVIDENCE COPY', json.dumps(page))
-
-    def test_conversation_pages_do_not_audit_themselves_but_failures_remain(self):
-        self.call('conversation-success', name='muse_manage', args={'action':'conversation_read'})
-        success = self.message(role='tool', text='{"ok":true,"result":{"complete":false}}', call_id='conversation-success')
-        self.call('conversation-failure', name='muse_manage', args={'action':'conversation_read'})
-        failure = self.message(role='tool', text='{"ok":false,"error":"missing evidence"}', call_id='conversation-failure')
-        page = self.ops.read({})
-        ids = {event['id'] for event in page['events']}
-        self.assertNotIn(success, ids)
-        self.assertIn(failure, ids)
-
-    def test_native_tool_call_wrapper_excludes_only_pure_inspection(self):
-        self.call('wrapped', name='tool_call', args={'calls': [{'name': 'muse_manage', 'arguments': {'action': 'operations_read'}}]})
-        self.message(role='tool', text='SELF REVIEW OUTPUT', call_id='wrapped')
-        self.call('mixed', name='tool_call', args={'calls': [
-            {'name': 'muse_manage', 'arguments': {'action': 'context'}},
-            {'name': 'muse_manage', 'arguments': {'action': 'watch_create', 'goal_id': 'actual'}}]})
-        self.message(role='tool', text='A watch was created', call_id='mixed')
-        page = self.ops.read({})
-        self.assertEqual(2, len(page['events']))
-        self.assertNotIn('SELF REVIEW OUTPUT', json.dumps(page))
-        self.assertIn('watch_create', json.dumps(page))
-
-    def test_overlapping_receipts_preserve_evidence_and_monotonic_progress(self):
-        for n in range(103):
-            self.call(str(n))
-        first = self.ops.read({})
-        self.now += 1
-        concurrent = Operations(self.store, self.host, lambda: self.now).read({})
-        self.assertNotEqual(first['token'], concurrent['token'])
-        self.finish(concurrent)
-        tail = self.ops.read({})
-        self.finish(tail)
-        self.call('new-pass')
-        new = self.ops.read({})
-        # An older reviewer can save a finding after other reviewers advanced.
-        finding = self.ops.finding({'evidence': [first['events'][0]['ref']], 'summary': 'Actual error', 'impact': 'Needs repair'})
-        self.assertEqual(first['events'][0]['ref'], finding['evidence'][0])
-        repeated = self.finish(first)
-        self.assertTrue(repeated['more'])
-        self.assertEqual(tail['up_to'], repeated['checkpoint']['message_id'])
-        self.assertEqual(new['through'], repeated['through'])
-        self.finish(new)
-        self.assertEqual(new['up_to'], self.ops.checkpoint()['message_id'])
-
-    def test_failed_reads_remain_visible_but_successful_skill_reads_do_not(self):
-        self.call('skill', name='skill_view', args={'name': 'hermes-muse:companion'})
-        self.message(role='tool', text='{"success":true,"content":"long skill"}', call_id='skill')
-        self.call('bad-skill', name='skill_view', args={'name': 'missing'})
-        failure = self.message(role='tool', text='{"success":false,"error":"missing skill"}', call_id='bad-skill')
-        page = self.ops.read({})
-        self.assertEqual([failure], [e['id'] for e in page['events']])
-        self.assertEqual('skill_view', page['events'][0]['related_call']['call']['function']['name'])
-
-    def test_compression_copies_deduplicate_only_identical_stable_effects(self):
-        self.db.execute('ALTER TABLE messages ADD COLUMN message_uid TEXT')
-        original = self.call('original')
-        self.db.execute('UPDATE messages SET message_uid=? WHERE id=?', ('stable', original))
-        self.db.commit()
-        self.finish(self.ops.read({}))
-        self.db.execute('INSERT INTO messages(session_id,role,content,tool_calls,tool_call_id,tool_name,timestamp,message_uid) '
-                        'SELECT session_id,role,content,tool_calls,tool_call_id,tool_name,timestamp,message_uid FROM messages WHERE id=?', (original,))
-        self.db.commit()
-        duplicate_page = self.ops.read({})
-        self.assertFalse(duplicate_page['events'])
-        self.finish(duplicate_page)
-        changed = self.call('changed', args={'path': 'another-file'})
-        self.db.execute('UPDATE messages SET message_uid=? WHERE id=?', ('stable', changed))
-        self.db.commit()
-        self.assertEqual([changed], [e['id'] for e in self.ops.read({})['events']])
-
-    def test_instruction_content_reads_skip_successes_but_keep_failures_and_real_data(self):
-        self.call('lessons', name='muse_manage', args={'action': 'content_read', 'data': {'kind': 'working_lessons'}})
-        self.message(role='tool', text='{"ok":true,"result":{"body":"instructions"}}', call_id='lessons')
-        self.call('tools', name='muse_manage', args={'action': 'content_read', 'data': {'kind': 'tools_note'}})
-        self.message(role='tool', text='{"ok":true,"result":{"body":"tool recipes"}}', call_id='tools')
-        self.call('failed-lessons', name='muse_manage', args={'action': 'content_read', 'data': {'kind': 'working_lessons'}})
-        failed = self.message(role='tool', text='{"ok":false,"error":"read failed"}', call_id='failed-lessons')
-        note = self.call('note', name='muse_manage', args={'action': 'content_read', 'data': {'kind': 'note'}})
-        self.assertEqual([failed, note], [e['id'] for e in self.ops.read({})['events']])
-
-    def test_failed_read_and_missing_ledger_never_advance(self):
-        self.call()
-        (self.home / 'cron/executions.db').unlink()
-        page = self.ops.read({})
-        self.assertTrue(page['gaps'])
-        with self.assertRaises(ValueError):
-            self.finish(page)
-        self.assertEqual(0, self.ops.checkpoint()['message_id'])
-        self.db.execute('DROP TABLE messages')
-        page = self.ops.read({})
-        self.assertFalse(page['available'])
-        self.assertNotIn('token', page)
-
-    def test_evidence_index_filters_page_without_checkpoint_or_record_writes(self):
-        for n in range(7):
-            self.call(str(n))
-        with closing(sqlite3.connect(self.home / 'cron/executions.db')) as d, d:
-            d.execute('INSERT INTO executions VALUES(?,?,?,?,?,?,?)', ('attempt', 'owned', 'failed', stamp(self.now - 30), stamp(self.now - 5), 'fixture', None))
-        receipt = self.ops.read({})['token']
-        before = (self.home / 'muse/state.db').read_bytes()
-        refs, offset = [], 0
-        while offset is not None:
-            page = self.ops.evidence({'receipt': receipt, 'session_id': 'main', 'limit': 2, 'offset': offset})
-            refs.extend(page['returned_refs'])
-            offset = page['next_offset']
-        self.assertEqual(len(set(refs)), 7)
-        filtered = self.ops.evidence({'receipt': receipt, 'job_id': 'owned', 'since': self.now - 6})
-        self.assertEqual(filtered['returned_refs'], ['execution:attempt'])
-        self.assertFalse(self.ops.evidence({'receipt': receipt, 'until': self.now - 40})['returned_refs'])
-        self.assertEqual(before, (self.home / 'muse/state.db').read_bytes())
-        with self.assertRaises(ValueError):
-            self.ops.evidence({'receipt': receipt, 'ref': refs[0], 'job_id': 'owned'})
-
-    def test_execution_failure_without_session_and_later_completion(self):
-        with closing(sqlite3.connect(self.home / 'cron/executions.db')) as d, d:
-            d.execute('INSERT INTO executions VALUES(?,?,?,?,?,?,?)', ('failed', 'owned', 'failed', stamp(self.now - 30), stamp(self.now - 5), 'model unavailable', None))
-            d.execute('INSERT INTO executions VALUES(?,?,?,?,?,?,?)', ('other', 'foreign', 'failed', stamp(self.now - 30), stamp(self.now - 5), 'private', None))
-            d.execute('INSERT INTO executions VALUES(?,?,?,?,?,?,?)', ('late', 'owned', 'running', stamp(self.now - 30), None, None, None))
-        page = self.ops.read({})
-        self.assertEqual({'failed', 'late'}, {e['id'] for e in page['executions']})
-        self.finish(page)
-        self.now += 50
-        with closing(sqlite3.connect(self.home / 'cron/executions.db')) as d, d:
-            d.execute("UPDATE executions SET status='completed', finished_at=? WHERE id='late'", (stamp(self.now - 5),))
-        self.assertEqual(['late'], [e['id'] for e in self.ops.read({})['executions']])
-
-    def test_findings_require_observed_evidence_and_verified_disclosure_for_closure(self):
-        self.call()
-        page = self.ops.read({})
-        data = {'evidence': [page['events'][0]['ref']], 'summary': 'Duplicate watch', 'impact': 'User would receive duplicate reminders'}
-        with self.assertRaises(ValueError):
-            self.ops.finding({**data, 'evidence': ['message:999']})
-        finding = self.ops.finding(data)
-        self.assertEqual(finding['id'], self.ops.finding(data)['id'])
-        self.finish(page)
-        with self.assertRaises(ValueError):
-            self.ops.finding({'id': finding['id'], 'status': 'resolved'})
-        with self.assertRaises(ValueError):
-            self.ops.finding({'id': finding['id'], 'status': 'resolved', 'verification': 'Paused duplicate; original still enabled'})
-        closed = self.ops.finding({'id': finding['id'], 'status': 'resolved', 'verification': 'Paused duplicate; original still enabled', 'disclosure': 'Actual correction in native message 45'})
-        self.assertEqual('resolved', closed['status'])
-
-    def test_forgotten_finding_is_not_recreated(self):
-        self.call()
-        page = self.ops.read({})
-        data = {'evidence': [page['events'][0]['ref']], 'summary': 'An error', 'impact': 'No external effect'}
-        finding = self.ops.finding(data)
-        with self.store.transaction() as d:
-            self.store.delete(d, 'operation_finding', finding['id'])
-            self.store.put(d, 'forgotten', 'operation_finding:' + finding['id'], self.now)
-        with self.assertRaises(ValueError):
-            self.ops.finding(data)
-
-    def test_profile_isolation_and_initial_scope(self):
-        self.call()
-        self.message(role='tool', text='old', at=self.now - 90000)
-        page = self.ops.read({})
-        self.assertEqual(1, len(page['events']))
+    def test_profile_group_and_opaque_sample_are_explicit_not_safe_classification(self):
+        self.session('group','main','group');self.call('secret',sid='group')
+        for n in range(6):self.call(str(n),name='terminal',args={'command':'opaque '+str(n)})
+        page=self.ops.read({});self.assertEqual(page['opaque_samples'],2)
+        self.assertFalse(any(r['session_id']=='group' for r in page['events']))
+        self.assertIn('side effects may be missed',page['checkpoint']['limits'])
         with tempfile.TemporaryDirectory() as other:
-            isolated = Operations(Store(other), self.host, lambda: self.now).read({})
-        self.assertFalse(isolated['available'])
-        self.assertEqual([], isolated['events'])
+            self.assertFalse(Operations(Store(other),self.host,lambda:self.now).read({})['available'])
+
+    def test_missing_evidence_does_not_complete_and_finding_closure_stays_truthful(self):
+        call=self.call();case=self.ops.read({})['events'][0];ref='message:'+str(call)
+        finding=self.ops.finding({'evidence':[ref],'summary':'Write needs verification','impact':'Result not checked'})
+        self.assertEqual(finding['id'],self.ops.finding({'evidence':[ref],'summary':'Write needs verification','impact':'Result not checked'})['id'])
+        with self.assertRaises(ValueError):self.ops.finding({'id':finding['id'],'status':'resolved'})
+        self.db.execute('DELETE FROM messages WHERE id=?',(call,));self.db.commit()
+        with self.assertRaises(ValueError):self.ops.complete({'token':case['receipt'],'summary':'Not verifiable'})
+        self.assertFalse(self.store.read('operation_snapshot',case['receipt'])['reviewed'])
+
+    def test_uid_copies_do_not_hide_changed_failures_or_new_calls(self):
+        self.db.execute('ALTER TABLE messages ADD COLUMN message_uid TEXT')
+        first=self.call();self.db.execute('UPDATE messages SET message_uid=? WHERE id=?',('same',first));self.db.commit()
+        case=self.ops.read({})['events'][0];self.ops.complete({'token':case['receipt'],'summary':'Verified write'})
+        self.db.execute('INSERT INTO messages(session_id,role,content,tool_calls,tool_call_id,tool_name,timestamp,message_uid) SELECT session_id,role,content,tool_calls,tool_call_id,tool_name,timestamp,message_uid FROM messages WHERE id=?',(first,));self.db.commit()
+        self.assertFalse(self.ops.read({})['events'])
+        changed=self.call('changed',args={'path':'new-target'});self.db.execute('UPDATE messages SET message_uid=? WHERE id=?',('same',changed));self.db.commit()
+        self.assertTrue(self.ops.read({})['events'])

@@ -19,7 +19,7 @@ log = logging.getLogger(__name__)
 ACTIONS = ("content_read", "content_write", "memory_feedback_review", "installation_prepare", "context", "status", "conversation_read", "goal_create", "goal_update", "interest_record", "idea_add", "feedback",
            "preferences", "notification_add", "notification_refresh", "notification_queue", "notification_handoff", "notification_prepare", "feed_add", "feed_list",
            "feed_update", "calendar_window", "calendar_view", "source_check", "notification_resolve", "notification_review", "review_complete", "run_complete", "watch_create", "watch_stop", "delegate", "research_start", "research_status", "operations_read", "operations_complete", "operations_batch", "operations_evidence", "operations_commit", "finding_record", "forget")
-SCHEMA = {"name": "muse_manage", "description": "Assemble calendar views, manage companion goals, temporary interests, reminders, Feed and background research and inspect native operations/findings. First read hermes-muse:companion for action-specific data fields. Every argument goes inside data, never beside action: {'action':'context','data':{'section':'notice','limit':25}}. Parent context/status without data return a bounded section directory listing valid sections. section=signals with job freezes a review window; read its bodies before checkpointing. child context/status are pure paginated projections. Children may read current-profile content/history/audit evidence but cannot change state or checkpoints. Read result content_ref or error_ref through content_read pages. Writes to non-goal objects need request_id (new key per logical write) and expected_revision (revision string from the object's context list row or content_read; 'absent' for a new object); errors return current_revision. Optional request_id on external/checkpoint calls preserves replay; outcome_unknown never permits redispatch. Goals use active/done/cancelled; after telling the user, goal_update(status=done,note=...). Optional expected_revision is one integer; no request_id or scope token is needed for goals. Read due goals and owner status with context(section=followups). Never invent a signal ID, delivery receipt or authorization.",
+SCHEMA = {"name": "muse_manage", "description": "Assemble calendar views, manage companion goals, temporary interests, reminders, Feed and background research and inspect selected consequential cases/findings. First read hermes-muse:companion for action-specific data fields. Every argument goes inside data, never beside action: {'action':'context','data':{'section':'notice','limit':25}}. Parent context/status without data return a bounded section directory listing valid sections. section=signals for hourly intake selects a finite scope; ids batches read original bodies and review_complete confirms actual processed IDs. Nightly synthesizes confirmed changes without a second raw queue. child context/status are pure paginated projections. Children may read current-profile content/history/audit evidence but cannot change state or checkpoints. Read result content_ref or error_ref through content_read pages. Writes to non-goal objects need request_id (new key per logical write) and expected_revision (revision string from the object's context list row or content_read; 'absent' for a new object); errors return current_revision. Optional request_id on external/checkpoint calls preserves replay; outcome_unknown never permits redispatch. Goals use active/done/cancelled; after telling the user, goal_update(status=done,note=...). Optional expected_revision is one integer; no request_id or scope token is needed for goals. Read due goals and owner status with context(section=followups). Never invent a signal ID, delivery receipt or authorization.",
           "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": list(ACTIONS)}, "data": {"type": "object", "description": "Action arguments documented by the companion Skill; omit for context/status section discovery; use returned section/cursor/window arguments."}}, "required": ["action"]}}
 
 
@@ -47,6 +47,7 @@ class Runtime:
         self.store = Store(self.home)
         self.host = HermesHost(self.store, plugin_root=plugin_root)
         self.service = Companion(self.store, self.host)
+        self.service.operations.policy()  # Startup boundary, outside any caller's write transaction.
         from .memory_feedback import MemoryFeedback
         self.memory_feedback = MemoryFeedback(self.store, self.service.clock)
         self.timers = {}
@@ -88,6 +89,10 @@ class Runtime:
             return self._error(exc, *self._call_of(args))
         finally:
             ARCHIVE.reset(token)
+
+    def _operation_stage(self, run, receipts=()):
+        if run:
+            self.service.runs.stage(run,'operations',{'scope':'selected_cases','receipts':list(receipts)})
 
     @staticmethod
     def _call_of(args):
@@ -246,17 +251,14 @@ class Runtime:
                                   "instruction": "The host has fewer than eight tool iterations left. Save findings and run_complete(partial) with the audit continuation, then finish normally. Do not launch another worker wave; the next hourly run resumes saved work."}
                     else:
                         result = audit.batch() if action == "operations_batch" else audit.commit(data)
-                    self.service.runs.stage(run, "operations", {
-                        "complete": bool(result.get("batch_complete")) and not result.get("more", True),
-                        "phase": "allocated" if action == "operations_batch" else "reviewed",
-                        **{k: result[k] for k in ("checkpoint", "allocated_slots", "reviewed_slots", "newly_reviewed_slots", "continuous_slots", "remaining_slots", "observed_at", "deferred") if k in result}})
+                    self._operation_stage(run,[p['receipt'] for p in result.get('cases',[])])
                 elif action in {"operations_read", "operations_complete", "finding_record"}:
                     method = {"operations_read": "read", "operations_complete": "complete", "finding_record": "finding"}[action]
                     result = getattr(self.service.operations, method)(data)
                     if action == "operations_read":
-                        self.service.runs.stage(run, "operations", {"complete": False, "phase": "allocated", "allocated_events": len(result.get("events", [])), "allocated_executions": len(result.get("executions", [])), "receipt": result.get("token")})
-                    if action == "operations_complete":
-                        self.service.runs.stage(run, "operations", {"complete": not result["more"], "checkpoint": result["checkpoint"]})
+                        self._operation_stage(run,[r['receipt'] for r in result.get('events',[])])
+                    if action == 'operations_complete':
+                        self._operation_stage(run)
                 elif action == "run_complete":
                     result = self.service.runs.finish(run, data)
                 elif action == "review_complete":
@@ -281,7 +283,8 @@ class Runtime:
                         self._response(result)  # Reject an unaddressable oversized result before staging completion.
                     else:
                         result = self.service.review_complete(data, require_window=True)
-                    self.service.runs.stage(run, "review", {"complete": result["complete"], "through": result["through"], "summary": data["summary"]})
+                    self.service.runs.stage(run, "review", {"complete": result["complete"], "through": result["through"], "scope":result.get('scope'),
+                        "backlog":result.get('backlog'),"processed_ids":result.get('processed_ids',[]),"summary": data["summary"]})
                 elif action == "preferences":
                     result = self.service.preference_update({k:v for k,v in data.items() if k != "signal_id"}, cron=info["cron"] or str(kwargs.get("task_id", "")).startswith("cron:"))
                 elif action == "watch_create":
@@ -340,7 +343,7 @@ class Runtime:
                     'token': result['token'], 'result_is_reference': True,
                     'content_ref': {'action': 'operations_evidence', 'data': {'receipt': result['token'], 'offset': 0, 'limit': 25}},
                     'findings_ref': {'action': 'content_read', 'data': {'kind': 'finding', 'limit': 25}},
-                    'instruction': 'Allocation is saved, not reviewed. Page the native evidence index and expand every ref before operations_complete; no transcript copy is stored here.'}})
+                    'instruction': 'Allocation is saved, not reviewed. Page the selected evidence index and inspect relevant original intent/results before confirming a case; legacy unselected history is not covered.'}})
             from .contracts import CAS
             kinds = {**CAS, 'feed_add': 'feed', 'notification_add': 'notice', 'goal_create': 'goal', 'goal_update': 'goal', 'interest_record': 'interest', 'idea_add': 'idea', 'run_complete': 'run', 'installation_prepare': 'installation', 'research_start': 'research',
                      'notification_prepare': 'notice', 'notification_queue': 'notice', 'notification_handoff': 'notice'}
