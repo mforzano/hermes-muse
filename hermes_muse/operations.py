@@ -51,7 +51,7 @@ def calls(row):
 
 
 def inspection(call):
-    fn = call.get("function", {})
+    fn = call.get("function", call)
     try:
         args = fn.get("arguments", {})
         args = json.loads(args) if isinstance(args, str) else args
@@ -67,15 +67,15 @@ def inspection(call):
 
 
 def failed_result(content):
-    """Keep failures even when the operation was only an inspection."""
+    """Classify complete native JSON roots, never words quoted in result bodies."""
     try:
         value = json.loads(content or "null")
-    except (ValueError, TypeError):
-        return any(word in str(content).lower() for word in ("error", "failed", "denied"))
+    except (ValueError, TypeError, RecursionError):
+        return False
     if isinstance(value, dict):
         return (value.get("ok") is False or value.get("success") is False
                 or value.get("isError") is True or bool(value.get("error"))
-                or value.get('status') in {'error','failed','unknown','outcome_unknown'}
+                or value.get('status') in ('error','failed','unknown','outcome_unknown')
                 or value.get('code') == 'outcome_unknown')
     return False
 
@@ -188,7 +188,10 @@ class Operations:
             columns = {r[1] for r in db.execute('PRAGMA table_info(messages)')}
             hidden = " AND COALESCE(display_kind,'')!='hidden'" if 'display_kind' in columns else ''
             uid = ',message_uid' if 'message_uid' in columns else ''
-            rows = db.execute('SELECT id,session_id,role,substr(content,1,2000) AS content,substr(tool_calls,1,8000) AS tool_calls,tool_call_id,tool_name,timestamp'+uid+' '
+            # Parse complete roots locally; only a flag and bounded previews leave the scan.
+            db.create_function('muse_failed_result', 1, failed_result)
+            rows = db.execute("SELECT CASE WHEN role='tool' THEN muse_failed_result(content) ELSE 0 END AS result_failed,"
+                              'id,session_id,role,substr(content,1,2000) AS content,substr(tool_calls,1,8000) AS tool_calls,tool_call_id,tool_name,timestamp'+uid+' '
                               'FROM messages WHERE id>? AND timestamp>=?'+hidden+' ORDER BY id LIMIT 400', (after,policy['since'])).fetchall()
             for raw in rows:
                 row = dict(raw); after = row['id']
@@ -203,7 +206,7 @@ class Operations:
                     if original:continue
                 reason, related = None, None
                 if row['role']=='tool':
-                    if failed_result(row['content']):
+                    if row['result_failed']:
                         reason='reported_failure_or_unknown'
                     if row.get('tool_call_id'):
                         cached=call_index.get((row['session_id'],row['tool_call_id']))

@@ -1,4 +1,4 @@
-# Hermes Muse 0.3.15
+# Hermes Muse 0.3.16
 
 [简体中文](README.zh-CN.md) · [Design](docs/DESIGN.md) · [Acceptance guide](docs/ACCEPTANCE.md)
 

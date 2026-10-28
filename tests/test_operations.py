@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from hermes_muse.operations import Operations
+from hermes_muse.operations import Operations, failed_result
 from hermes_muse.store import Store, stamp
 
 
@@ -47,6 +47,51 @@ class OperationFixture(unittest.TestCase):
 
 
 class OperationTests(OperationFixture):
+    def test_complete_root_status_survives_large_bodies_without_quoted_failures(self):
+        body = 'Reference examples: error, failed, denied. ' * 200
+        for result in ({'ok': True, 'result': body}, {'success': True, 'content': body},
+                       {'parameters': {'description': body}}, {'result': {'ok': False, 'error': body}},
+                       {'status': [], 'error': {}}):
+            with self.subTest(result_keys=list(result)):
+                self.assertFalse(failed_result(json.dumps(result)))
+        for flag in ({'ok': False}, {'success': False}, {'isError': True}, {'error': 'denied'},
+                     {'status': 'failed'}, {'status': 'unknown'}, {'status': 'outcome_unknown'},
+                     {'code': 'outcome_unknown'}):
+            with self.subTest(flag=flag):
+                text = json.dumps({'body': body, **flag})
+                self.assertFalse(failed_result(text[:2000]))
+                self.assertTrue(failed_result(text))
+        self.assertFalse(failed_result(body))
+        self.assertFalse(failed_result(json.dumps(body)))
+
+    def test_successful_inspection_echo_does_not_reopen_but_late_root_failure_does(self):
+        self.message(role='user', text='Inspect this failed fixture operation')
+        self.call('first', name='tool_describe', args={'name': 'fixture'})
+        self.message(role='tool', text='{"ok":false,"error":"fixture failed"}', call_id='first')
+        case = self.ops.read({})['events'][0]
+        self.ops.complete({'token': case['receipt'], 'summary': 'Inspected the original failure'})
+        refs = self.store.read('operation_snapshot', case['receipt'])['refs']
+        body = 'Quoted error failed denied, not a current failure. ' * 200
+        for key, name, args, result in [
+            ('skill', 'skill_view', {}, {'success': True, 'content': body}),
+            ('schema', 'tool_describe', {}, {'parameters': {'description': body}}),
+            ('echo', 'muse_manage', {'action': 'operations_evidence'}, {'ok': True, 'result': {'text': body}}),
+        ]:
+            self.call(key, name=name, args=args)
+            self.message(role='tool', text=json.dumps(result), call_id=key)
+        self.assertFalse(self.ops.read({})['events'])
+        snapshot = self.store.read('operation_snapshot', case['receipt'])
+        self.assertTrue(snapshot['reviewed'])
+        self.assertEqual(snapshot['refs'], refs)
+        self.call('late-failure', name='tool_describe', args={'name': 'fixture'})
+        failure = self.message(role='tool', text=json.dumps({'body': body, 'status': 'unknown'}), call_id='late-failure')
+        reopened = self.ops.read({})['events'][0]
+        self.assertEqual(reopened['receipt'], case['receipt'])
+        self.assertIn('message:' + str(failure), reopened['evidence_refs'])
+        self.assertIn('reported_failure_or_unknown', reopened['reasons'])
+        self.assertFalse(self.store.read('operation_snapshot', case['receipt'])['reviewed'])
+        self.assertNotIn(body, json.dumps(reopened))
+
     def test_consequences_pair_context_and_claims_without_deep_successful_reads(self):
         user=self.message(role='user',text='Please update the report')
         self.call('read',name='read_file');self.message(role='tool',text='{"ok":true}',call_id='read')

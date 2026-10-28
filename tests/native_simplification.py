@@ -86,6 +86,43 @@ with tempfile.TemporaryDirectory(prefix='muse-native-scopes-') as folder:
     missing=call('source_check',{**args,'source':{'connection':'fixture','account':'fixture','resource':'mail:inbox'},
         'query_window':None,'request_id':'scope-mail'},ok=False)
     assert 'scope' in missing['error']
+    # Real native storage + registry: successful evidence echoes cannot reopen a reviewed case.
+    tokens=set_session_vars(platform='cli',session_id='human',chat_type='private')
+    try:
+        invoke_hook('pre_llm_call',session_id='human',turn_id='inspection-fixture',platform='cli',user_message='Inspect this synthetic failed operation')
+        native.append_message('human','user','Inspect this synthetic failed operation')
+        def dispatch(action,data=None):
+            value=json.loads(handle_function_call('muse_manage',{'action':action,'data':data or {}},
+                session_id='human',turn_id='inspection-fixture',enabled_toolsets=['muse']))
+            assert value['ok'],value
+            return value
+        def native_call(key,name,args,result):
+            native.append_message('human','assistant',tool_calls=[{'id':key,'function':{
+                'name':'tool_call','arguments':json.dumps({'calls':[{'name':name,'arguments':args}]})}}])
+            return native.append_message('human','tool',result,tool_call_id=key,tool_name=name)
+        original=native_call('failed-schema','tool_describe',{'name':'fixture'},
+            json.dumps({'ok':False,'error':'Synthetic failure: '+('error failed denied example. '*200)}))
+        case=next(c for c in dispatch('operations_read')['result']['events'] if c['session_id']=='human')
+        args={'receipt':case['receipt'],'ref':'message:'+str(original)}
+        echo=dispatch('operations_evidence',args)
+        assert len(json.dumps(echo))>2000
+        dispatch('operations_complete',{'token':case['receipt'],'summary':'Original fixture failure inspected'})
+        refs=rt.store.read('operation_snapshot',case['receipt'])['refs']
+        native_call('evidence-echo','muse_manage',{'action':'operations_evidence','data':args},json.dumps(echo))
+        body='Quoted error failed denied; reference text only. '*200
+        native_call('successful-skill','skill_view',{'name':'fixture'},json.dumps({'success':True,'content':body}))
+        native_call('successful-schema','tool_describe',{'name':'fixture'},json.dumps({'parameters':{'description':body}}))
+        after_echo=dispatch('operations_read')['result']
+        assert not any(c['receipt']==case['receipt'] for c in after_echo['events']),after_echo['events']
+        snapshot=rt.store.read('operation_snapshot',case['receipt'])
+        assert snapshot['reviewed'] and snapshot['refs']==refs
+        failure=native_call('new-failure','tool_describe',{'name':'fixture'},json.dumps({'body':body,'ok':False}))
+        reopened=next(c for c in dispatch('operations_read')['result']['events'] if c['receipt']==case['receipt'])
+        assert 'message:'+str(failure) in reopened['evidence_refs']
+        assert 'reported_failure_or_unknown' in reopened['reasons']
+        assert not rt.store.read('operation_snapshot',case['receipt'])['reviewed']
+        dispatch('operations_complete',{'token':case['receipt'],'summary':'New genuine fixture failure inspected'})
+    finally:clear_session_vars(tokens)
     # Accepted work follows the already-known private parent lineage, without agents.
     tokens=set_session_vars(platform='cli',session_id='human',chat_type='private')
     try:
@@ -114,5 +151,5 @@ with tempfile.TemporaryDirectory(prefix='muse-native-scopes-') as folder:
         assert len({ref for c in page['events'] if c['session_id']=='ordinary' for ref in c['evidence_refs']})==2
         assert not any(c['session_id'] in {'group-child','foreign'} for c in page['events'])
     finally:clear_session_vars(tokens)
-    print(json.dumps({'native_simplification':'PASS','unknown_responsibility_wakes_without_change':True,'accepted_private_child_not_sampled':True,'real_registry_empty_scope_with_legacy_backlog':True,'nightly_no_second_signal_cursor':True,'old_long_signal_does_not_block_new_cancellation':True,'old_authority_preserved':True,'provider_calls':0,'external_sends':0}))
+    print(json.dumps({'successful_native_inspection_echo_does_not_reopen':True,'late_root_failure_retained':True,'native_simplification':'PASS','unknown_responsibility_wakes_without_change':True,'accepted_private_child_not_sampled':True,'real_registry_empty_scope_with_legacy_backlog':True,'nightly_no_second_signal_cursor':True,'old_long_signal_does_not_block_new_cancellation':True,'old_authority_preserved':True,'provider_calls':0,'external_sends':0}))
     native.close();rt.close()

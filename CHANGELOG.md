@@ -1,3 +1,8 @@
+# 0.3.16 — preserve native result status in bounded case selection (2026-10-28)
+
+- Fix successful large skill, schema and operation-evidence results being selected as failures after a 2000-character preview broke their JSON structure. Classify the complete structured root locally and return only the failure flag with bounded previews; quoted error words are not current result status. Recognize native bridge inspection calls in their nested function shape.
+- Keep genuine root failures/unknown outcomes, structured writes, accepted-work opaque operations and existing sampling limits. Case evidence still pages its index before loading requested bodies; no historical cases are automatically completed or removed.
+
 # 0.3.15 — consequential review and once-only signal intake (2026-10-28)
 
 - Replace full-row operation audits and default parallel audit waves with selected consequential cases. Pair calls/results, read original user context once, and slice evidence indexes before native body reads. Ordinary successful reads are not a deep-audit duty; bounded opaque samples do not certify hidden side effects safe. Accepted private task ancestry remains attached to native child executions.
