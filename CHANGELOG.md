@@ -1,9 +1,12 @@
-# 0.3.15 — maintenance recovery (unreleased)
+# 0.3.15 — consequential review and once-only signal intake (2026-10-28)
 
-- Exclude trusted Curator background turns from user authority without classifying quoted user text by its Curator prefix. Resolve long originals with a narrow native lookup, including unchanged compression copies, before paging them.
-- Deduplicate unchanged native message-UID copies, exclude successful instruction reads, link result/call evidence, and recover original audit-owner receipts without relaunch or automatic acceptance. Keep continuous-prefix review and existing page/concurrency limits.
-- Require real watch review metadata with actionable legacy recovery; document complete review/run calls. Compare calendar windows consistently on machine fields and preserve source/coverage validation.
-- Expose bounded current/latest/last-complete run references and independent signal backlog metadata. Keep unresolved business gaps in governance summaries; no new jobs, providers, permissions or delivery path.
+- Replace full-row operation audits and default parallel audit waves with selected consequential cases. Pair calls/results, read original user context once, and slice evidence indexes before native body reads. Ordinary successful reads are not a deep-audit duty; bounded opaque samples do not certify hidden side effects safe. Accepted private task ancestry remains attached to native child executions.
+- Process original user decisions once with finite oldest/newest scopes, batched bodies and revision-bound processed IDs. Older unread authority remains; continuous signal cursors never skip it. Nightly synthesizes confirmed changes instead of owning a second raw-input queue.
+- Separate actual run-scope completion from global historical pending work. Selected unfinished cases still require partial continuation. Existing verified nightly artifacts may remain unchanged with an explicit reason. Local quiet maintenance never skips unresolved mutation or notification outcomes and never turns inspection into replay permission.
+- Retain the old raw-audit cursor, wave and original owners explicitly as unreviewed history. Do not delete old native logs, mark the historical backlog reviewed, or relaunch unknown work.
+- Reuse calendar coverage arguments, deriving missing scope only from a validated query window. Preserve non-calendar scope, machine-window/source checks, notification permissions, quiet hours, profile isolation and parent-only goal rules. Fixed job IDs, cadence, pins and user pauses are not changed.
+- Preserve trusted Curator platform restrictions while allowing real users to quote its complete prompt. Keep narrow native long-original lookup, unchanged-UID deduplication, actionable watch metadata recovery and timezone-note consistency fixes.
+- Privacy: original signal excerpts, provenance and one processing marker have no automatic count/time expiry; full originals remain subject to native-history retention. No new provider, telemetry, queue, database or external delivery channel is added. See SECURITY.md and docs/CATALOG-COMPATIBILITY.md for retained data and limits.
 
 # 0.3.14 — goal fade: dormant after 7 idle days, cancelled 7 days later after a delivered question (2026-10-26)
 
@@ -184,10 +187,6 @@ Cause: the 13:00 patrol sent six source_checks in one parallel batch; each tripp
 
 ## 0.1.27 catalog compatibility
 
-- Replace full-row operation audits and default parallel worker waves with consequential cases, bounded opaque samples and direct parent review. Preserve legacy cursors/owners as explicitly unreviewed history, not completed work.
-- Process original user signals once, in finite scopes with batched bodies and revision-bound processed IDs; newer corrections can proceed while older input remains pending. Nightly synthesizes confirmed changes without a second raw queue.
-- Separate real run-scope outcomes from global pending history; keep meaningful nightly artifacts without mandatory mtime rewrites. Local maintenance may end quietly when no new or due responsibility exists.
-- Slice operation indexes before native reads and share original user context once. Reuse calendar coverage arguments, deriving omitted scope only from validated windows; retain non-calendar scope checks and source/notification permissions.
 
 Precise soft-inbox retention and instructed-read-only disclosures; Cron watch scheduling policy and explicit 4,000-character fields; native 30-minute default without changing explicit cadences. Conversation previews gain complete revision-checked chunk retrieval and range coverage that gates notices without advancing processing watermarks. Research/audit respect lower user concurrency while retaining every question/page. Public Cron delegation is used for compatible unpinned routes; pinned/unknown parent-routing exceptions remain explicitly unresolved. Includes the previously local 0.1.26 follow-through and calendar/Apple work, without deploying existing installations.
 
