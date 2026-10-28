@@ -584,7 +584,7 @@ class CronCannotMoveTheThresholds(FadeCase):
 
 class Prompts(unittest.TestCase):
     def test_nightly_preserves_guarded_intake_fade_and_optional_ideas(self):
-        text=(ROOT/'prompts/nightly-review.md').read_text()
+        text=(ROOT/'prompts/nightly-review.md').read_text(encoding="utf-8")
         self.assertLess(text.index('Goal intake:'),text.index('Goal fade:'))
         self.assertLess(text.index('Goal fade:'),text.index('Ideas:'))
         for key in ('signal_id','fade_due=true','ask_key','0–3','delivered-ask','confirmed'):

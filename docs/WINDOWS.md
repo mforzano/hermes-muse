@@ -1,7 +1,9 @@
 # Windows implementation: release validation pending
 
-This branch is a partial compatibility implementation, not a Windows support
-release. Do not enable it in a working Hermes profile.
+This branch is not a Windows support release. An explicitly authorized local
+installation has now been tested against the actual Windows Hermes host (see
+below); its six autonomous jobs remain paused. Do not treat this as a generally
+released platform-support claim.
 
 ## Implemented
 
@@ -113,5 +115,37 @@ separate-process reparse schedule, editor/antivirus configuration or power-loss
 scenario. New Windows CI includes complete units (3.11/3.14) and a separate
 pinned-host native/official-validation job; no remote run is claimed. Existing
 Linux/macOS jobs remain. No live profiles, credentials, configuration, installed
-plugin or core code were changed; no push/comment/PR.
+plugin or core code were changed during that isolated validation phase.
+
+## Authorized actual-host acceptance (local, not published)
+
+Installed through official plugin management from `mforzano/hermes-muse`, immutable
+pin `a13eef907c661fed6b25be64db27ea9a5c7f0c9f`, into the active default profile.
+Actual host revision: `046094df28b712f62a5e3c728a9e59da05dcbf1e`, Python 3.11.15.
+The installed checkout and development checkout both have two additional local,
+unpublished fixes: explicitly bootstrap pywintypes before a cold win32api read;
+and preserve unknown delivery status when the newer host has retired
+`cron.bot_chat_delivery` while retaining canonical live-owner receipts.
+
+The actual gateway-backed CLI made six successful `muse_manage` calls to create,
+read, update, read back, cancel and verify a clearly labelled local acceptance
+goal. Native host script launching executed all six installed Cron gates with
+success. Official actual-host validation with `--install-deps --json` returned
+`ok=true`; the dependency-less probe alone could not import pywintypes in its
+separate environment. New regressions were observed failing before each fix.
+The full isolated suite now passes 322 tests (one existing skip) on Python 3.11;
+the 27 focused Windows tests pass with `-W error` on Python 3.14.
+
+Activation used supported live plugin reload, not a gateway restart. Existing
+session prompt/tool snapshots are deferred to a new conversation, which the
+successful gateway CLI test created. Six original Cron job definitions were
+preserved; normal scheduling independently advanced bookkeeping for one job.
+SOUL and native memory hashes remain unchanged. All four labelled acceptance
+goals are cancelled. All six Muse jobs remain paused pending an explicit decision
+to permit autonomous monitoring. No external messages were sent; missing-receipt
+lookup returns unknown, but end-to-end notification delivery has not been tested.
+No live dashboard server was found; visual/UI/accessibility acceptance is not
+claimed. Backups, scripts, CLI events and final readback evidence are retained in
+`data/muse-windows-install-test/` beneath the authorized active Hermes home.
+No Hermes core modifications or new publication were made.
 

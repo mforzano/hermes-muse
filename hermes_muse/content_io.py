@@ -70,6 +70,9 @@ def _windows_directory(root, relative="", *, create=False):
     NtCreateFile's RootDirectory, not from pinning and absolute child paths.
     Incompatible occupants fail closed.
     """
+    # Importing pywintypes explicitly loads its DLL in portable/venv installs;
+    # a cold win32api import cannot rely on a prior host import doing this.
+    import pywintypes
     import win32api
     import win32con
     import win32file

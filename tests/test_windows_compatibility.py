@@ -18,6 +18,16 @@ class WindowsImports(unittest.TestCase):
         self.assertEqual({r.split(">=", 1)[0] for r in requirements}, {"pywin32", "tzdata"})
         self.assertTrue(all(r.endswith('; sys_platform == "win32"') for r in requirements))
 
+    def test_first_directory_read_bootstraps_pywin32_dlls(self):
+        import subprocess
+        import sys
+        code = ("from pathlib import Path; from hermes_muse.content_io import Files; "
+                "import sys\nwith Files(Path(sys.argv[1])).directory() as handle: assert int(handle)")
+        with tempfile.TemporaryDirectory(prefix="muse-cold-start-", dir=SCRATCH) as tmp:
+            (Path(tmp) / "muse").mkdir()
+            result = subprocess.run([sys.executable, "-c", code, tmp], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_plugin_modules_import_without_posix_modules(self):
         for name in ("locks", "service", "host", "runtime", "migration", "views"):
             with self.subTest(module=name):

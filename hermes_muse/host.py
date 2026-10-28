@@ -415,7 +415,15 @@ class HermesHost:
 
     def bot_delivery_status(self, job_id, execution_id=None):
         from cron.jobs import get_job
-        from cron.bot_chat_delivery import read_pending
+        try:
+            from cron.bot_chat_delivery import read_pending
+        except ModuleNotFoundError as exc:
+            if exc.name != "cron.bot_chat_delivery":
+                raise
+            # New hosts retain canonical live-owner receipts but retired this
+            # pending reader. Missing legacy evidence stays unknown, never sent.
+            def read_pending(_key):
+                return None
         from tools.bot_live_delivery import read_delivery_result
         with profile_scope(self.home):
             if execution_id:
