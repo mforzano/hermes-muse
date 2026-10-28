@@ -514,7 +514,8 @@ def cron_run(home, key):
                       for k in ('next_check_at','research_review_at')) for g in store.goals())
         except (ValueError,TypeError,KeyError):
             due = True  # An unreadable responsibility is not proof of an empty local pass.
-        if page.get('available') and not (pending_signals(store) or page['events'] or page['more'] or findings or due or health):
+        from .operations import unknown_outcomes
+        if page.get('available') and not (pending_signals(store) or page['events'] or page['more'] or findings or due or health or unknown_outcomes(store.home, limit=1)):
             return {'wakeAgent':False,'job':key,'reason':'No new local signals/cases or due responsibilities; legacy raw history is unreviewed, not a wake reason.'}
     # External-source tasks always inspect authorized live sources; no empty-source guess.
     result = {"wakeAgent": key in JOBS, "job": key, "started_at": stamp(),

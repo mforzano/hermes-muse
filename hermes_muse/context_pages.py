@@ -37,14 +37,6 @@ def index(items, data, scope):
             'next_cursor': base64.urlsafe_b64encode(canonical({'revision': fingerprint, 'offset': end})).decode() if end < len(items) else None}
 
 
-def signal_refs(store, after, through, db=None):
-    rows = sorted((r for r in (store.rows(db, 'signal') if db is not None else store.all('signal')) if after < r['created'] <= through
-                   and not is_background_message(r.get('text'))), key=lambda r: (r['created'], r['id']))
-    return [{'id': r['id'], 'created': r['created'], 'revision': revision(canonical(r)),
-             'total_chars': None if r.get('truncated') else len(r['text']),
-             'excerpt_chars': len(r['text']) if r.get('truncated') else None, 'requires_original': bool(r.get('truncated'))} for r in rows]
-
-
 def original_signal(service, row):
     # Legacy inbox rows have no native message ID. Correlate narrowly or fail closed.
     state = service.host.signal_original(row)
@@ -215,12 +207,8 @@ def context(service, data, *, view=None):
         'nightly-review': {'mode':'synthesis','legacy_processed_through':service.store.read('cursor','nightly-review',0),
             'instruction':'No second raw-signal queue; use confirmed memory and actual changes.'}}
     runs = service.runs.recent()
-    from .operations import reader
-    with reader(service.store.root/'state.db') as db:
-        unknown=[{'id':r['id'],'kind':r['kind'],'status':r['status']} for r in db.execute(
-            "SELECT kind,id,COALESCE(json_extract(data,'$.status'),json_extract(data,'$.state')) AS status FROM records "
-            "WHERE kind IN ('notification','mutation_request') AND COALESCE(json_extract(data,'$.status'),json_extract(data,'$.state')) IN ('unknown','outcome_unknown','pending')")
-            if r['status']!='pending' or r['kind']=='mutation_request']
+    from .operations import unknown_outcomes
+    unknown=unknown_outcomes(service.store.home)
     return {'now': service.clock(), 'job': view,
             'task_runs': [{'id': r['id'], 'job': r['job'], 'status': r['status'], 'started': r['started'],
                            'content_ref': {'action': 'content_read', 'data': {'kind': 'run', 'id': r['id']}}}

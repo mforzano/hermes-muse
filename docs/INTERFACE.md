@@ -9,7 +9,7 @@ Content page revisions and non-goal mutation journals retain their existing boun
 | Action | Fields | Write/version contract |
 |---|---|---|
 | `context` | `section job window cursor limit id ids offset length revision part status` | Action-specific fields or pure read |
-| `status` | `section job window cursor limit id ids offset length revision part status` | Action-specific fields or pure read |
+| `status` | `section job window cursor limit id offset length revision part status` | Action-specific fields or pure read |
 | `conversation_read` | `session_id revision offset read_only since until descriptor` | Action-specific fields or pure read |
 | `content_read` | `kind id resource offset length revision cursor limit topic query part` | Action-specific fields or pure read |
 | `content_write` | `kind id resource body expected_revision request_id signal_id` | Body revision + request ID |

@@ -23,6 +23,25 @@ def reader(path):
         db.close()
 
 
+UNKNOWN_OUTCOME_STATES = {
+    'mutation_request': ('pending', 'unknown', 'outcome_unknown'),
+    'notification': ('unknown', 'outcome_unknown'),
+}
+
+
+def unknown_outcomes(home, *, limit=None):
+    """Existing unresolved responsibility, never permission to replay the write."""
+    clauses, params = [], []
+    for kind, states in UNKNOWN_OUTCOME_STATES.items():
+        clauses.append('(kind=? AND COALESCE(json_extract(data,\'$.status\'),json_extract(data,\'$.state\')) IN ('+','.join('?' for _ in states)+'))')
+        params.extend((kind, *states))
+    query = "SELECT kind,id,COALESCE(json_extract(data,'$.status'),json_extract(data,'$.state')) AS status FROM records WHERE "+' OR '.join(clauses)
+    if limit is not None:
+        query += ' LIMIT ?'; params.append(limit)
+    with reader(home/'muse/state.db') as db:
+        return [dict(row) for row in db.execute(query, params)]
+
+
 def calls(row):
     value = row.get("tool_calls") or []
     value = json.loads(value) if isinstance(value, str) else value
@@ -154,16 +173,18 @@ class Operations:
         call_index = {}
         with reader(path) as db:
             sessions = {r['id']:dict(r) for r in db.execute('SELECT id,parent_session_id,chat_type FROM sessions')}
-            eligible = set()
+            eligible, accepted_lineage = set(), set()
             for sid in sessions:
-                current, seen, matched, private = sid, set(), False, True
+                current, seen, matched, private, accepted_ancestor = sid, set(), False, True, False
                 while current in sessions and current not in seen:
                     seen.add(current); item = sessions[current]
                     private &= str(item.get('chat_type') or '').lower() not in GROUPS
                     matched |= current in roots or any(current.startswith('cron_'+jid+'_') for jid in jobs)
+                    accepted_ancestor |= current in accepted
                     current = item.get('parent_session_id')
                 if matched and private:
                     eligible.add(sid)
+                    if accepted_ancestor:accepted_lineage.add(sid)
             columns = {r[1] for r in db.execute('PRAGMA table_info(messages)')}
             hidden = " AND COALESCE(display_kind,'')!='hidden'" if 'display_kind' in columns else ''
             uid = ',message_uid' if 'message_uid' in columns else ''
@@ -210,7 +231,7 @@ class Operations:
                 if not reason:
                     continue
                 if reason=='opaque_execution':
-                    reason='opaque_accepted_work' if row['session_id'] in accepted else 'opaque_sample'
+                    reason='opaque_accepted_work' if row['session_id'] in accepted_lineage else 'opaque_sample'
                 if reason=='opaque_sample':
                     if sampled>=2:continue
                     sampled+=1

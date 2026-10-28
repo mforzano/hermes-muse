@@ -37,6 +37,14 @@ with tempfile.TemporaryDirectory(prefix='muse-native-scopes-') as folder:
     assert rt.service.operations.policy()['legacy']['reviewed'] is False
     from hermes_muse.host import cron_run
     assert cron_run(home,'memory-upkeep')['wakeAgent'] is False
+    # Unknown responsibility alone must wake; inspecting it does not change/replay it.
+    for kind,record in [('mutation_request',{'id':'interrupted-write','state':'pending'}),
+                        ('notification',{'id':'uncertain-delivery','status':'unknown'})]:
+        rt.store.write(kind,record['id'],record)
+        assert cron_run(home,'memory-upkeep')['wakeAgent'] is True
+        assert rt.store.read(kind,record['id'])==record
+        with rt.store.transaction() as db:rt.store.delete(db,kind,record['id'])
+    assert cron_run(home,'memory-upkeep')['wakeAgent'] is False
     jid=rt.host.manifest()['fixed']['memory-upkeep']
     attempt=create_execution(jid,source='test');mark_execution_running(attempt['id'])
     task='cron:'+jid+':'+attempt['id'];sid='cron-fixture'
@@ -78,5 +86,33 @@ with tempfile.TemporaryDirectory(prefix='muse-native-scopes-') as folder:
     missing=call('source_check',{**args,'source':{'connection':'fixture','account':'fixture','resource':'mail:inbox'},
         'query_window':None,'request_id':'scope-mail'},ok=False)
     assert 'scope' in missing['error']
-    print(json.dumps({'native_simplification':'PASS','real_registry_empty_scope_with_legacy_backlog':True,'nightly_no_second_signal_cursor':True,'old_long_signal_does_not_block_new_cancellation':True,'old_authority_preserved':True,'provider_calls':0,'external_sends':0}))
+    # Accepted work follows the already-known private parent lineage, without agents.
+    tokens=set_session_vars(platform='cli',session_id='human',chat_type='private')
+    try:
+        invoke_hook('pre_llm_call',session_id='human',turn_id='accepted-parent',platform='cli',user_message='Please finish this accepted fixture work')
+        goal=json.loads(handle_function_call('muse_manage',{'action':'goal_create','data':{
+            'id':'accepted','title':'Accepted fixture','description':'Synthetic parent work','completion_criteria':'Verify result','signal_id':'accepted-parent'}},
+            session_id='human',turn_id='accepted-parent',enabled_toolsets=['muse']))
+        assert goal['ok'],goal
+        native.create_session('worker',source='subagent',parent_session_id='human',chat_type='private')
+        native.create_session('ordinary',source='cli',chat_type='private')
+        invoke_hook('pre_llm_call',session_id='ordinary',turn_id='ordinary',platform='cli',user_message='Unrelated ordinary fixture')
+        native.create_session('group',source='cli',parent_session_id='human',chat_type='group')
+        native.create_session('group-child',source='subagent',parent_session_id='group',chat_type='private')
+        native.create_session('foreign',source='cli',chat_type='private')
+        refs={}
+        for session in ('ordinary','worker','group-child','foreign'):
+            refs[session]=[]
+            for i in range(4):
+                mid=native.append_message(session,'assistant',tool_calls=[{'id':session+str(i),'function':{
+                    'name':'terminal','arguments':json.dumps({'command':'opaque fixture '+str(i)})}}])
+                refs[session].append('message:'+str(mid))
+        page=json.loads(handle_function_call('muse_manage',{'action':'operations_read'},session_id='human',enabled_toolsets=['muse']))['result']
+        accepted_cases=[c for c in page['events'] if c['session_id']=='worker']
+        assert set(refs['worker']) <= {ref for c in accepted_cases for ref in c['evidence_refs']}
+        assert all('opaque_accepted_work' in c['reasons'] for c in accepted_cases)
+        assert len({ref for c in page['events'] if c['session_id']=='ordinary' for ref in c['evidence_refs']})==2
+        assert not any(c['session_id'] in {'group-child','foreign'} for c in page['events'])
+    finally:clear_session_vars(tokens)
+    print(json.dumps({'native_simplification':'PASS','unknown_responsibility_wakes_without_change':True,'accepted_private_child_not_sampled':True,'real_registry_empty_scope_with_legacy_backlog':True,'nightly_no_second_signal_cursor':True,'old_long_signal_does_not_block_new_cancellation':True,'old_authority_preserved':True,'provider_calls':0,'external_sends':0}))
     native.close();rt.close()
