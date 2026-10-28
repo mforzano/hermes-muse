@@ -266,7 +266,8 @@ class MemoryFeedback:
         if not path.is_file() or path.is_symlink():
             return
         try:
-            with sqlite3.connect(path.as_uri() + '?mode=ro', uri=True) as db:
+            from .content_io import readonly_database
+            with readonly_database(path, timeout=5) as db:
                 row = db.execute("SELECT id,content FROM messages WHERE session_id=? AND role='assistant' AND timestamp>=? AND (tool_calls IS NULL OR tool_calls='[]') AND (display_kind IS NULL OR display_kind!='hidden') ORDER BY id DESC LIMIT 1", (session_id, signal['created'])).fetchone()
             if not row or response and response != row[1]:
                 return

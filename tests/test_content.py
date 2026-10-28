@@ -170,17 +170,26 @@ class ContentTests(unittest.TestCase):
             self.write(body="<!-- hermes-muse {} -->")
         with self.assertRaises(DomainError):
             self.write(body="x" * 60001)
-        (self.home / "muse/workspace/goals/g/files/link.md").symlink_to(
-            self.home / "muse/TOOLS.md"
-        )
+        import os
+        link = self.home / "muse/workspace/goals/g/files/link.md"
+        if os.name == "nt":
+            # Native hardlinks exercise linked-leaf rejection without Developer Mode.
+            os.link(self.home / "muse/TOOLS.md", link)
+        else:
+            link.symlink_to(self.home / "muse/TOOLS.md")
         with self.assertRaises(DomainError):
             self.views.read(
                 {"kind": "goal_file", "id": "g", "resource": "files/link.md"}
             )
         (self.home / "muse/workspace/goals/g/files").rename(self.home / "safe-files")
-        (self.home / "muse/workspace/goals/g/files").symlink_to(
-            self.home / "safe-files"
-        )
+        directory = self.home / "muse/workspace/goals/g/files"
+        if os.name == "nt":
+            import subprocess
+            result = subprocess.run(["cmd.exe", "/c", "mklink", "/J", str(directory),
+                                     str(self.home / "safe-files")], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        else:
+            directory.symlink_to(self.home / "safe-files")
         with self.assertRaises(DomainError):
             self.write()
 

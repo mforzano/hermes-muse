@@ -8,6 +8,30 @@ Inspired by documented Muse behavior: goals and short-lived interests, evidence-
 
 Coverage percentages discussed during planning were estimates, not release quality measurements. Release acceptance is defined by observable behavior and tests.
 
+## Windows adaptation (partial)
+
+The POSIX implementation and business contracts are unchanged. The Windows
+foundation uses `NtCreateFile` with a retained `RootDirectory` for each component,
+then inspects the opened object and rejects reparse points/hardlinked leaves.
+`NtQueryDirectoryFile` enumerates the retained directory directly. `LockFileEx`
+and `UnlockFileEx` preserve the mutations-before-specific lock order, thread
+reentrancy and cleanup. No absolute child opens are substituted for `dir_fd`.
+Directory sharing alone cannot stop attributes-only in-place junction changes;
+ordinary Windows tests exercise that attack against actual read/lock entrypoints.
+
+Native atomic publication/deletion uses exclusive temporary handles, file flush
+and handle-relative NT rename/disposition. Directories deny DELETE sharing but
+permit WRITE sharing for NT rename's internal parent open; reparse/identity checks
+remain. SQLite retains the complete chain and non-deletable verified DB leaf,
+then rechecks the parent before standard mode=ro/query_only filename opening.
+Pinned children keep ancestors nonempty, so NTFS cannot convert them to junctions;
+WRITE sharing preserves normal DB writers. New files/directories receive protected
+private DACLs at creation. Migration/archive rotation and launchers use native
+publication too. Read-only helper connections now close deterministically.
+Full Windows units, pinned-host native smoke and official validation pass locally.
+The branch is not a supported release until POSIX regressions and review complete. No directory-fsync-equivalent durability is claimed. See
+[WINDOWS.md](WINDOWS.md).
+
 ## Installation and ownership
 
 Entry: `hermes plugins install xiaohei-info/hermes-muse --enable`. The first actual plugin load performs locked, idempotent initialization. No model/network call occurs during registration. It creates missing templates without overwriting user documents, registers one Skill (`hermes-muse:companion`), one bounded system prompt section, a small state tool and hooks; creates six native Cron jobs; records their actual IDs and owned files in `muse/install.json`. A running Hermes scheduler is required for background execution. Repeated load/upgrade preserves edits and paused jobs, and never duplicates jobs. Interrupted initialization is reconciled by the per-installation prompt marker (`[hermes-muse:<installation_id>:<key>]`) recorded in `muse/install.json`, not job name alone. Cron jobs set no `workdir`, so Docker/remote terminal backends never `cd` into a host path; 0.3.2 clears the workdir of 0.3.1 jobs in place on load.

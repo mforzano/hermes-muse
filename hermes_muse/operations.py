@@ -15,6 +15,13 @@ INSTRUCTION_CONTENT = {"working_lessons", "tools_note"}
 
 @contextmanager
 def reader(path):
+    import os
+    if os.name == "nt":
+        from .content_io import windows_database
+        with windows_database(path) as db:
+            db.row_factory = sqlite3.Row
+            yield db
+        return
     db = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=10)
     db.row_factory = sqlite3.Row
     try:

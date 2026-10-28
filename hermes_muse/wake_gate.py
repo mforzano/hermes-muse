@@ -111,6 +111,20 @@ def _log(home, entry):
     """One metadata-only JSON line: job, probability, decision, reason and timing. Never message text."""
     try:
         path = log_path(home)
+        if os.name == "nt":
+            from .content_io import Files, revision
+            files = Files(home, workspace="")
+            relative = "logs/" + LOG_NAME
+            try:
+                before = files.read(relative)
+            except FileNotFoundError:
+                before = None
+            raw = (before or b"") + (json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n").encode()
+            if len(raw) > LOG_MAX_BYTES:
+                tail = raw[-LOG_MAX_BYTES // 2:]
+                raw = tail[tail.find(b"\n") + 1:]
+            files.replace(relative, raw, revision(before) if before is not None else "absent")
+            return
         path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
         try:
@@ -123,7 +137,7 @@ def _log(home, entry):
             temporary.write_bytes(tail[tail.find(b"\n") + 1:])  # drop the cut first line
             os.chmod(temporary, 0o600)
             os.replace(temporary, path)
-    except OSError:
+    except (OSError, ValueError):
         pass  # Logging must never decide whether the agent runs.
 
 
@@ -145,14 +159,16 @@ def last_wake(home, job):
 def _records(home, kind):
     """Read-only, lock-free read of one record kind; the gate never takes the mutation lock."""
     path = Path(home) / "muse" / "state.db"
-    with sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=2) as db:
+    from .content_io import readonly_database
+    with readonly_database(path) as db:
         db.execute("PRAGMA query_only=ON")
         return [json.loads(row[0]) for row in db.execute("SELECT data FROM records WHERE kind=?", (kind,))]
 
 
 def _record(home, kind, key, default=0):
     path = Path(home) / "muse" / "state.db"
-    with sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=2) as db:
+    from .content_io import readonly_database
+    with readonly_database(path) as db:
         db.execute("PRAGMA query_only=ON")
         row = db.execute("SELECT data FROM records WHERE kind=? AND id=?", (kind, key)).fetchone()
     return json.loads(row[0]) if row else default

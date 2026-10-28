@@ -19,8 +19,22 @@ if os.environ.get("HERMES_SOURCE"):
     os.environ["PYTHONPATH"] = os.environ["HERMES_SOURCE"] + os.pathsep + os.environ.get("PYTHONPATH", "")
 
 
+def _close_host_logging():
+    # Windows cannot remove scratch profiles while native log lock handles
+    # remain open. Drain asynchronous logging before closing its handlers.
+    import logging
+    module = sys.modules.get("hermes_logging")
+    drain = getattr(module, "drain_log_queue", None)
+    if callable(drain):
+        drain()
+    logging.shutdown()
+
+
 def main():
-    with tempfile.TemporaryDirectory(prefix="hermes-muse-integration-") as temporary:
+    from contextlib import ExitStack
+    with tempfile.TemporaryDirectory(prefix="hermes-muse-integration-") as temporary, ExitStack() as cleanup:
+        if os.name == "nt":
+            cleanup.callback(_close_host_logging)
         base = Path(temporary).resolve()
         homes = [base / "a", base / "b"]
         for home in homes:

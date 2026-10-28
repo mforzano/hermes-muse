@@ -43,7 +43,9 @@ def route_from(info):
 
 class Runtime:
     def __init__(self, ctx, home, *, quiet_seconds=300, plugin_root=ROOT):
-        self.ctx, self.home, self.quiet_seconds = ctx, Path(home).resolve(), quiet_seconds
+        import os
+        native_home = Path(home).absolute() if os.name == "nt" else Path(home).resolve()
+        self.ctx, self.home, self.quiet_seconds = ctx, native_home, quiet_seconds
         self.store = Store(self.home)
         self.host = HermesHost(self.store, plugin_root=plugin_root)
         self.service = Companion(self.store, self.host)

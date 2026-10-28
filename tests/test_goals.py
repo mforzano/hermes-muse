@@ -1,4 +1,5 @@
 import json
+from contextlib import closing
 import sqlite3
 import tempfile
 import unittest
@@ -72,7 +73,7 @@ class GoalTests(unittest.TestCase):
         manifest=self.home/'cache/delegation/live/deleg_fixture/manifest.json'
         manifest.parent.mkdir(parents=True)
         manifest.write_text(json.dumps({'delegation_id':'deleg_fixture','completed':True,'tasks':[{'status':'completed'}]}))
-        with sqlite3.connect(self.home/'state.db') as db:
+        with closing(sqlite3.connect(self.home/'state.db')) as db, db:
             db.execute('CREATE TABLE async_delegations(delegation_id TEXT,state TEXT,result_json TEXT)')
             db.execute("INSERT INTO async_delegations VALUES('deleg_fixture','completed','broken')")
         for result,expected in [('broken','unknown'),('[]','unknown'),('{"results":[]}','unknown'),
@@ -80,7 +81,7 @@ class GoalTests(unittest.TestCase):
                                 ('{"results":[{"status":"failed"}]}','failed'),
                                 ('{"results":[{"status":"completed"}]}','completed')]:
             with self.subTest(result=result):
-                with sqlite3.connect(self.home/'state.db') as db:
+                with closing(sqlite3.connect(self.home/'state.db')) as db, db:
                     db.execute('UPDATE async_delegations SET result_json=?',(result,))
                 self.assertEqual(owner_status(self.home,handle),expected)
                 self.assertEqual(snapshot(self.home,now=self.now)['due_total'],1)
@@ -205,7 +206,7 @@ class GoalTests(unittest.TestCase):
         ledger.capture('memory',{'action':'add','content':'PRIVATE TEST FACT'},{'success':True},session_id='parent',turn_id='remember',tool_call_id='m')
         receipt=self.store.all('memory_feedback')[0]
         ledger.review({'receipt_id':receipt['id'],'expected_revision':receipt['revision'],'request_id':'inform','decision':'inform','reason':'Native save succeeded'},'parent','remember')
-        with sqlite3.connect(self.home/'state.db') as db:
+        with closing(sqlite3.connect(self.home/'state.db')) as db, db:
             db.execute('CREATE TABLE messages(id INTEGER,session_id TEXT,role TEXT,content TEXT,timestamp REAL,tool_calls TEXT,display_kind TEXT)')
             db.execute("INSERT INTO messages VALUES(1,'parent','assistant','已记住。',?,NULL,NULL)",(self.now+1,))
         ledger.finish('parent','remember','已记住。')

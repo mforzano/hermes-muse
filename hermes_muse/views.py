@@ -138,7 +138,8 @@ def validate_tools_note(body):
 
 class Views:
     def __init__(self, home, *, allow_hidden=False, session_id=None, now=None):
-        self.home = Path(home).resolve()
+        import os
+        self.home = Path(home).absolute() if os.name == "nt" else Path(home).resolve()
         self.files = Files(self.home)
         self.allow_hidden = allow_hidden
         self.session_id = session_id
@@ -165,9 +166,17 @@ class Views:
 
     @contextmanager
     def database(self):
+        import os, stat
+        if os.name == "nt":
+            from .content_io import windows_database
+            with windows_database(self.files.root / "state.db") as db:
+                if db.execute("PRAGMA journal_mode").fetchone()[0] == "wal":
+                    raise DomainError("source_unavailable", "Unexpected WAL state; explicit offline repair required")
+                db.execute("BEGIN")
+                yield db
+            return
         # SQLite opens a pinned, no-follow file descriptor, not a re-resolved path.
         # Muse owns a rollback-journal DB; unknown WAL layouts fail closed.
-        import os, stat
 
         with self.files.directory() as parent:
             fd = os.open(

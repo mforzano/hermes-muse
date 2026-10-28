@@ -29,6 +29,22 @@ Muse's Dashboard and Desktop page lets you choose a profile and browse its Feed,
 ![Muse Goals](docs/images/muse-goals.png)
 *Goals lists open goals first, with status, next check and latest progress; done and cancelled goals are folded below.*
 
+## Windows port status
+
+Windows support is **incomplete; do not install this branch into a working profile**.
+Native imports, reentrant/interprocess sidecar locks, bounded file reads and
+handle-based directory listing are implemented for local NTFS with `pywin32>=311`.
+Children are opened relative to retained native directory handles, not by checking
+an absolute path and reopening it. Existing POSIX implementations remain in place.
+
+Atomic replacement/unlink, protected standard SQLite reads/writes, Store
+initialization, private creation ACLs, migration/rollback/re-migration and owned
+launchers now have real native tests. Windows 3.11/3.14 unit and pinned-host CI jobs
+are included. Full Windows units pass on both versions, as do pinned-host native
+smoke and official validation. POSIX regressions and release review remain;
+do not treat this branch or a focused green job as a support declaration.
+See [Windows port details](docs/WINDOWS.md) for tests and remaining contracts.
+
 ## Install
 
 ```sh

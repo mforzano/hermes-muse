@@ -21,6 +21,60 @@ jobs:
         run: python -m pip install tzdata
       - run: python -m unittest discover -s tests -v
       - run: python -m compileall -q hermes_muse tests
+  windows-tests:
+    # Real native/unit coverage; a green job alone is not a support declaration.
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      TMPDIR: ${{ runner.temp }}
+      TEMP: ${{ runner.temp }}
+      TMP: ${{ runner.temp }}
+    strategy:
+      matrix:
+        python: ['3.11', '3.14']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install 'pywin32>=311,<312' 'tzdata>=2025.3,<2027'
+      - run: python -W error -m unittest discover -s tests -p test_windows_compatibility.py -v
+      - run: python tests/run_isolated.py
+      - run: python -m compileall -q hermes_muse tests
+  windows-hermes:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: plugin
+        shell: bash
+    env:
+      TMPDIR: ${{ runner.temp }}
+      TEMP: ${{ runner.temp }}
+      TMP: ${{ runner.temp }}
+      HERMES_IGNORE_USER_CONFIG: '1'
+      HERMES_DISABLE_LAZY_INSTALLS: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: plugin
+      - uses: actions/checkout@v4
+        with:
+          repository: NousResearch/hermes-agent
+          ref: f594424e58f18ebc2607decaa72f300e0a26a24b
+          path: hermes-core
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - run: python -m pip install -e ../hermes-core
+      - run: python tests/native_smoke.py
+        env:
+          HERMES_SOURCE: ${{ github.workspace }}/hermes-core
+      - name: Official plugin validation in a scratch profile
+        run: |
+          MUSE_TEST_HOME=$(mktemp -d)
+          HERMES_HOME="$MUSE_TEST_HOME" hermes plugins validate . --json
   hermes:
     runs-on: ubuntu-latest
     defaults:

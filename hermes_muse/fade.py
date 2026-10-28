@@ -79,10 +79,11 @@ class Fade:
 
     def _query(self, sql, args=()):
         try:
-            with sqlite3.connect(f"file:{self.home / 'muse/state.db'}?mode=ro", uri=True, timeout=2) as db:
+            from .content_io import readonly_database
+            with readonly_database(self.home / "muse/state.db") as db:
                 db.execute("PRAGMA query_only=ON")
                 return [json.loads(r[0]) for r in db.execute(sql, args)]
-        except (sqlite3.Error, ValueError):
+        except (OSError, sqlite3.Error, ValueError):
             self.unsure = True
             return []
 

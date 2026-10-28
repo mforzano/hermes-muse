@@ -38,7 +38,8 @@ def owner_status(home, handle):
         return 'unknown'
     try:
         if path.is_file():
-            with sqlite3.connect(path.as_uri() + '?mode=ro', uri=True) as db:
+            from .content_io import readonly_database
+            with readonly_database(path, timeout=5) as db:
                 db.execute('PRAGMA query_only=ON')
                 if kind == 'cron':
                     row = db.execute('SELECT status FROM executions WHERE job_id=? ORDER BY claimed_at DESC LIMIT 1', (key,)).fetchone()

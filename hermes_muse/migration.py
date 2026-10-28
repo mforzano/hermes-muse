@@ -26,9 +26,17 @@ def migrate(store):
         if previous.get('rolled_back_at'):
             # Keep the completed cycle intact; a downgraded install may have new work.
             with files.directory('archive') as parent:
-                os.rename('followup-0.2.x', 'followup-0.2.x-' + uuid.uuid4().hex,
-                          src_dir_fd=parent, dst_dir_fd=parent)
-                os.fsync(parent)
+                target = 'followup-0.2.x-' + uuid.uuid4().hex
+                if os.name == 'nt':
+                    from .content_io import _windows_child, _windows_rename
+                    source = _windows_child(parent, 'followup-0.2.x', directory=True, delete=True)
+                    try:
+                        _windows_rename(source, parent, target)
+                    finally:
+                        source.Close()
+                else:
+                    os.rename('followup-0.2.x', target, src_dir_fd=parent, dst_dir_fd=parent)
+                    os.fsync(parent)
         records_path = ARCHIVE + '/records.json'
         try:
             records = json.loads(files.read(records_path))

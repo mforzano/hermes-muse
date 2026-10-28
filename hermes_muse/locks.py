@@ -3,7 +3,8 @@
 from contextlib import contextmanager
 import os
 import threading
-import fcntl
+if os.name != "nt":
+    import fcntl
 
 _guard = threading.Lock()
 _locks = {}
@@ -23,8 +24,53 @@ def file_lock(path):
 
 
 @contextmanager
+def _windows_lock(path):
+    import pywintypes
+    import win32con
+    import win32file
+    from .content_io import Files, _windows_child, parts
+
+    if path.parent.name.lower() != "muse":
+        raise ValueError("Lock must belong to the profile Muse root")
+    parts(path.name)
+    with Files(path.parent.parent).directory(create=True) as parent:
+        handle = _windows_child(parent, path.name, create=True, writable=True)
+        overlapped = pywintypes.OVERLAPPED()
+        try:
+            win32file.LockFileEx(handle, win32con.LOCKFILE_EXCLUSIVE_LOCK, 0, 1, overlapped)
+            try:
+                yield
+            finally:
+                win32file.UnlockFileEx(handle, 0, 1, overlapped)
+        finally:
+            handle.Close()
+
+
+def _lock_key(path):
+    path = path.absolute()
+    if os.name == "nt":
+        import pywintypes
+        import win32api
+        missing = []
+        existing = path
+        while True:
+            try:
+                long_path = win32api.GetLongPathName(str(existing))
+                break
+            except pywintypes.error as exc:
+                if exc.winerror not in {2, 3} or existing == existing.parent:
+                    raise
+                missing.append(existing.name)
+                existing = existing.parent
+        path = type(path)(long_path).joinpath(*reversed(missing))
+    # This normalizes spelling only. Secure native traversal still validates
+    # every component when opening the lock; aliases do not authorize a path.
+    return os.path.normcase(str(path))
+
+
+@contextmanager
 def _file_lock(path):
-    key = str(path.absolute())
+    key = _lock_key(path)
     with _guard:
         lock = _locks.setdefault(key, threading.RLock())
     with lock:
@@ -32,6 +78,14 @@ def _file_lock(path):
         _local.held = held
         if key in held:
             yield
+            return
+        if os.name == "nt":
+            with _windows_lock(path):
+                held[key] = True
+                try:
+                    yield
+                finally:
+                    held.pop(key, None)
             return
         path.parent.mkdir(parents=True, exist_ok=True)
         from .content_io import Files

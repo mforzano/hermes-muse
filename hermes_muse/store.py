@@ -56,13 +56,18 @@ def is_background_message(text):
 
 class Store:
     def __init__(self, home):
-        self.home = Path(home).resolve()
+        self.home = Path(home).absolute() if os.name == "nt" else Path(home).resolve()
         self.root = self.home / "muse"
-        if self.root.is_symlink():
-            raise ValueError("Muse state directory must not be a symlink")
-        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if (self.root / "state.db").is_symlink():
-            raise ValueError("Muse state.db must not be a symlink")
+        if os.name == "nt":
+            from .content_io import Files
+            with Files(self.home).directory(create=True):
+                pass
+        else:
+            if self.root.is_symlink():
+                raise ValueError("Muse state directory must not be a symlink")
+            self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if (self.root / "state.db").is_symlink():
+                raise ValueError("Muse state.db must not be a symlink")
         with self.transaction() as db:
             db.execute("CREATE TABLE IF NOT EXISTS records (kind TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(kind,id))")
             version = db.execute("PRAGMA user_version").fetchone()[0]
@@ -82,7 +87,8 @@ class Store:
                 if not row.get("source"):
                     self.put(db, "source_check_legacy", row["id"], row)
                     self.delete(db, "source_check", row["id"])
-        os.chmod(self.root / "state.db", 0o600)
+        if os.name != "nt":
+            os.chmod(self.root / "state.db", 0o600)
 
     def path(self, relative):
         candidate = self.root
@@ -103,23 +109,34 @@ class Store:
                 yield db
 
     @contextmanager
+    def _connection(self):
+        if os.name == "nt":
+            from .content_io import windows_database
+            with windows_database(self.root / "state.db", writable=True, create=True) as db:
+                yield db
+        else:
+            db = sqlite3.connect(self.root / "state.db", timeout=15, isolation_level=None)
+            try:
+                yield db
+            finally:
+                db.close()
+
+    @contextmanager
     def _transaction(self):
-        db = sqlite3.connect(self.root / "state.db", timeout=15, isolation_level=None)
-        try:
-            db.execute("PRAGMA busy_timeout=15000")
-            db.execute("PRAGMA synchronous=FULL")
-            db.execute("BEGIN IMMEDIATE")
-            yield db
-            from .request_context import CURRENT_REQUEST
-            if CURRENT_REQUEST.get():
-                from .content_io import check_cancelled
-                check_cancelled()
-            db.commit()
-        except BaseException:
-            db.rollback()
-            raise
-        finally:
-            db.close()
+        with self._connection() as db:
+            try:
+                db.execute("PRAGMA busy_timeout=15000")
+                db.execute("PRAGMA synchronous=FULL")
+                db.execute("BEGIN IMMEDIATE")
+                yield db
+                from .request_context import CURRENT_REQUEST
+                if CURRENT_REQUEST.get():
+                    from .content_io import check_cancelled
+                    check_cancelled()
+                db.commit()
+            except BaseException:
+                db.rollback()
+                raise
 
     @staticmethod
     def get(db, kind, key, default=None):

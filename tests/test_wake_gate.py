@@ -315,7 +315,15 @@ class WakeGateTests(unittest.TestCase):
 
     def test_log_is_private_bounded_and_rotates(self):
         wake_gate._log(self.home, {"at": 1, "job": "x", "skipped": False})
-        self.assertEqual(oct(wake_gate.log_path(self.home).stat().st_mode & 0o777), "0o600")
+        if os.name == "nt":
+            import win32security
+            sd = win32security.GetFileSecurity(str(wake_gate.log_path(self.home)),
+                                              win32security.DACL_SECURITY_INFORMATION)
+            self.assertTrue(sd.GetSecurityDescriptorControl()[0] & 0x1000)
+            acl = sd.GetSecurityDescriptorDacl()
+            self.assertLessEqual(acl.GetAceCount(), 3)
+        else:
+            self.assertEqual(oct(wake_gate.log_path(self.home).stat().st_mode & 0o777), "0o600")
         pad = "p" * 600
         for i in range(wake_gate.LOG_MAX_BYTES // 600 + 20):
             wake_gate._log(self.home, {"at": i, "job": "x", "skipped": False, "pad": pad})
