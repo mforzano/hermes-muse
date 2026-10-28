@@ -28,9 +28,9 @@ jobs:
       run:
         shell: bash
     env:
-      TMPDIR: ${{ runner.temp }}
-      TEMP: ${{ runner.temp }}
-      TMP: ${{ runner.temp }}
+      TMPDIR: ${{ github.workspace }}/.muse-tmp
+      TEMP: ${{ github.workspace }}/.muse-tmp
+      TMP: ${{ github.workspace }}/.muse-tmp
     strategy:
       matrix:
         python: ['3.11', '3.14']
@@ -39,6 +39,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - run: mkdir -p "$TMPDIR"
       - run: python -m pip install 'pywin32>=311,<312' 'tzdata>=2025.3,<2027'
       - run: python -W error -m unittest discover -s tests -p test_windows_compatibility.py -v
       - run: python tests/run_isolated.py
@@ -50,9 +51,9 @@ jobs:
         working-directory: plugin
         shell: bash
     env:
-      TMPDIR: ${{ runner.temp }}
-      TEMP: ${{ runner.temp }}
-      TMP: ${{ runner.temp }}
+      TMPDIR: ${{ github.workspace }}/.muse-tmp
+      TEMP: ${{ github.workspace }}/.muse-tmp
+      TMP: ${{ github.workspace }}/.muse-tmp
       HERMES_IGNORE_USER_CONFIG: '1'
       HERMES_DISABLE_LAZY_INSTALLS: '1'
     steps:
@@ -67,6 +68,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
+      - run: mkdir -p "$TMPDIR"
       - run: python -m pip install -e ../hermes-core
       - run: python tests/native_smoke.py
         env:
