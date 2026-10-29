@@ -40,6 +40,12 @@ def profile_scope(home):
         reset_hermes_home_override(token)
 
 
+def interrupted():
+    """True when Hermes asked the current tool call to stop."""
+    from tools.interrupt import is_interrupted
+    return is_interrupted()
+
+
 def tolerant(default):
     """Turn a raised host error into `default` (called when callable) and a recorded fault."""
     def wrap(fn):

@@ -19,11 +19,12 @@ def revision(raw):
 
 
 def check_cancelled():
+    from .host import interrupted
     try:
-        from tools.interrupt import is_interrupted
+        stop = interrupted()
     except ImportError:
         return
-    if is_interrupted():
+    if stop:
         raise DomainError(
             "outcome_unknown",
             "Host interrupted this operation; inspect the original request before retry",

@@ -16,11 +16,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - name: Timezone data for Windows calendar tests
-        if: runner.os == 'Windows'
-        run: python -m pip install tzdata
-      - run: python -m unittest discover -s tests -v
-      - run: python -m compileall -q hermes_muse tests
+      - run: python scripts/check_boundaries.py
+      - run: python -m compileall -q hermes_muse dashboard scripts tests
+      - run: node --test tests/page_markdown.test.mjs
   hermes:
     runs-on: ubuntu-latest
     defaults:
@@ -30,6 +28,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: plugin
+          fetch-depth: 0  # store_v2_acceptance exports 0.3.x code from the v0.3.1/v0.3.16 tags
       - uses: actions/checkout@v4
         with:
           repository: NousResearch/hermes-agent
@@ -39,7 +38,11 @@ jobs:
         with:
           python-version: '3.14'
       - run: python -m pip install -e ../hermes-core
-      - run: python tests/native_smoke.py
+      - run: python tests/native_host_contract.py
+      - run: python tests/store_v2_acceptance.py
+      - run: python tests/kernel_acceptance.py
+      - run: python tests/health_acceptance.py
+      - run: python tests/wp6_acceptance.py
       - name: Official plugin validation in a scratch profile
         shell: bash
         run: |
