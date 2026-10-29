@@ -13,15 +13,14 @@ import threading
 import time
 
 from . import health
-from .host.sessions import caller, failed_result
-from .install import migrating
+from .host.sessions import failed_result
+from .install import migrating, owned
 from .kernel import intake
 from .kernel.common import D, clip, patch
 
 log = logging.getLogger(__name__)
 MEMORY_TOOLS = frozenset({"memory", "skill_manage", "hindsight_retain"})
 READ_ACTIONS = frozenset({"list", "view", "read", "search", "get"})
-INTAKE_SCRIPT = "hermes-muse-memory-upkeep.py"
 SHOWN_TITLES = 3
 
 
@@ -55,7 +54,7 @@ class Hooks:
 
     # -- pre_llm_call ---------------------------------------------------------------------------------
     def pre_turn(self, session_id="", **kwargs):
-        if self.closed or not session_id or caller(**kwargs) != "user":
+        if self.closed or not session_id or self.k.adapter.caller(session_id=session_id, **kwargs) != "user":
             return None
         self._cancel(session_id)
         now = self.clock()
@@ -116,7 +115,7 @@ class Hooks:
     # -- post_tool_call -------------------------------------------------------------------------------
     def post_tool(self, tool_name="", args=None, result=None, session_id="", tool_call_id="", **kwargs):
         if (self.closed or tool_name not in MEMORY_TOOLS or not session_id or not tool_call_id
-                or (args or {}).get("action") in READ_ACTIONS or caller(**kwargs) != "user"):
+                or (args or {}).get("action") in READ_ACTIONS or self.k.adapter.caller(session_id=session_id, **kwargs) != "user"):
             return None
         state = receipt_state(result)
         if state:
@@ -127,7 +126,7 @@ class Hooks:
 
     # -- post_llm_call --------------------------------------------------------------------------------
     def post_turn(self, session_id="", **kwargs):
-        if self.closed or not session_id or caller(**kwargs) != "user":
+        if self.closed or not session_id or self.k.adapter.caller(session_id=session_id, **kwargs) != "user":
             return
         self.tick_soon()
         timer = threading.Timer(self.quiet, self.quiet_wake, args=(session_id, self.clock()))
@@ -162,7 +161,7 @@ class Hooks:
             now = self.clock()
             self.k.tick(now)
             if intake.quiet_wake(self.k, last_turn_at, now):
-                job = next((j for j in self.k.adapter.cron.jobs().values() if j.get("script") == INTAKE_SCRIPT), None)
+                job = owned(self.k.adapter, "memory-upkeep")
                 if job:
                     self.k.adapter.cron.wake(job["id"])
         except Exception as exc:

@@ -134,20 +134,15 @@ class HostAdapter:
             self.fault("adapter.now", exc)
             return datetime.now().astimezone()
 
-    def caller(self):
-        """Who is calling a Muse tool now: {platform, private, cron, delegated}; unknown fails closed."""
+    def caller(self, session_id="", **kwargs):
+        """user | cron | child | group | other for the current hook or tool call (host kwargs, never tool
+        arguments); the one classification hooks and tools share. Unknown fails closed as `other`."""
+        from .sessions import caller
         try:
-            from agent.delegation_context import is_delegated_child_context
-            from gateway.session_context import get_session_env
-            from .sessions import GROUP_CHATS
-            platform = get_session_env("HERMES_SESSION_PLATFORM", "")
-            chat_type = get_session_env("HERMES_SESSION_CHAT_TYPE", "").lower()
-            return {"platform": platform, "private": chat_type not in GROUP_CHATS and platform != "curator",
-                    "cron": get_session_env("HERMES_CRON_SESSION", "") == "1" or platform == "cron",
-                    "delegated": is_delegated_child_context()}
+            return caller(stored_source=lambda: self.sessions.source_of(session_id), **kwargs)
         except Exception as exc:
             self.fault("adapter.caller", exc)
-            return {"platform": "", "private": False, "cron": False, "delegated": True}
+            return "other"
 
     def probe(self, **kwargs):
         from .probe import run

@@ -12,7 +12,7 @@ from . import Part, tolerant
 
 # Allowlist, fail closed: an unlisted source is never user authority; probe `signal_purity` reports it.
 USER_SOURCES = frozenset({
-    "cli", "tui", "gui", "desktop", "acp",
+    "cli", "tui", "gui", "desktop", "ios", "acp",
     "telegram", "discord", "whatsapp", "whatsapp_cloud", "slack", "signal", "mattermost", "matrix",
     "email", "sms", "dingtalk", "feishu", "wecom", "weixin", "bluebubbles", "qqbot", "yuanbao",
 })
@@ -42,10 +42,18 @@ SECRETS = [
 ]
 
 
-def caller(platform="", task_id="", parent_session_id="", **_):
+def classify(source):
+    """user | machine | unclassified for a session source or platform; only `user` is signal and authority."""
+    source = str(source or "").lower()
+    return "user" if source in USER_SOURCES else "machine" if source in MACHINE_SOURCES else "unclassified"
+
+
+def caller(platform="", task_id="", parent_session_id="", stored_source=None, **_):
     """Who runs the current hook or tool call: user | cron | child | group | other.
 
     Only `user` (a private turn on a user-surface platform) carries authority or gets injections.
+    `stored_source()` gives the session's `sessions.source` when neither the call nor the session env
+    names a platform (tool handlers get no platform; a plain CLI binds no session env).
     """
     from agent.delegation_context import is_delegated_child_context
     from gateway.session_context import get_session_env
@@ -53,12 +61,12 @@ def caller(platform="", task_id="", parent_session_id="", **_):
         return "child"
     # The gateway binds the session platform, CLI/TUI/desktop bind the session source.
     platform = str(platform or get_session_env("HERMES_SESSION_PLATFORM", "")
-                   or get_session_env("HERMES_SESSION_SOURCE", "")).lower()
+                   or get_session_env("HERMES_SESSION_SOURCE", "") or (stored_source() if stored_source else "")).lower()
     if get_session_env("HERMES_CRON_SESSION", "") == "1" or platform == "cron" or str(task_id or "").startswith("cron:"):
         return "cron"
     if get_session_env("HERMES_SESSION_CHAT_TYPE", "").lower() in GROUP_CHATS:
         return "group"
-    return "user" if platform in USER_SOURCES else "other"
+    return "user" if classify(platform) == "user" else "other"
 
 
 def failed_result(text: str) -> bool:
@@ -163,6 +171,15 @@ class Sessions(Part):
         part = text[offset:offset + length]
         return {"ref": ref, "available": True, "offset": offset, "total": len(text),
                 "text": part, "more": offset + len(part) < len(text)}
+
+    @tolerant(str)
+    def source_of(self, session_id):
+        """`sessions.source` of one session, '' when unknown."""
+        if not session_id or not self.path.exists():
+            return ""
+        with reader(self.path) as db:
+            row = db.execute("SELECT source FROM sessions WHERE id = ?", (str(session_id),)).fetchone()
+        return (row["source"] or "") if row else ""
 
     @tolerant(lambda: None)
     def job_of(self, session_id):

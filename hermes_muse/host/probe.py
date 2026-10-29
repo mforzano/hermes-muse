@@ -15,7 +15,7 @@ from pathlib import Path
 
 from . import PLUGIN
 from .cron import KNOWN_OUTCOMES
-from .sessions import MACHINE_SOURCES, USER_SOURCES
+from .sessions import USER_SOURCES, classify
 
 DAY = 86400
 ODD_NAME = re.compile(r"[<>]|bound method|object at 0x")
@@ -111,13 +111,13 @@ def delivery_target(adapter, **_):
 
 def signal_purity(adapter, now, captured_sources=None, **_):
     """Signals only from user surfaces: kernel-captured sources (if given), Hermes' own machine set, unknown sources."""
-    leaked = sorted({s for s in captured_sources or () if s not in USER_SOURCES})
+    leaked = sorted({s for s in captured_sources or () if classify(s) != "user"})
     try:
         from agent.prompt_caching import MACHINE_PACED_SOURCES
         overlap = sorted(USER_SOURCES & set(MACHINE_PACED_SOURCES))
     except ImportError:
         overlap = []
-    unknown = sorted(s for s in adapter.sessions.sources(now - DAY) if s not in USER_SOURCES | MACHINE_SOURCES)
+    unknown = sorted(s for s in adapter.sessions.sources(now - DAY) if classify(s) == "unclassified")
     detail = (f"captured non-user sources {leaked}; user sources Hermes calls machine-paced {overlap}; "
               f"unclassified sources (ignored) {unknown}"
               + ("" if captured_sources is not None else "; kernel signal sources not supplied"))

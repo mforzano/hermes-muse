@@ -8,7 +8,7 @@ an error is `failing` and flagged for Health after 3 in a row, a clean check is 
 """
 import re
 
-from ..host.sessions import MACHINE_SOURCES, USER_SOURCES
+from ..host.sessions import classify  # noqa: F401 - one classification for intake, goals and the probe
 from .common import H, patch
 
 SOURCE_ID = re.compile(r"[a-z0-9][a-z0-9_.:@-]{0,63}")
@@ -16,11 +16,6 @@ SOURCE_ID = re.compile(r"[a-z0-9][a-z0-9_.:@-]{0,63}")
 INTERVALS = {"calendar": 2 * H, "mail": 30 * 60, "reminders": H, "web": 6 * H, "rss": 6 * H}
 DEFAULT_INTERVAL = H
 LIMITED_AFTER, FAILING_ALERT = 5, 3
-
-
-def classify(session_source):
-    source = str(session_source or "").lower()
-    return "user" if source in USER_SOURCES else "machine" if source in MACHINE_SOURCES else "unclassified"
 
 
 def check_id(source_id):

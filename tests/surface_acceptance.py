@@ -21,8 +21,8 @@ from hermes_muse import surface as s  # noqa: E402
 from hermes_muse.kernel import Kernel, packets  # noqa: E402
 
 FAILED = []
-MAIN_CALL = {"private": True, "cron": False, "delegated": False, "session_id": "chat"}
-CRON_CALL = {"private": True, "cron": True, "delegated": False, "session_id": "cronrun"}
+MAIN_CALL = {"kind": "user", "session_id": "chat"}
+CRON_CALL = {"kind": "cron", "session_id": "cronrun"}
 REMOVED = re.compile(r"\b(notification_(?:add|refresh|review|resolve|prepare|queue|handoff)|source_check|review_complete|"
                      r"run_complete|operations_\w+|finding_record|research_(?:start|status)|content_read|feed_add|feed_list|"
                      r"calendar_window|conversation_read|memory_feedback_review|request_id|signal_id|context\(section)")
@@ -176,13 +176,16 @@ def dynamic(base):
         "cron_goal_create": call("muse_manage", "goal_create", {"title": "t", "criteria": "c"}, CRON_CALL),
         "cron_preferences": call("muse_manage", "preferences", {"start_hour": 8}, CRON_CALL),
         "cron_tools_note": call("muse_manage", "content_write", {"kind": "tools_note", "id": "current", "body": "x", "expected_revision": "absent"}, CRON_CALL),
-        "child_write": call("muse_manage", "idea_add", {"title": "x"}, {**MAIN_CALL, "delegated": True}),
-        "group": call("muse_manage", "read", {"kind": "goal"}, {**MAIN_CALL, "private": False}),
+        "child_write": call("muse_manage", "idea_add", {"title": "x"}, {**MAIN_CALL, "kind": "child"}),
+        "group": call("muse_manage", "read", {"kind": "goal"}, {**MAIN_CALL, "kind": "group"}),
+        "machine_goal_create": call("muse_manage", "goal_create", {"title": "t", "criteria": "c"}, {**MAIN_CALL, "kind": "other"}),
         "main_submit": call("muse_job", "submit", {"packet_id": "p", "results": []}),
     }
     allowed = [call("muse_manage", "content_write", {"kind": "dream", "id": "2026-11-07", "body": "# Dream\n", "expected_revision": "absent"}, CRON_CALL),
-               call("muse_manage", "read", {"kind": "goal"}, {**MAIN_CALL, "delegated": True})]
-    check("S9 authorization: only the private main session changes state; jobs write notes/dreams/alignment and submit; children read",
+               call("muse_manage", "read", {"kind": "goal"}, {**MAIN_CALL, "kind": "child"}),
+               call("muse_manage", "read", {"kind": "goal"}, CRON_CALL)]  # any cron run, also the user's own jobs
+    check("S9 authorization: only the private main session changes state; any cron reads and writes notes/dreams/alignment, "
+          "Muse jobs submit; children read; group and machine callers are refused",
           all(r["code"] == "permission_denied" for r in denied.values()) and all(r["ok"] for r in allowed),
           {n: r.get("code") for n, r in denied.items()})
 
@@ -205,16 +208,27 @@ def native(base):
     (home / "muse").mkdir(parents=True)
     os.environ["HERMES_HOME"] = str(home)
     from hermes_muse.host import HostAdapter
+    from hermes_state import SessionDB
+    SessionDB(db_path=home / "state.db").close()
+    import sqlite3
+    with sqlite3.connect(home / "state.db") as db:  # what Hermes writes before the first tool call of a turn
+        db.executemany("INSERT INTO sessions (id, source, started_at) VALUES (?, ?, 0)",
+                       [("native", "cli"), ("phone", "ios"), ("hook", "webhook"), ("q", "oneshot")])
     adapter = HostAdapter(home)
-    caller = adapter.caller()
+    # Tool handlers get no platform: the session env, then the stored sessions.source decide (same list as Signals).
+    caller = {**{sid: adapter.caller(session_id=sid) for sid in ("native", "phone", "hook", "q", "missing")},
+              **{p: adapter.caller(session_id="x", platform=p) for p in ("cli", "ios", "webhook", "api_server", "kanban", "local")}}
     k = Kernel(home, adapter=adapter)
     out = {job: s.job_output(home, job, kernel=k) for job in ("intake", "nightly", "feed")}
     registered = []
     s.register(SimpleNamespace(register_tool=lambda **kw: registered.append(kw)), k)
     reply = json.loads(registered[0]["handler"]({"action": "read", "data": {"kind": "goal"}}, session_id="native"))
-    check("S10 native: Hermes sanitizers keep every branch; caller() and job entry run on the real adapter; registered handler answers",
+    check("S10 native: Hermes sanitizers keep every branch; caller() allows only USER_SOURCES (CLI via its stored source, ios) "
+          "and refuses machine/unknown callers; job entry runs on the real adapter; registered handler answers",
           kept and all(a.get("type") == "object" for a in anthropic) and all(g.get("properties") for g in gemini)
-          and caller["private"] and not caller["delegated"] and out == {"intake": "", "nightly": "", "feed": ""}
+          and caller == {"native": "user", "phone": "user", "hook": "other", "q": "other", "missing": "other", "cli": "user",
+                         "ios": "user", "webhook": "other", "api_server": "other", "kanban": "other", "local": "other"}
+          and out == {"intake": "", "nightly": "", "feed": ""}
           and [r["name"] for r in registered] == list(s.TOOLS) and reply["ok"],
           {"caller": caller, "faults": list(adapter.faults)[:3], "reply": reply})
 

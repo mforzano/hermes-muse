@@ -142,10 +142,10 @@ def part_hooks(home, ids):
     ctx = Ctx()
     hooks = runtime.register(ctx, plugin_root=ROOT)
     names = [c[0] for c in ctx.calls]
-    check("register: Skill, prompt section, three hooks and unload; no tool while the WP5 surface is absent",
+    check("register: Skill, prompt section, muse_manage + muse_job, three hooks and unload",
           sorted(a[0] for n, a, _ in ctx.calls if n == "register_hook") == ["post_llm_call", "post_tool_call", "pre_llm_call"]
           and "register_skill" in names and "register_system_prompt_section" in names and "on_unload" in names
-          and ("register_tool" in names) == (ROOT / "hermes_muse" / "surface").exists(), names)
+          and [k["name"] for n, _, k in ctx.calls if n == "register_tool"] == ["muse_manage", "muse_job"], names)
 
     first = hooks.pre_turn(session_id="s1", platform="cli")
     text = (first or {}).get("context", "")
@@ -157,8 +157,11 @@ def part_hooks(home, ids):
     others = [hooks.pre_turn(session_id="s2", platform="telegram")]
     del os.environ["HERMES_SESSION_CHAT_TYPE"]
     others += [hooks.pre_turn(session_id="s2", platform="cron"), hooks.pre_turn(session_id="s2", platform="cli", parent_session_id="p"),
-               hooks.pre_turn(session_id="s2", platform="ios")]
-    check("injection: none for group chats, cron runs, delegated children and unclassified platforms", others == [None] * 4, others)
+               hooks.pre_turn(session_id="s2", platform="local"), hooks.pre_turn(session_id="s2", platform="webhook")]
+    check("injection: none for group chats, cron runs, delegated children, unclassified 'local' and machine platforms",
+          others == [None] * 5, others)
+    ios = hooks.pre_turn(session_id="s3", platform="ios")
+    check("injection: the Hermes iOS client is a user surface like cli/desktop", bool(ios and "[Muse] " in ios["context"]), ios)
 
     report = {"schema": 1, "profile": home.name, "generated_at": "now", "generated_ts": time.time(), "level": "high",
               "invariants": [{"id": "probe.delivery_target", "level": "high", "detail": "Bot Chat cwd /workspace missing"}]}
