@@ -43,6 +43,16 @@ hermes plugins install xiaohei-info/hermes-muse --enable
 
 新增系统规则在新会话生效。后台执行需要 Hermes 调度器在线、模型可用；定时检查、研究和内容生成均使用现有模型与工具，按相应服务计费。
 
+## 数据源
+
+Muse 只通过 Hermes 已有的工具读取邮件、日历、提醒和网页，优先级依次为：
+
+1. **Hermes 自带：** `web_search`/`web_extract`，以及内置 Skill `google-workspace`、`himalaya`、`apple-reminders`、`imessage`、`apple-notes`，按各自 Skill 的说明安装和授权。
+2. **Apple PIM**（macOS 日历、提醒、邮件、联系人）：外部 MCP 服务，安装、自检与限制见 [source-apple-pim](skills/companion/references/source-apple-pim.md)。
+3. **个人数据源**（工作系统、内部聊天、具体账号与日历取舍）：只记录在本 profile 的 `muse/TOOLS.md`，格式参照 [sources](skills/companion/references/sources.md) 中的示例；插件不附带任何个人配置。
+
+每个数据源在 `skills/companion/references/` 下都有说明：只读自检、巡检读法、归一化和已知限制。未安装、未登录或未授权的数据源会明确报告为“未连接”并附修复方法，不会静默。安装或升级后请按[数据源验证流程](skills/companion/references/source-verification.md)操作：先暂停两个读数据源的巡检任务，逐个检查 TOOLS.md 声明的数据源，全部连通或明确接受缺口后再恢复，首轮巡检后再核对一次结果。
+
 ## 功能对照
 
 插件在首次加载时配好任务和规则，模型和信息源沿用现有 Hermes 配置，通知默认在当前 profile 的 Bot Chat 中处理。
@@ -173,7 +183,7 @@ $HERMES_HOME/
 ├── plugins/hermes-muse/             # 插件代码与资源
 │   ├── skills/companion/
 │   │   ├── SKILL.md                # 共用操作规程
-│   │   └── references/             # 目标、提醒、记忆、Feed、研究、周／月复盘
+│   │   └── references/             # 目标、提醒、记忆、Feed、研究、周／月复盘、数据源
 │   ├── prompts/                    # 上述 8 份提示词
 │   └── templates/                  # 工作区初始文件
 ├── muse/

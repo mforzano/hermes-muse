@@ -10,6 +10,7 @@ do not perform IO. Hermes owns native memory, skills, providers and permissions.
 
 Choose the relevant procedure:
 - Accepted work and completion: [followup](references/followup.md), [goals](references/goals.md).
+- Data sources, connection checks and post-deployment verification: [sources](references/sources.md), [verification](references/source-verification.md).
 - Calendar windows and source coverage: [calendar](references/calendar.md), [proactivity](references/proactivity.md), [weather](references/weather.md) (only when `weather_context` is on).
 - Content/pages and bounded context: [content](references/content.md), [context](references/context.md), [conversations](references/conversations.md).
 - Memory feedback/forgetting: [memory](references/memory.md).

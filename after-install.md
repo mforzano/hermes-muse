@@ -6,6 +6,8 @@ Patrols deliver selected reminders themselves, without extra delivery Cron jobs.
 
 First plugin load sets up one Skill, one state tool, four conversation hooks, seven prompts and six recurring Cron jobs. Start a new conversation to load the system prompt section; keep the Hermes scheduler running for background work.
 
+Before the patrol relies on your mail, calendars or reminders, ask the assistant to run the companion's data source verification (references/source-verification.md): it checks each source in TOOLS.md read-only and reports connected, not connected or failing with the fix.
+
 No external messaging channel is required. This installer does not present a channel/session picker. See README.md or README.zh-CN.md for the workflow and uninstall instructions.
 
 If this profile has explicit `platform_toolsets` lists, include `muse` in the relevant platform lists so the assistant can call `muse_manage`.

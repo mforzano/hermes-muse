@@ -1,3 +1,11 @@
+# Unreleased — data sources and Apple PIM full EventKit fields
+
+- Data sources are documented as three layers in the companion Skill: Hermes built-in tools and Skills first (`web_search`/`web_extract`, `google-workspace`, `himalaya`, `apple-reminders`, `imessage`, `apple-notes`), Apple PIM as the documented external dependency, and personal sources only in the profile's TOOLS.md. Each procedure gives installation (linked to its Skill or upstream), a read-only self-check, patrol reading, normalization and known limits.
+- A source that is not installed, signed in or permitted is recorded as `unavailable` with a `not connected:` summary and its fix, distinct from a failed read and never silent.
+- New post-deployment verification procedure: pause the two source patrols, check every declared source, resume once each is connected or explicitly accepted, then recheck source_check after the first patrol.
+- Apple PIM calendar receipts are adapted per event. Events with the full EventKit fields (occurrenceDate, isDetached, isRecurring, status, availability, event timezone, original all-day dates) become strict events: cancelled instances are evidence only, busy follows availability, EventKit's 23:59:59 all-day end becomes an exclusive date, and a fully read source can be checked; EXDATE, attendance and UID are reported as known limitations. Receipts without these fields keep the observation mode with unchanged output.
+- Removed internal implementation reports and personal traces from the repository; README reflects the official catalog listing.
+
 # 0.3.16 — preserve native result status in bounded case selection (2026-10-28)
 
 - Fix successful large skill, schema and operation-evidence results being selected as failures after a 2000-character preview broke their JSON structure. Classify the complete structured root locally and return only the failure flag with bounded previews; quoted error words are not current result status. Recognize native bridge inspection calls in their nested function shape.

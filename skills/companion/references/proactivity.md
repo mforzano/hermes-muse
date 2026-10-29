@@ -16,6 +16,8 @@ Classify each potential source before probing it:
 - **In scope, not connected or not authorized:** record unavailable/partial with the missing access and concrete recovery condition. Use source_check only with an actual known stable source identity; otherwise preserve the gap in the run summary without inventing an account/resource. Stop before a protected read; do not trigger authorization. Apply the existing impact, relevance, dedup and notice budget rules to consequential gaps; do not quietly drop a responsibility.
 - **In scope, temporarily failing:** record error/partial without advancing its successful watermark. Correct recoverable errors and retry within this run under existing cooldown/budget rules. Recovered intermediate errors need no notice; unresolved consequential gaps use the existing notice flow and recovery conditions.
 
+Classify each in-scope source as connected, not connected or failing using [sources §Connection states](sources.md#connection-states) and the source's procedure there; a not-connected source is recorded as `unavailable` with its fix, never as a read failure or silence.
+
 blocked_topics filters notification topics, not source access; feed_brief selects Feed subjects, not the patrol boundary. Express source scope here in prose rather than treating either field as a read restriction. This procedure guides the model; it adds no connector polling, new scheduler, schema or access permission.
 
 ## Initiative that earns its place

@@ -43,6 +43,16 @@ Requires Hermes 0.21.5 and the relevant plugin APIs; see the [tested baseline](d
 
 The system prompt section takes effect in new conversations. Background execution requires a running scheduler and an available model. Scheduled checks, research and content generation use the existing model and tools at their normal cost.
 
+## Data sources
+
+Muse reads mail, calendars, reminders and the web only through tools your Hermes already has, in this order:
+
+1. **Hermes built-in:** `web_search`/`web_extract` and the bundled Skills `google-workspace`, `himalaya`, `apple-reminders`, `imessage`, `apple-notes`. Install and authorize them with their own Skill instructions.
+2. **Apple PIM** (macOS Calendar, Reminders, Mail, Contacts): an external MCP server with install, self-check and limits in [source-apple-pim](skills/companion/references/source-apple-pim.md).
+3. **Your own sources** (work systems, internal chat, specific accounts and calendar choices): recorded only in the profile's `muse/TOOLS.md`, following the example in [sources](skills/companion/references/sources.md). The plugin ships no personal configuration.
+
+Each source has a procedure under `skills/companion/references/` with a read-only self-check, patrol reading, normalization and known limits. A source that is not installed, signed in or permitted is reported as *not connected* with its fix, never as a silent gap. After installing or upgrading, follow the [data source verification](skills/companion/references/source-verification.md): pause the two source patrols, check every source declared in TOOLS.md, resume once each is connected or explicitly accepted, and recheck the source results after the first patrol.
+
 ## Feature comparison
 
 The plugin sets up its jobs and rules on first load, using the existing Hermes model and sources, with notifications handled in the current profile's Bot Chat.
@@ -212,7 +222,7 @@ $HERMES_HOME/
 ├── plugins/hermes-muse/             # plugin code and resources
 │   ├── skills/companion/
 │   │   ├── SKILL.md                # shared procedures
-│   │   └── references/             # goals, reminders, memory, Feed, research, governance, communication
+│   │   └── references/             # goals, reminders, memory, Feed, research, governance, communication, data sources
 │   ├── prompts/                    # the eight prompts listed above
 │   └── templates/                  # initial workspace files
 ├── muse/
