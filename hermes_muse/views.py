@@ -10,7 +10,29 @@ import time
 from pathlib import Path
 
 from .content_io import DomainError, Files, revision
-from .store import identifier
+from .store import DAY, identifier
+
+STALE_DAYS = 3        # active goal without a progress entry for this long has stalled
+OVERDUE_GRACE = 3600  # a next check this far in the past was missed, not merely pending a patrol tick
+
+
+def goal_attention(goal, now):
+    """Why an active goal belongs in a briefing: waiting for the user, blocked, missed check, stalled or changed today."""
+    if goal.get("status") != "active":
+        return None
+    last = goal["progress"][-1]["at"] if goal.get("progress") else goal.get("created", now)
+    reasons = [name for name, hit in (
+        ("waiting_user", goal.get("waiting_user")),
+        ("blocked", goal.get("blocked")),
+        ("check_overdue", goal.get("next_check_at", now) <= now - OVERDUE_GRACE),
+        ("stalled", now - last >= STALE_DAYS * DAY),
+        ("changed", bool(goal.get("progress")) and now - last < DAY)) if hit]
+    if not reasons:
+        return None
+    owner = goal.get("owner") or {}
+    waiting_on = ("user" if goal.get("waiting_user") else str(goal["blocked"])[:200] if goal.get("blocked")
+                  else f"{owner['kind']}:{owner['id'][:120]}" if owner.get("kind") else None)
+    return {"reasons": reasons, "waiting_on": waiting_on, "idle_days": int((now - last) // DAY), "last_progress_at": last}
 
 RECORDS = {
     "feed": "feed",
@@ -379,9 +401,9 @@ class Views:
             if type(limit) is not int or not 1 <= limit <= 100:
                 raise DomainError("invalid_argument", "limit must be 1..100")
             status = data.get("status")
-            if status is not None and (kind != "goal" or status not in {"open", "closed", "dormant"}):
+            if status is not None and (kind != "goal" or status not in {"open", "closed", "dormant", "attention"}):
                 raise DomainError(
-                    "invalid_argument", "status=open|closed|dormant applies only to goals"
+                    "invalid_argument", "status=open|closed|dormant|attention applies only to goals"
                 )
             items, goals = [], {}
             for item in self.keys(kind, key):
@@ -460,6 +482,11 @@ class Views:
                             row["fade_wait"] = state["wait"]
                 if status == "dormant":
                     items = [row for row in items if "dormant_since" in row]
+                if status == "attention":
+                    now = self.now if self.now is not None else time.time()
+                    for row in items:
+                        row["attention"] = goal_attention(goals[row["id"]], now)
+                    items = [row for row in items if row["attention"]]
                 # Needs-you, blocked, in progress; closed goals last, newest first.
                 def goal_order(r):
                     if r.get("status") != "active":

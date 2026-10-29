@@ -34,6 +34,28 @@ class GoalTests(unittest.TestCase):
         restarted=self.service.goal_update({'id':'cancel','status':'active','note':'User explicitly restarted tracking'})
         self.assertEqual(restarted['status'],'active')
 
+    def test_attention_lists_only_waiting_blocked_overdue_stalled_or_changed_goals(self):
+        later=self.now+30*86400
+        self.goal('stale');self.service.goal_update({'id':'stale','next_check_at':later})
+        self.now+=4*86400
+        for key in ('quiet','waiting','blocked','changed','overdue','done'):
+            self.goal(key);self.service.goal_update({'id':key,'next_check_at':later})
+        attention=lambda:{r['id']:r['attention'] for r in Views(self.home,now=self.now).read({'kind':'goal','status':'attention'})['items']}
+        self.assertEqual(attention(),{'stale':{'reasons':['stalled'],'waiting_on':None,'idle_days':4,'last_progress_at':self.now-4*86400}})
+        self.service.goal_update({'id':'waiting','waiting_user':True})
+        self.service.goal_update({'id':'blocked','blocked':'Vendor quote pending'})
+        self.service.goal_update({'id':'changed','progress':'Compared three options'})
+        self.service.goal_update({'id':'overdue','next_check_at':self.now-7200})
+        self.service.goal_update({'id':'done','status':'done','note':'Result told to the user'})
+        rows=attention()
+        self.assertEqual(set(rows),{'stale','waiting','blocked','changed','overdue'})
+        self.assertEqual((rows['waiting']['reasons'],rows['waiting']['waiting_on']),(['waiting_user'],'user'))
+        self.assertEqual(rows['blocked']['waiting_on'],'Vendor quote pending')
+        self.assertEqual((rows['changed']['reasons'],rows['changed']['idle_days']),(['changed'],0))
+        self.assertEqual(rows['overdue']['reasons'],['check_overdue'])
+        listed=[r['id'] for r in Views(self.home,now=self.now).read({'kind':'goal','status':'attention'})['items']]
+        self.assertEqual(listed[:2],['waiting','blocked'])
+
     def test_optional_integer_revision_conflict_returns_current_goal(self):
         self.goal();current=self.service.goal_update({'id':'g','note':'Progress'})
         with self.assertRaises(DomainError) as caught:self.service.goal_update({'id':'g','expected_revision':1,'status':'done','note':'Stale'})

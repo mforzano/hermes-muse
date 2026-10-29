@@ -5,6 +5,7 @@
 - New post-deployment verification procedure: pause the two source patrols, check every declared source, resume once each is connected or explicitly accepted, then recheck source_check after the first patrol.
 - Apple PIM calendar receipts are adapted per event. Events with the full EventKit fields (occurrenceDate, isDetached, isRecurring, status, availability, event timezone, original all-day dates) become strict events: cancelled instances are evidence only, busy follows availability, EventKit's 23:59:59 all-day end becomes an exclusive date, and a fully read source can be checked; EXDATE, attendance and UID are reported as known limitations. Receipts without these fields keep the observation mode with unchanged output.
 - Removed internal implementation reports and personal traces from the repository; README reflects the official catalog listing.
+- Briefings gain an optional goals section from `context(section=goal,status=attention)`: only active goals waiting for the user, blocked, with a next check missed by over an hour, without progress for 3+ days, or progressed in the last day, one line each (title, what it waits on, idle days); omitted when nothing qualifies. No new job.
 
 # 0.3.16 — preserve native result status in bounded case selection (2026-10-28)
 
