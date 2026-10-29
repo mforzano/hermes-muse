@@ -22,7 +22,7 @@ with tempfile.TemporaryDirectory(prefix="muse-native-contracts-") as directory:
     shutil.copytree(
         root,
         home / "plugins/hermes-muse",
-        ignore=shutil.ignore_patterns(".git", ".serena", "__pycache__"),
+        ignore=shutil.ignore_patterns(".git", "__pycache__"),
     )
     from hermes_cli.plugins import discover_plugins, invoke_hook
     from tools.registry import registry

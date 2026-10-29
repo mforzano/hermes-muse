@@ -18,7 +18,7 @@ def worker(home):
     source.mkdir(parents=True)
     files=subprocess.check_output(['git','ls-files','--cached','--others','--exclude-standard'],cwd=repo,text=True).splitlines()
     for name in files:
-        if name.startswith('.serena/') or not (repo/name).is_file():continue
+        if not (repo/name).is_file():continue
         (source/name).parent.mkdir(parents=True,exist_ok=True)
         shutil.copy2(repo/name,source/name)
     subprocess.run(['git','init','-q','-b','main'],cwd=source,check=True)

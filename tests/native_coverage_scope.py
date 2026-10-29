@@ -4,7 +4,7 @@ from pathlib import Path
 home=Path(os.environ['HERMES_HOME']);assert home.name.startswith('muse-independent-pages-')
 repo=Path(__file__).resolve().parents[1];sys.path[:0]=[str(repo),str(repo/'tests'),os.environ['HERMES_SOURCE']]
 (home/'config.yaml').write_text('plugins:\n  enabled: [hermes-muse]\ntimezone: UTC\n')
-shutil.copytree(repo,home/'plugins/hermes-muse',ignore=shutil.ignore_patterns('.git','.serena','__pycache__'))
+shutil.copytree(repo,home/'plugins/hermes-muse',ignore=shutil.ignore_patterns('.git','__pycache__'))
 from hermes_cli.plugins import discover_plugins,invoke_hook
 from tools.registry import registry
 from model_tools import handle_function_call
@@ -32,7 +32,7 @@ def check(data):
     return result['result']
 market=check(base)
 # Specialist fixture executes its authored market-only plan. There is no connector call
-# for excluded personal calendars/Cadu, no corresponding source row or gap notice.
+# for excluded personal calendars/messages, no corresponding source row or gap notice.
 assert [r['source']['connection'] for r in rt.store.all('source_check')]==['fixture-market']
 assert not rt.store.all('notification')
 missing=check({**base,'source_id':market['id'],'started_at':started+1,'status':'unavailable',
@@ -58,7 +58,7 @@ one=check({**base,'source':{'connection':'fixture-requested-item','account':'pri
 assert one['last_success_resources']==['event-1']
 assert len(rt.store.all('source_check'))==2
 prefs=rt.store.path('PROACTIVE_PREFERENCES.md')
-text=prefs.read_text().split('## Coverage scope')[0]+'## Coverage scope\n\nMarket research only. Exclude personal calendars and Cadu; explicit accepted goals cover only their specific item.\n'
+text=prefs.read_text().split('## Coverage scope')[0]+'## Coverage scope\n\nMarket research only. Exclude personal calendars and personal messages; explicit accepted goals cover only their specific item.\n'
 prefs.write_text(text);saved=prefs.read_bytes()
 with profile_scope(rt.home):
     jobs=list_jobs(include_disabled=True)

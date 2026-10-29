@@ -24,7 +24,7 @@ with tempfile.TemporaryDirectory(prefix='muse-boundary-') as temporary:
     home.mkdir(parents=True)
     os.environ['HERMES_HOME'] = str(home)
     (home/'config.yaml').write_text('plugins:\n  enabled: [hermes-muse]\ntimezone: UTC\n')
-    shutil.copytree(repo, home/'plugins/hermes-muse', ignore=shutil.ignore_patterns('.git', '.serena', '__pycache__'))
+    shutil.copytree(repo, home/'plugins/hermes-muse', ignore=shutil.ignore_patterns('.git', '__pycache__'))
     from hermes_cli.plugins import discover_plugins, invoke_hook
     from tools.registry import registry
     from model_tools import handle_function_call

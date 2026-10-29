@@ -251,7 +251,7 @@ Precise soft-inbox retention and instructed-read-only disclosures; Cron watch sc
 
 - Preserve the review snapshot boundary across pages and return an explicit continuation instruction. Reject substituting the page checkpoint for the snapshot boundary, caught in a real maintenance run.
 
-- Exclude self-review calls routed through Hermes’s native tool_call dispatcher, as well as direct calls. Mixed batches containing actual mutations remain visible. This closes a gap found during Macmini live acceptance of 0.1.17.
+- Exclude self-review calls routed through Hermes’s native tool_call dispatcher, as well as direct calls. Mixed batches containing actual mutations remain visible. This closes a gap found during live acceptance of 0.1.17.
 
 ## 0.1.17
 

@@ -258,7 +258,7 @@ hermes plugins validate . --json
 
 测试使用临时 profile，不调用真实模型或消息渠道。[验收清单](docs/ACCEPTANCE.md)列出了需要在实际环境检查的项目。
 
-[官方插件目录申请](https://github.com/NousResearch/hermes-agent/pull/134976)正在等待审核；当前可用上面的仓库地址安装。
+Muse 已收录进 Hermes 官方插件目录：`hermes plugins install hermes-muse` 安装目录中审核并固定的版本，可能落后于本仓库；用上面的仓库地址安装可获得最新版本。
 
 MIT 开源协议。
 

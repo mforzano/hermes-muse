@@ -1,7 +1,8 @@
 """Explicit opt-in live read acceptance. No private receipts are written or printed.
 
-Run under the actual Hermes bootstrap; APPLE_PIM_REPO and APPLE_PIM_NODE
-must point to the existing authorized installation. Never run in unit discovery.
+Run under the actual Hermes bootstrap; APPLE_PIM_REPO, APPLE_PIM_NODE and
+APPLE_PIM_BIN_DIR must point to the existing authorized installation (the same
+values as the apple-pim MCP server configuration). Never run in unit discovery.
 """
 import json
 import os
@@ -15,6 +16,7 @@ PROJECT = Path(__file__).resolve().parents[1]
 
 
 def main():
+    os.environ['APPLE_PIM_BIN_DIR']  # Fail before any work when the runner location is not given.
     with tempfile.TemporaryDirectory(prefix='muse-apple-acceptance-') as temporary:
         home = Path(temporary)
         os.environ['HERMES_HOME'] = str(home)
@@ -39,7 +41,7 @@ def main():
             script = r'''
 import { createCLIRunner } from './lib/cli-runner.js';
 const q = JSON.parse(process.env.MUSE_ACCEPTANCE_WINDOW);
-const { runCLI } = createCLIRunner(process.env.HOME + '/.local/bin');
+const { runCLI } = createCLIRunner(process.env.APPLE_PIM_BIN_DIR);
 const auth = await runCLI('calendar-cli', ['auth-status']);
 // Read only after the effective runner route proves authorized.
 if (auth.authorization !== 'authorized') throw new Error('Calendar not authorized');

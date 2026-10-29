@@ -42,7 +42,7 @@ with tempfile.TemporaryDirectory(prefix="muse-native-views-") as temporary:
         shutil.copytree(
             root,
             target / "plugins/hermes-muse",
-            ignore=shutil.ignore_patterns(".git", ".serena", "__pycache__"),
+            ignore=shutil.ignore_patterns(".git", "__pycache__"),
         )
         with profile_scope(target):
             store = Store(target)

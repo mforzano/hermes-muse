@@ -11,7 +11,7 @@ def run(home):
     home.mkdir(parents=True)
     (home / 'config.yaml').write_text('plugins:\n  enabled: [hermes-muse]\ntimezone: UTC\n')
     repo = Path(__file__).resolve().parents[1]
-    shutil.copytree(repo, home / 'plugins/hermes-muse', ignore=shutil.ignore_patterns('.git', '__pycache__', '.serena'))
+    shutil.copytree(repo, home / 'plugins/hermes-muse', ignore=shutil.ignore_patterns('.git', '__pycache__'))
     from cron.executions import create_execution, finish_execution, mark_execution_running
     from hermes_muse.host import profile_scope
     from hermes_cli.plugins import discover_plugins, get_plugin_manager, invoke_hook

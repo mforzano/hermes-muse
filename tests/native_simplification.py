@@ -15,7 +15,7 @@ os.environ['HERMES_DISABLE_LAZY_INSTALLS']='1'
 with tempfile.TemporaryDirectory(prefix='muse-native-scopes-') as folder:
     home=Path(folder);os.environ['HERMES_HOME']=folder
     (home/'config.yaml').write_text('plugins:\n  enabled: [hermes-muse]\ntimezone: UTC\n')
-    shutil.copytree(repo,home/'plugins/hermes-muse',ignore=shutil.ignore_patterns('.git','.serena','__pycache__'))
+    shutil.copytree(repo,home/'plugins/hermes-muse',ignore=shutil.ignore_patterns('.git','__pycache__'))
     from hermes_state import SessionDB
     native=SessionDB(db_path=home/'state.db')
     native.create_session('human',source='cli',chat_type='private')

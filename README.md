@@ -299,7 +299,7 @@ hermes plugins validate . --json
 
 Tests use temporary profiles without real model calls or messaging channels. The [acceptance guide](docs/ACCEPTANCE.md) lists checks for an actual installation.
 
-The [official catalog application](https://github.com/NousResearch/hermes-agent/pull/134976) is pending review. Install from the repository address above in the meantime.
+Muse is listed in the official Hermes plugin catalog: `hermes plugins install hermes-muse` installs the reviewed version pinned there, which can lag behind this repository. The repository address above installs the latest release.
 
 MIT licensed.
 

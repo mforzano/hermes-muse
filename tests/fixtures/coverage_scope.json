@@ -24,7 +24,7 @@
       ],
       "excluded": [
         "personal calendars",
-        "Cadu"
+        "personal messages"
       ],
       "outside_actions": [],
       "rule": "For a specialist role"
@@ -75,7 +75,7 @@
     },
     {
       "id": "reload",
-      "scope_section": "Market events only. Exclude personal calendars and Cadu.",
+      "scope_section": "Market events only. Exclude personal calendars and personal messages.",
       "preserve_preferences_bytes": true,
       "refresh_template_prompt": true,
       "rule": "No new section is required"
