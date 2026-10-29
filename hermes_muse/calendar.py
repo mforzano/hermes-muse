@@ -160,7 +160,7 @@ def event_times(event, resource):
         required_text(event, "occurrence_id")  # Original RECURRENCE-ID, even for a moved exception.
     if event.get("rrule") and not event["recurring"]:
         raise ValueError("Expand recurring masters through the connector's instance query")
-    if event.get("status", "confirmed") not in ({"observed"} if observed else {"confirmed", "tentative", "cancelled"}):
+    if event.get("status", "confirmed") not in ({"observed", "cancelled"} if observed else {"confirmed", "tentative", "cancelled"}):
         raise ValueError("Unknown event status")
     if event["all_day"] and not observed:
         zone = resolve_zone(event if event.get("timezone") else resource)
@@ -308,6 +308,8 @@ def assemble(data, now):
                 check[field] = source[field]
         coverage.append({"source": identity, "title": title, "resources": resources,
                          "page_observations": times, "gaps": problems, "source_check": check})
+        if "known_limitations" in source:
+            coverage[-1]["known_limitations"] = source["known_limitations"]  # Reported, not a coverage gap.
         gaps.extend(problems)
     if data.get("discovery_complete") is not True:
         gaps.append("Connection/account discovery incomplete; other calendar sources may be missing")

@@ -33,13 +33,33 @@ class AppleCalendarTests(unittest.TestCase):
                 'endDate': '2026-10-21T16:00:00Z',
                 'localStart': '2026-10-20 12:00 AM', 'localEnd': '2026-10-22 12:00 AM', **changes}
 
-    def source(self, events=None):
+    def full(self, **changes):
+        # Full EventKit fields, shaped like the real CLI: all-day ends at 23:59:59 of its last day.
+        return {'id': 'full-instance', 'title': 'Synthetic meeting', 'calendarId': 'fixture-calendar',
+                'calendar': 'Synthetic calendar', 'isAllDay': False,
+                'startDate': '2026-10-20T01:00:00Z', 'endDate': '2026-10-20T02:00:00Z',
+                'localStart': '2026-10-20 9:00 AM', 'localEnd': '2026-10-20 10:00 AM',
+                'timeZone': 'Asia/Shanghai', 'occurrenceDate': '2026-10-20T01:00:00Z',
+                'isDetached': False, 'isRecurring': False, 'status': 'none', 'availability': 'busy',
+                'calendarSourceId': 'synthetic-source', **changes}
+
+    def full_all_day(self, **changes):
+        # Floating all-day events carry no timeZone key at all.
+        return {key: value for key, value in self.full(**{'id': 'full-day', 'isAllDay': True, 'startDate': '2026-10-19T16:00:00Z',
+                            'endDate': '2026-10-20T15:59:59Z', 'localStart': '2026-10-20 12:00 AM',
+                            'localEnd': '2026-10-20 11:59 PM', 'occurrenceDate': '2026-10-19T16:00:00Z',
+                            'allDayStart': '2026-10-20', 'allDayEnd': '2026-10-20', 'availability': 'notSupported',
+                            'timeZone': None, **changes}).items() if value is not None}
+
+    def source(self, events=None, inventory_source_id=False):
+        calendar = {'id': 'fixture-calendar', 'title': 'Synthetic calendar', 'source': 'Synthetic source', 'type': 'caldav'}
+        if inventory_source_id:
+            calendar['sourceId'] = 'synthetic-source'
         return {'source': {'connection': 'apple-pim', 'account': 'eventkit-local-store',
                            'resource': self.query['source_resource']},
                 'title': 'Apple synthetic', 'receipt_format': 'apple-pim',
                 'device_timezone': {'timezone': 'Asia/Shanghai', 'timezone_kind': 'iana'},
-                'inventory': {'pages': [self.page([{'id': 'fixture-calendar', 'title': 'Synthetic calendar',
-                                                  'source': 'Synthetic source', 'type': 'caldav'}])]},
+                'inventory': {'pages': [self.page([calendar])]},
                 'calendars': [{'resource_id': 'fixture-calendar', 'window': self.query,
                                'pages': [self.page([self.raw()] if events is None else events)]}]}
 
@@ -145,6 +165,76 @@ class AppleCalendarTests(unittest.TestCase):
         result = self.view(source)
         self.assertFalse(result['complete'])
         self.assertFalse(result['events'])
+
+    def full_event(self, result, event_id):
+        return next(row for row in result['events'] if row['event']['id'] == event_id)
+
+    def test_full_fields_produce_strict_events_and_checked_coverage(self):
+        timed = self.full()
+        day = self.full_all_day()
+        result = self.view(self.source([timed, day], inventory_source_id=True))
+        self.assertTrue(result['complete'], result['gaps'])
+        coverage = result['coverage'][0]
+        self.assertEqual(coverage['source_check']['status'], 'checked')
+        self.assertTrue(any('EXDATE' in note for note in coverage['known_limitations']))
+        row = self.full_event(result, 'full-instance')
+        self.assertNotIn('time_basis', row['event'])
+        self.assertEqual(row['event']['timezone'], 'Asia/Shanghai')
+        self.assertTrue(row['event']['busy'])
+        self.assertEqual(row['event']['original'], timed)
+        all_day = self.full_event(result, 'full-day')
+        # 23:59:59 last-day end becomes Muse's exclusive end date; floating dates use the device zone.
+        self.assertEqual(all_day['all_day_dates'], {'start': '2026-10-20', 'end_exclusive': '2026-10-21',
+                                                    'timezone': 'Asia/Shanghai'})
+        self.assertEqual(all_day['event']['timezone_basis'], 'floating-device')
+        self.assertNotIn('display_all_day_dates', all_day)
+        busy_days = [day for day in result['days'] if day['busy']]
+        self.assertEqual([[result['events'][i]['event']['id'] for i in day['busy']] for day in busy_days], [['full-instance']])
+
+    def test_empty_full_inventory_is_checked(self):
+        result = self.view(self.source([], inventory_source_id=True))
+        self.assertTrue(result['complete'], result['gaps'])
+        self.assertEqual(result['coverage'][0]['source_check']['status'], 'checked')
+
+    def test_cancelled_events_are_not_live_commitments(self):
+        cancelled = self.full(status='canceled', preparation={'reason': 'Synthetic booking evidence'})
+        result = self.view(self.source([cancelled], inventory_source_id=True))
+        self.assertEqual(result['events'][0]['event']['status'], 'cancelled')
+        self.assertFalse(any(day['events'] or day['busy'] for day in result['days']))
+        self.assertEqual(result['preparation_candidates'], [])
+        # A cancellation is honoured even when other full fields were filtered out.
+        partial = self.view(self.source([self.raw(status='canceled')]))
+        self.assertEqual(partial['events'][0]['event']['status'], 'cancelled')
+        self.assertFalse(any(day['events'] for day in partial['days']))
+
+    def test_recurring_and_detached_instances_keep_original_occurrence(self):
+        first = self.full(isRecurring=True, recurrence=[{'frequency': 'daily', 'interval': 1}])
+        moved = self.full(isRecurring=True, isDetached=True, recurrence=first['recurrence'],
+                          startDate='2026-10-21T03:00:00Z', endDate='2026-10-21T04:00:00Z',
+                          localStart='2026-10-21 11:00 AM', localEnd='2026-10-21 12:00 PM',
+                          occurrenceDate='2026-10-21T01:00:00Z')
+        result = self.view(self.source([first, moved], inventory_source_id=True))
+        self.assertEqual([row['event']['occurrence_id'] for row in result['events']],
+                         ['2026-10-20T01:00:00Z', '2026-10-21T01:00:00Z'])
+        self.assertTrue(result['complete'], result['gaps'])
+
+    def test_availability_drives_busy(self):
+        for availability, busy in (('busy', True), ('unavailable', True), ('tentative', True), ('free', False)):
+            with self.subTest(availability=availability):
+                result = self.view(self.source([self.full(availability=availability)], inventory_source_id=True))
+                self.assertIs(result['events'][0]['event']['busy'], busy)
+        observed = self.view(self.source([self.raw(isAllDay=False, availability='busy')]))
+        self.assertTrue(observed['events'][0]['event']['busy'])
+        self.assertEqual(observed['events'][0]['event']['status'], 'observed')
+
+    def test_mixed_or_unusable_full_fields_fall_back_to_observation(self):
+        result = self.view(self.source([self.full(), self.raw()]))
+        self.assertFalse(result['complete'])
+        self.assertTrue(any('fields filter' in gap for gap in result['gaps']))
+        self.assertEqual(self.full_event(result, 'fixture-instance')['event']['time_basis'], 'apple-pim-observed')
+        fallback = self.view(self.source([self.full(timeZone='GMT+0800')], inventory_source_id=True))
+        self.assertEqual(fallback['events'][0]['event']['time_basis'], 'apple-pim-observed')
+        self.assertFalse(fallback['complete'])
 
 
 if __name__ == '__main__':
