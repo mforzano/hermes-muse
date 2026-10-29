@@ -42,6 +42,25 @@ SECRETS = [
 ]
 
 
+def caller(platform="", task_id="", parent_session_id="", **_):
+    """Who runs the current hook or tool call: user | cron | child | group | other.
+
+    Only `user` (a private turn on a user-surface platform) carries authority or gets injections.
+    """
+    from agent.delegation_context import is_delegated_child_context
+    from gateway.session_context import get_session_env
+    if parent_session_id or is_delegated_child_context():
+        return "child"
+    # The gateway binds the session platform, CLI/TUI/desktop bind the session source.
+    platform = str(platform or get_session_env("HERMES_SESSION_PLATFORM", "")
+                   or get_session_env("HERMES_SESSION_SOURCE", "")).lower()
+    if get_session_env("HERMES_CRON_SESSION", "") == "1" or platform == "cron" or str(task_id or "").startswith("cron:"):
+        return "cron"
+    if get_session_env("HERMES_SESSION_CHAT_TYPE", "").lower() in GROUP_CHATS:
+        return "group"
+    return "user" if platform in USER_SOURCES else "other"
+
+
 def failed_result(text: str) -> bool:
     """A native tool result whose JSON root reports failure (never words quoted in its body)."""
     try:
