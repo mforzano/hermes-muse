@@ -78,6 +78,11 @@ const MUSE_CSS = `
 .muse-empty strong{display:block;margin-bottom:4px;color:var(--muse-fg)}
 .muse-empty .muse-btn{margin-top:12px}
 .muse-alert{border-style:solid;border-color:var(--muse-danger)}
+.muse-health{margin:12px 0;padding:12px 16px;border:1px solid var(--muse-border);border-radius:var(--muse-radius);background:var(--muse-card)}
+.muse-health.high{border-color:var(--muse-danger)}
+.muse-health.medium{border-color:var(--muse-warn)}
+.muse-health summary{display:flex;flex-wrap:wrap;align-items:center;gap:8px;cursor:pointer}
+.muse-health ul{margin:8px 0 0;padding-left:20px;font-size:.85rem;color:var(--muse-soft)}
 .muse-article-head{margin:0 0 24px;padding-bottom:16px;border-bottom:1px solid var(--muse-border)}
 .muse-detail-title{margin:16px 0 8px;font-size:1.5rem;line-height:1.3}
 .muse-detail-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:24px;padding-top:16px;border-top:1px solid var(--muse-border)}
@@ -255,6 +260,7 @@ function makeMusePage(React, useScope, request, draft, profileAdmin) {
     const [article, setArticle] = React.useState(null);
     const [error, setError] = React.useState('');
     const [busy, setBusy] = React.useState(false);
+    const [health, setHealth] = React.useState(null);
     const generation = React.useRef(0);
     const identity = scope.key + ':' + tab + ':' + query + ':' + topic;
     const active = React.useRef(identity);
@@ -302,6 +308,13 @@ function makeMusePage(React, useScope, request, draft, profileAdmin) {
       setCounts({});
       Promise.all([['feed',{}],['ideas',{}],['goals',{status:'open'}],['closed',{status:'closed'}]].map(([name,extra])=>
         request('/'+(name==='closed'?'goals':name)+'?'+new URLSearchParams({limit:'1',...extra}), scope).then(v=>live&&scope.current()&&setCounts(c=>({...c,[name]:v.total}))).catch(()=>{})));
+      return ()=>{live=false;};
+    }, [scope.key, ready]);
+    React.useEffect(() => {
+      if (!ready) return;
+      let live = true;
+      setHealth(null);
+      request('/health', scope).then(v=>live&&scope.current()&&setHealth(v)).catch(()=>{});
       return ()=>{live=false;};
     }, [scope.key, ready]);
     async function open(item, continuation) {
@@ -410,6 +423,17 @@ function makeMusePage(React, useScope, request, draft, profileAdmin) {
           h('ul', {className:'muse-list', 'aria-label':'Closed goals'}, ...currentClosed.items.map(goalRow))),
         closedOpen && currentClosed?.next_cursor && button('Load more closed goals',()=>loadClosed(currentClosed.next_cursor),busy,'text'));
     }
+    // Last health check (muse/health.json); the dashboard never runs one.
+    const healthPanel = report => {
+      if (report.available === false) return h('section', {className:'muse-health', 'aria-label':'Muse health'}, h('span', {className:'muse-sub'}, 'Health: no check has run in this profile yet.'));
+      const findings = (report.invariants || []).filter(f=>f.level !== 'ok').sort((a,b)=>['info','low','medium','high'].indexOf(b.level)-['info','low','medium','high'].indexOf(a.level));
+      const tone = {high:'danger', medium:'warn', ok:'ok'}[report.level] || '';
+      return h('section', {className:'muse-health '+(report.level||''), 'aria-label':'Muse health'},
+        h('details', {open:report.level === 'high'},
+          h('summary', null, h('strong', null, 'Health'), badge(report.level || 'unknown', tone),
+            h('span', {className:'muse-sub'}, 'checked ' + new Date(report.generated_at).toLocaleString() + (findings.length ? ' · ' + plural(findings.length, 'finding') : ''))),
+          findings.length > 0 && h('ul', null, ...findings.map(f=>h('li', {key:f.id}, h('strong', null, f.level + ' ' + f.id), ': ' + f.detail + (f.fix ? ' — Fix: ' + f.fix : ''))))));
+    };
     const label = {feed:'Feed', ideas:'Ideas', goals:'Goals'};
     const state = selectedRow && (selectedRow.enabled ? 'Enabled' : selectedRow.installed ? 'Disabled' : 'Not installed');
     return h('main', {className:'muse-root'},
@@ -427,6 +451,7 @@ function makeMusePage(React, useScope, request, draft, profileAdmin) {
       profileAdmin && !ready && empty(selectedRow ? 'Muse is not enabled for this profile' : 'No profile selected', selectedRow ? 'Install and enable Muse in that profile with Hermes plugin management (hermes -p <profile> plugins), then browse its Feed, Ideas and Goals here.' : 'Choose a profile to browse its Feed, Ideas and Goals.'),
       ready && h('nav', {'aria-label':'Muse sections', className:'muse-tabs'},
         ...['feed','ideas','goals'].map(name => h('button', {key:name, type:'button', className:'muse-tab', 'aria-pressed':tab===name, 'aria-label':label[name], onClick:()=>setTab(name)}, label[name], counts[name] !== undefined && h('span', {className:'muse-count'}, counts[name])))),
+      ready && health && healthPanel(health),
       ready && tab === 'feed' && !currentArticle && h('form', {className:'muse-toolbar', onSubmit:e=>{e.preventDefault(); setQuery(draftQuery.trim());}},
         h('label', {className:'muse-search'}, icon([h('circle',{key:'c',cx:7,cy:7,r:4.5}), h('path',{key:'p',d:'M10.5 10.5L14 14'})]),
           h('input', {className:'muse-input', type:'search', 'aria-label':'Search articles', value:draftQuery, placeholder:'Search title or keyword', onChange:e=>setDraftQuery(e.target.value)})),

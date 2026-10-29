@@ -143,11 +143,10 @@ def main():
         check("injection exit: stale health.json is itself an alert", "has not run since" in (stale or ""), {"line": stale})
 
         import importlib.util
-        from types import SimpleNamespace
         spec = importlib.util.spec_from_file_location("muse_dashboard_api", PROJECT / "dashboard" / "plugin_api.py")
         api = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(api)
-        api.view = lambda selected_profile=None: SimpleNamespace(home=home)  # skip the host install lookup
+        api.home = lambda selected_profile=None: home  # skip the host install lookup
         served = api.health()
         check("dashboard exit: /health serves health.json", served == health.load(home)
               and any(r.path.endswith("/health") for r in api.router.routes), {"level": served.get("level")})
