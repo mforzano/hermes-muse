@@ -9,6 +9,7 @@ from .conversation import _merge
 
 COLLECTIONS = ('goal', 'feed', 'interest', 'idea', 'notice', 'run', 'source_check', 'finding', 'research')
 JOBS = ('memory-upkeep', 'nightly-review')
+EDGE = 24000  # head and tail read that confirms an oversized original
 
 
 def limit(data):
@@ -89,7 +90,11 @@ def signals(service, data):
         refs=[{'id':r['id'],'created':r['created'],'revision':signal_revision(r),'total_chars':None if r.get('truncated') else len(r['text']),
                'requires_original':bool(r.get('truncated'))} for r in sorted(selected.values(),key=lambda r:(r['created'],r['id']))]
         through=service.clock(); token=revision(canonical([Views(store.home).scope(),job,through,refs]))
-        store.write('review_window',token,{'job':job,'scope':Views(store.home).scope(),'through':through,'refs':refs,'served':{},'originals':{},'selection':'oldest-and-newest'})
+        # Reading progress on an unchanged signal carries over from earlier windows instead of restarting at 0.
+        progress={r['id']:p for r in refs if (p:=store.read('signal_read',r['id'])) and p['revision']==r['revision']}
+        store.write('review_window',token,{'job':job,'scope':Views(store.home).scope(),'through':through,'refs':refs,
+                    'served':{i:p['served'] for i,p in progress.items()},
+                    'originals':{i:p['original'] for i,p in progress.items() if p.get('original')},'selection':'oldest-and-newest'})
     with store.transaction() as db:
         window=store.get(db,'review_window',token)
         if not window or window['scope']!=Views(store.home).scope() or window['job']!=job:
@@ -128,7 +133,9 @@ def signals(service, data):
             part={'id':ident,'session_id':row['session_id'],'body':text[offset:end],'offset':offset,
                   'next_offset':end if end<len(text) else None,'total_chars':len(text),'revision':ref['revision']}
             if original:part['message_id']=original['message_id']
-            if end>offset:window['served'][ident]=_merge(window['served'].get(ident,[])+[[offset,end]])
+            if end>offset:
+                window['served'][ident]=_merge(window['served'].get(ident,[])+[[offset,end]])
+                store.put(db,'signal_read',ident,{'revision':ref['revision'],'served':window['served'][ident],'original':window['originals'].get(ident)})
             pieces.append(part);budget-=end-offset
             if budget<=0:break
         from .responses import require_fit
@@ -147,6 +154,7 @@ def check_review(service, data, db, old, up_to, through):
     if ids is None:ids=[r['id'] for r in row['refs'] if r['created']<=up_to]
     if not isinstance(ids,list) or any(not isinstance(i,str) or i not in refs for i in ids):
         raise DomainError('invalid_argument','data.ids must name actually processed signals in this scope')
+    partial={}
     for ident in set(ids):
         ref=refs[ident];signal=service.store.get(db,'signal',ident)
         if not signal or signal_revision(signal)!=ref['revision']:
@@ -158,12 +166,17 @@ def check_review(service, data, db, old, up_to, through):
                 raise DomainError('source_unavailable','Read the actual original before confirming this signal')
             size=original['total_chars']
         covered=row['served'].get(ident,[])
-        if size and (not covered or covered[0][0]!=0 or covered[0][1]<size):
-            raise DomainError('revision_required','Read the complete selected signal before confirming it')
+        # A pasted attachment or dump: its first and last EDGE characters carry the user's intent.
+        spans=[[0,EDGE],[size-EDGE,size]] if size and size>2*EDGE else [[0,size]] if size else []
+        if any(not any(a<=lo and hi<=b for a,b in covered) for lo,hi in spans):
+            raise DomainError('revision_required','Read the complete selected signal before confirming it'
+                              +(f' (over {2*EDGE} characters: its first and last {EDGE} characters suffice)' if size and size>2*EDGE else ''))
+        partial[ident]=bool(size and size>2*EDGE)
     for ident in set(ids):
         signal=service.store.get(db,'signal',ident)
-        signal['upkeep']={'at':service.clock(),'revision':refs[ident]['revision']}
+        signal['upkeep']={'at':service.clock(),'revision':refs[ident]['revision'],**({'partial_read':True} if partial[ident] else {})}
         service.store.put(db,'signal',ident,signal)
+        service.store.delete(db,'signal_read',ident)
     # Cursor only describes a real continuous prefix. Later processed IDs survive separately.
     all_rows=sorted((r for r in service.store.rows(db,'signal') if not is_background_message(r.get('text'))),key=lambda r:(r['created'],r['id']))
     cursor=old

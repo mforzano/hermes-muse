@@ -12,7 +12,7 @@
 
 1. Hourly intake opens `context {section:signals,job:memory-upkeep}` and keeps its window. The scope mixes old pending and new signals; backlog is separate.
 2. Use `{section:signals,job:memory-upkeep,window,ids:[...]}` for batches of short bodies, or id/offset/length for long originals. A batch may return an individual gap without blocking other IDs. Follow each returned next_offset; an index or excerpt is not review.
-3. Save actual facts/decisions and call `review_complete {job:memory-upkeep,window,ids:[actually processed IDs],summary}`. Only complete served originals can receive a revision-bound upkeep marker. Old unread signals remain and cannot be crossed by the continuous timestamp cursor; later processed IDs will not be reprocessed.
+3. Save actual facts/decisions and call `review_complete {job:memory-upkeep,window,ids:[actually processed IDs],summary}`. Only complete served originals can receive a revision-bound upkeep marker; an original over 48,000 characters needs only its first and last 24,000 characters and is marked `partial_read`. Pages read in an earlier window of the same unchanged signal still count. Old unread signals remain and cannot be crossed by the continuous timestamp cursor; later processed IDs will not be reprocessed.
 4. A changed selected original invalidates that scope. Unselected history is still pending, not certified read. Nightly has no second intake queue: `signals` with job=nightly-review gives synthesis guidance; a specific id reads original evidence without processing it.
 
 ## Revisions, findings and retries

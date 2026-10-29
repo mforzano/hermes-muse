@@ -586,6 +586,24 @@ class CompanionTests(unittest.TestCase):
         self.assertEqual(self.service.context()['nightly_user_signals'],[])
 
 
+    def test_oversized_signal_confirms_from_head_and_tail_with_progress_across_windows(self):
+        from hermes_muse.context_pages import context
+        from hermes_muse.content_io import DomainError
+        big={**self.store.read('signal',self.signal),'id':'big','text':'Decision: keep the demo. '+'d'*59975,'truncated':False}
+        self.store.write('signal','big',big)
+        read=lambda scope,offset,length=20000:context(self.service,{'section':'signals','job':'memory-upkeep','window':scope['window'],'id':'big','offset':offset,'length':length})
+        first=context(self.service,{'section':'signals','job':'memory-upkeep'})
+        read(first,0)
+        second=context(self.service,{'section':'signals','job':'memory-upkeep'})  # next run: progress is kept
+        read(second,20000,4000)
+        with self.assertRaises(DomainError) as missing:
+            self.service.review_complete({'job':'memory-upkeep','window':second['window'],'ids':['big'],'summary':'Head only'})
+        self.assertIn('first and last 24000', str(missing.exception))
+        read(second,36000);read(second,56000,4000)
+        self.service.review_complete({'job':'memory-upkeep','window':second['window'],'ids':['big'],'summary':'Pasted data; decision saved'})
+        self.assertTrue(self.store.read('signal','big')['upkeep']['partial_read'])
+        self.assertIsNone(self.store.read('signal_read','big'))
+
     def test_forget_removes_indexed_derivatives_without_erasure_claim(self):
         self.service.interest_record({"id": "topic", "title": "Topic", "signal_id": self.signal})
         row = self.notice(interest_id="topic")
