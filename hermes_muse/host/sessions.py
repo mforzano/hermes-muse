@@ -52,21 +52,28 @@ def caller(platform="", task_id="", parent_session_id="", stored_source=None, **
     """Who runs the current hook or tool call: user | cron | child | group | other.
 
     Only `user` (a private turn on a user-surface platform) carries authority or gets injections.
-    `stored_source()` gives the session's `sessions.source` when neither the call nor the session env
-    names a platform (tool handlers get no platform; a plain CLI binds no session env).
+    `stored_source()` is the session's `sessions.source`, Hermes' final classification of the session
+    (e.g. `oneshot` for `hermes -q` although the env says cli): when the row exists it decides; the call's
+    platform or the session env (which a child process may simply inherit) can only narrow it, never widen it.
+    Without a row only the host's own `platform` kwarg of this call counts (hooks get it; tool calls never
+    run before Hermes writes the row); an env value alone is not evidence. Otherwise: missing, refused.
     """
     from agent.delegation_context import is_delegated_child_context
     from gateway.session_context import get_session_env
     if parent_session_id or is_delegated_child_context():
         return "child"
+    stored = str((stored_source() if stored_source else "") or "").lower()
     # The gateway binds the session platform, CLI/TUI/desktop bind the session source.
-    platform = str(platform or get_session_env("HERMES_SESSION_PLATFORM", "")
-                   or get_session_env("HERMES_SESSION_SOURCE", "") or (stored_source() if stored_source else "")).lower()
-    if get_session_env("HERMES_CRON_SESSION", "") == "1" or platform == "cron" or str(task_id or "").startswith("cron:"):
+    named = str(platform or get_session_env("HERMES_SESSION_PLATFORM", "")
+                or get_session_env("HERMES_SESSION_SOURCE", "")).lower()
+    if (get_session_env("HERMES_CRON_SESSION", "") == "1" or "cron" in (named, stored)
+            or str(task_id or "").startswith("cron:")):
         return "cron"
     if get_session_env("HERMES_SESSION_CHAT_TYPE", "").lower() in GROUP_CHATS:
         return "group"
-    return "user" if classify(platform) == "user" else "other"
+    if not stored:
+        return "user" if classify(platform) == "user" else "other"
+    return "user" if classify(stored) == "user" and classify(named or stored) == "user" else "other"
 
 
 def failed_result(text: str) -> bool:

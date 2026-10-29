@@ -229,9 +229,16 @@ def native(base):
         db.executemany("INSERT INTO sessions (id, source, started_at) VALUES (?, ?, 0)",
                        [("native", "cli"), ("phone", "ios"), ("hook", "webhook"), ("q", "oneshot")])
     adapter = HostAdapter(home)
-    # Tool handlers get no platform: the session env, then the stored sessions.source decide (same list as Signals).
+    # Isolated from the shell that runs the test: no inherited session env, only this temporary home's state.db.
+    for name in [n for n in os.environ if n.startswith("HERMES_SESSION_") or n in ("HERMES_CRON_SESSION", "HERMES_PLATFORM")]:
+        del os.environ[name]
+    # Tool handlers get no platform: the stored sessions.source decides (same USER_SOURCES list as Signals).
     caller = {**{sid: adapter.caller(session_id=sid) for sid in ("native", "phone", "hook", "q", "missing")},
               **{p: adapter.caller(session_id="x", platform=p) for p in ("cli", "ios", "webhook", "api_server", "kanban", "local")}}
+    # An inherited env naming a user surface never widens a stored machine source and never stands in for a missing row.
+    os.environ["HERMES_SESSION_SOURCE"] = "cli"
+    inherited = {sid: adapter.caller(session_id=sid) for sid in ("native", "hook", "q", "missing")}
+    del os.environ["HERMES_SESSION_SOURCE"]
     k = Kernel(home, adapter=adapter)
     out = {job: job_output(k, key) for key, (job, _, _) in install.JOBS.items() if job in ("intake", "nightly", "feed")}
     registered = []
@@ -242,9 +249,10 @@ def native(base):
           kept and all(a.get("type") == "object" for a in anthropic) and all(g.get("properties") for g in gemini)
           and caller == {"native": "user", "phone": "user", "hook": "other", "q": "other", "missing": "other", "cli": "user",
                          "ios": "user", "webhook": "other", "api_server": "other", "kanban": "other", "local": "other"}
+          and inherited == {"native": "user", "hook": "other", "q": "other", "missing": "other"}
           and out == {"intake": "", "nightly": "", "feed": ""}
           and [r["name"] for r in registered] == list(s.TOOLS) and reply["ok"],
-          {"caller": caller, "faults": list(adapter.faults)[:3], "reply": reply})
+          {"caller": caller, "inherited_env_cli": inherited, "faults": list(adapter.faults)[:3], "reply": reply})
 
 
 def main():
