@@ -11,7 +11,7 @@ import json
 import statistics
 
 from . import goals, intake, notifier, review, sources
-from .common import D, H, clip, patch
+from .common import D, H, clip, patch, preferences
 from .store import notice_key
 
 EXCERPT_TOTAL = 24000
@@ -40,7 +40,9 @@ SCHEMAS = {  # design 2.6: one result shape per item kind group
                   facts={"type": "array", "items": S, "maxItems": 20},
                   goal_hint={"type": "string", "description": "an open goal id, or 'new' to propose a goal"}),
     "patrol": obj(["candidate_ref", "verdict"], candidate_ref=REF, verdict=enum(*notifier.VERDICTS),
-                  text={"type": "string", "maxLength": notifier.TEXT_MAX}, priority=enum(*notifier.PRIORITIES)),
+                  text={"type": "string", "maxLength": notifier.TEXT_MAX}, priority=enum(*notifier.PRIORITIES),
+                  topic={"type": "string", "maxLength": 100,
+                         "description": "short topic label; the exact context.blocked_topics entry when the item is about one"}),
     "goals": obj([], goal_id=REF, assessment=enum(*goals.ASSESSMENTS), progress_note=S,
                  create=obj(["signal_ref", "title", "criteria"], signal_ref=REF, title=S, criteria=S)),
     "review": obj(["candidate_ref", "verdict", "reason"], candidate_ref=REF, verdict=enum(*review.VERDICTS),
@@ -79,7 +81,14 @@ def patrol_items(k, n, now):
     recent = [{"at": t["at"], "text": clip(t["text"], 500)} for t in k.adapter.sessions.user_turns(now - 6 * H)][-5:]
     return notifier.due_items(k, now, DUE_NOTICES), {
         "sources_due": sources.due(k.store, now, k.settings().get("source_intervals")),
-        "recent_user_messages": recent, "send_limit": n}
+        "recent_user_messages": recent, "send_limit": n, "blocked_topics": blocked_topics(k)}
+
+
+def blocked_topics(k):
+    try:
+        return preferences(k.home)["blocked_topics"]
+    except ValueError:  # invalid preferences hold every notice anyway (notifier); the patrol still runs
+        return []
 
 
 def nightly_items(k, n, now):
@@ -205,7 +214,8 @@ def feed_result(k, item, r, now):
 
 HANDLERS = {
     "intake": lambda k, i, r, now: {"state": intake.dispose(k, i["ref"], r.get("disposition"), r.get("facts"), r.get("goal_hint"), now)["state"]},
-    "observed": lambda k, i, r, now: notifier.decide(k, i, r.get("verdict"), text=r.get("text"), priority=r.get("priority"), now=now),
+    "observed": lambda k, i, r, now: notifier.decide(k, i, r.get("verdict"), text=r.get("text"), priority=r.get("priority"),
+                                                     topic=r.get("topic"), now=now),
     "notice": lambda k, i, r, now: notifier.decide(k, i, r.get("verdict"), text=r.get("text"), priority=r.get("priority"), now=now),
     "goal": lambda k, i, r, now: goals.assess(k, i["ref"], r.get("assessment"), r.get("progress_note"), now),
     "signal": lambda k, i, r, now: goals.create(k, title=(r.get("create") or {}).get("title"),

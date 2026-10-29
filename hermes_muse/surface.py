@@ -74,6 +74,7 @@ MAIN = {  # action: (kind, summary, data schema)
     "preferences": ("write", "Change proactive preferences; pause_jobs=true pauses every Muse job (after installation_prepare and the user's confirmation).",
                     obj([], start_hour=count(0, 23), end_hour=count(0, 24), ordinary_per_day=nullable(count(0, 50)),
                         time_sensitive_per_day=nullable(count(0, 50)),
+                        urgent_per_day={**count(0, 50), "description": "urgent notices that may skip quiet hours per day; more are sent as time_sensitive"},
                         blocked_topics={"type": "array", "items": text(100), "maxItems": 50},
                         deliver=nullable(text(200, "Hermes delivery route, e.g. bot-chat or telegram")),
                         goal_dormant_days=nullable(count(1, 365)), goal_fade_days=nullable(count(1, 365)),

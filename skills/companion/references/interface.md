@@ -67,6 +67,7 @@ Change proactive preferences; pause_jobs=true pauses every Muse job (after insta
 | `end_hour` |  | integer; 0–24 |
 | `ordinary_per_day` |  | integer/null; 0–50 |
 | `time_sensitive_per_day` |  | integer/null; 0–50 |
+| `urgent_per_day` |  | integer; 0–50 — urgent notices that may skip quiet hours per day; more are sent as time_sensitive |
 | `blocked_topics` |  | array |
 | `deliver` |  | string/null; ≤200 chars — Hermes delivery route, e.g. bot-chat or telegram |
 | `goal_dormant_days` |  | integer/null; 1–365 |
@@ -225,6 +226,7 @@ One result per packet item. The packet's `schema` names the shapes its items tak
 | `verdict` | required | send / skip / withdraw / supersede |
 | `text` |  | string; ≤2000 chars |
 | `priority` |  | urgent / time_sensitive / ordinary |
+| `topic` |  | string; ≤100 chars — short topic label; the exact context.blocked_topics entry when the item is about one |
 
 ### goals
 

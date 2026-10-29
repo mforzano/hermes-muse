@@ -7,7 +7,7 @@ from .store import machine
 
 H, D = 3600, 86400
 PREFIX = "<!-- hermes-muse "
-DEFAULT_PREFERENCES = {"start_hour": 9, "end_hour": 22, "ordinary_per_day": None, "time_sensitive_per_day": 3,
+DEFAULT_PREFERENCES = {"start_hour": 9, "end_hour": 22, "ordinary_per_day": None, "time_sensitive_per_day": 3, "urgent_per_day": 2,
                        "blocked_topics": [], "deliver": None, "goal_dormant_days": 7, "goal_fade_days": 7,
                        "fade_question": None}
 
@@ -36,7 +36,8 @@ def preferences(home):
         stored = {}
     prefs = {**DEFAULT_PREFERENCES, **(stored or {})}
     valid = (stored is not None
-             and all(type(prefs[k]) is int and 0 <= prefs[k] <= high for k, high in (("start_hour", 23), ("end_hour", 24)))
+             and all(type(prefs[k]) is int and 0 <= prefs[k] <= high
+                     for k, high in (("start_hour", 23), ("end_hour", 24), ("urgent_per_day", 50)))
              and all(prefs[k] is None or type(prefs[k]) is int and prefs[k] >= 0 for k in ("ordinary_per_day", "time_sensitive_per_day"))
              and isinstance(prefs["blocked_topics"], list))
     if not valid:

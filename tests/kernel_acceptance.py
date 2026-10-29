@@ -176,17 +176,18 @@ def part_intake(base):
     return k, host, clock
 
 
-def patrol(k, items, verdict="send", priority="urgent", source="mail:work", text="Security alert"):
+def patrol(k, items, verdict="send", priority="urgent", source="mail:work", text="Security alert", topic=None):
     packet = seen(k.build_packet("patrol"))
     observed = k.observe(packet["id"], source, items)
-    results = [{"candidate_ref": o["ref"], "verdict": verdict, "text": text, "priority": priority} for o in observed["items"]]
+    results = [{"candidate_ref": o["ref"], "verdict": verdict, "text": text, "priority": priority,
+                **({"topic": topic} if topic else {})} for o in observed["items"]]
     return packet, observed, k.submit(packet["id"], results)
 
 
 def part_notifier(base):
     clock = [T0]
     host = FakeHost(lambda: clock[0])
-    k = Kernel(make_home(base), adapter=host, clock=lambda: clock[0])
+    k = Kernel(make_home(base, {"blocked_topics": ["crypto"]}), adapter=host, clock=lambda: clock[0])
     railway = {"upstream_id": "gmail:message:1a169d66fac6d167", "title": "Railway: environment variable disclosure"}
     outcomes = []
     for day, hour in ((0, 0), (2, 1), (2, 3), (2, 5)):  # the audited pattern: once, then three times two days later
@@ -240,6 +241,25 @@ def part_notifier(base):
     check("N3 quiet hours: time_sensitive waits for 09:00, urgent goes at once",
           held["state"] == "scheduled" and datetime.fromtimestamp(held["payload"]["next_eligible"], UTC).hour == 9
           and urgent["state"] == "sending", {"held": held["state"], "urgent": urgent["state"]})
+
+    for n in (2, 3):  # urgent_per_day (default 2): the third urgent of the night is gated as time_sensitive
+        patrol(k, [{"upstream_id": f"mail:<urgent{n}@example.org>", "title": f"Urgent {n}"}], priority="urgent")
+        k.tick()
+    crypto = patrol(k, [{"upstream_id": "mail:<coin@example.org>", "title": "Token sale"}], priority="urgent", topic="crypto")
+    k.tick()
+    fade = patrol(k, [{"upstream_id": "mail:<f@example.org>", "title": "x"}], priority="urgent", topic="goal-fade")
+    quiet = {e["natural_key"]: e for e in k.store.query("notice")}
+    second, third = quiet["src:urgent2@example.org"], quiet["src:urgent3@example.org"]
+    check("N3b urgent_per_day caps quiet-hour urgent sends (the rest wait as time_sensitive); a patrol topic in "
+          "blocked_topics is withdrawn; the dormancy topic is reserved",
+          notifier.spent_today(k.store, "urgent", clock[0], UTC) == 2  # the superseded Railway and Outage today
+          and all(n["state"] == "scheduled" and n["payload"]["priority"] == "time_sensitive"
+                  and n["payload"]["requested_priority"] == "urgent"
+                  and datetime.fromtimestamp(n["payload"]["next_eligible"], UTC).hour == 9 for n in (second, third))
+          and quiet["src:coin@example.org"]["state"] == "withdrawn" and "reserved" in fade[2][0].get("error", ""),
+          {"urgent_spent": notifier.spent_today(k.store, "urgent", clock[0], UTC),
+           "held": [[n["state"], n["payload"]["priority"]] for n in (second, third)],
+           "crypto": quiet["src:coin@example.org"]["state"], "fade": fade[2][0]})
 
     # Crash/host error before the host saw the delivery: reconcile resends under the same key, once.
     clock[0] = datetime(2026, 11, 6, 10, 0, tzinfo=UTC).timestamp()

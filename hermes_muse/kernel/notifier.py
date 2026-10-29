@@ -35,7 +35,7 @@ def check_text(text):
 
 
 def gate(priority, prefs, at, tz, spent=0):
-    """Earliest send time for `priority` from `at`: urgent at once; others wait for waking hours and the
+    """Earliest send time for `priority` from `at` (see `effective` for urgent): urgent at once; others wait for waking hours and the
     daily allowance (tomorrow when spent). None when the allowance is 0 (this priority is off)."""
     if priority == "urgent":
         return at
@@ -51,6 +51,14 @@ def gate(priority, prefs, at, tz, spent=0):
         opening = local.replace(hour=start, minute=0, second=0, microsecond=0)
         local = opening if opening > local else opening + timedelta(days=1)
     return local.timestamp()
+
+
+def effective(store, priority, prefs, now, tz):
+    """urgent passes quiet hours and budgets only within urgent_per_day; past it, it is gated as time_sensitive.
+    A model-given priority or verdict never opens a gate by itself."""
+    if priority == "urgent" and spent_today(store, "urgent", now, tz) >= prefs["urgent_per_day"]:
+        return "time_sensitive"
+    return priority
 
 
 def spent_today(store, priority, now, tz):
@@ -92,13 +100,15 @@ def schedule(k, e, now, prefs=None):
     """drafted/scheduled -> scheduled with next_eligible; withdrawn when its topic or priority is turned off."""
     prefs = prefs or preferences(k.home)
     p, tz = e["payload"], k.tz()
-    priority = p.get("priority", "ordinary")
+    requested = p.get("priority", "ordinary")
+    priority = effective(k.store, requested, prefs, now, tz)
     eligible = gate(priority, prefs, now, tz, spent_today(k.store, priority, now, tz))
     if p.get("topic") and p["topic"] in prefs["blocked_topics"] or eligible is None:
         why = "topic_blocked" if eligible is not None else "priority_off"
         return patch(k.store, e["id"], "withdrawn", expect=UNSENT, reason=why, now=now) or k.store.get(e["id"])
-    return patch(k.store, e["id"], "scheduled", expect=UNSENT, reason="schedule",
-                 payload={"next_eligible": eligible}, now=now) or k.store.get(e["id"])
+    over = {"priority": priority, "requested_priority": requested} if priority != requested else {}
+    return patch(k.store, e["id"], "scheduled", expect=UNSENT, reason="schedule" + (":urgent_cap" if over else ""),
+                 payload={"next_eligible": eligible, **over}, now=now) or k.store.get(e["id"])
 
 
 def withdraw(k, notice_id, *, reason, now, by_code=False):
@@ -131,7 +141,7 @@ def supersede(k, old_id, *, text, evidence, now):
     return schedule(k, new, now)
 
 
-def decide(k, item, verdict, *, text=None, priority=None, now):
+def decide(k, item, verdict, *, text=None, priority=None, topic=None, now):
     """One patrol verdict on an observed item (send/skip/supersede) or a due notice (send/skip/withdraw)."""
     if verdict not in VERDICTS:
         raise ValueError(f"verdict must be one of {', '.join(VERDICTS)}")
@@ -148,7 +158,10 @@ def decide(k, item, verdict, *, text=None, priority=None, now):
                 raise ValueError("nothing was notified for this item; use send")
             e = supersede(k, live["id"], text=text, evidence=[item["ref"]], now=now)
             return {"result": "superseded", "notice": e["id"], "state": e["state"]}
+        if topic == FADE_TOPIC:
+            raise ValueError(f"topic {FADE_TOPIC!r} is reserved for Muse's dormancy questions")
         e = draft(k, text=text, priority=priority or "ordinary", title=item["title"], upstream_id=item.get("upstream_id"),
+                  topic=str(topic or "").strip()[:100],
                   sources=sources, source_id=item.get("source_id"), observed_at=item.get("ts"), evidence=[item["ref"]], now=now)
         return {"result": "existing" if e["existing"] else "drafted", "notice": e["id"], "state": e["state"]}
     if verdict == "supersede":
@@ -193,7 +206,8 @@ def dispatch(k, now):
             p = current["payload"]
             priority = p.get("priority", "ordinary")
             eligible = gate(priority, prefs, now, tz, spent_today(store, priority, now, tz))
-            if eligible is None or eligible > now or p.get("topic") in prefs["blocked_topics"]:
+            if (eligible is None or eligible > now or p.get("topic") in prefs["blocked_topics"]
+                    or effective(store, priority, prefs, now, tz) != priority):
                 schedule(k, current, now, prefs)
                 continue
             moved = patch(store, e["id"], "sending", reason="dispatch", now=now, payload={
