@@ -123,7 +123,8 @@ def _signals(db, v2, changes):
     settled = set()
     for signal in v2.query("signal"):
         p = signal["payload"]
-        key = p.get("pointer", {}).get("turn_id") or p.get("v1_id")
+        # v2 intake signals point by {"ref"}; their natural key is a unique v1 id (v1 only orders by created).
+        key = p.get("pointer", {}).get("turn_id") or p.get("v1_id") or signal["natural_key"]
         if signal["state"] in SETTLED:
             settled.add(key)
         elif key not in rows:  # captured under v2 and not yet handled: give it back to v1 rather than lose it
