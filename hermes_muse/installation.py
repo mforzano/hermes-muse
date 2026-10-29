@@ -3,7 +3,7 @@
 import re
 
 from .content_io import DomainError, revision
-from .host import file_lock, profile_scope
+from .host_v1 import file_lock, profile_scope
 from .views import Views, canonical
 
 

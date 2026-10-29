@@ -74,7 +74,7 @@ def invoke_once(runtime, args, kwargs, callback):
         raise DomainError('permission_denied', 'Replayable state changes require a private originating parent session')
     from .views import Views, canonical
     from .content_io import revision
-    from .host import file_lock
+    from .host_v1 import file_lock
     scope = Views(runtime.home).scope()
     key = revision(canonical([scope, action, data['request_id']]))
     signature = revision(canonical([kwargs['session_id'], data]))

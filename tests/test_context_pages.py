@@ -136,7 +136,7 @@ class ContextPagesTests(unittest.TestCase):
         self.assertEqual(self.store.read('cursor','memory-upkeep',0),0)
 
     def test_native_long_signal_pages_compacted_copies_without_scanning_later_history(self):
-        from hermes_muse.host import HermesHost
+        from hermes_muse.host_v1 import HermesHost
         original = "user attachment\n" + "evidence " * 52000
         path = self.store.home / 'state.db'
         with closing(sqlite3.connect(path)) as db, db:

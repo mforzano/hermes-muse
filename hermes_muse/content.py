@@ -4,7 +4,7 @@ import re
 import time
 
 from .content_io import DomainError, revision
-from .host import file_lock
+from .host_v1 import file_lock
 from .views import Views, canonical, mapping, validate_tools_note
 
 WRITABLE = {

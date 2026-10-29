@@ -35,7 +35,7 @@ with tempfile.TemporaryDirectory(prefix='muse-native-scopes-') as folder:
     rt=registry.get_entry('muse_manage').handler.__self__
     assert rt.store.read('meta','operation_cursor')==legacy
     assert rt.service.operations.policy()['legacy']['reviewed'] is False
-    from hermes_muse.host import cron_run
+    from hermes_muse.host_v1 import cron_run
     assert cron_run(home,'memory-upkeep')['wakeAgent'] is False
     # Unknown responsibility alone must wake; inspecting it does not change/replay it.
     for kind,record in [('mutation_request',{'id':'interrupted-write','state':'pending'}),

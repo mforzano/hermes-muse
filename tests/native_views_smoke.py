@@ -30,7 +30,7 @@ with tempfile.TemporaryDirectory(prefix="muse-native-views-") as temporary:
     home = Path(temporary)
     os.environ["HERMES_HOME"] = str(home)
     os.environ["HERMES_DASHBOARD_SESSION_TOKEN"] = "isolated-fixture-token"
-    from hermes_muse.host import HermesHost, profile_scope
+    from hermes_muse.host_v1 import HermesHost, profile_scope
     from hermes_muse.store import Store
     from hermes_muse.service import Companion
 

@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from hermes_muse.host import HermesHost
+from hermes_muse.host_v1 import HermesHost
 from hermes_muse.service import Companion
 from hermes_muse.store import Store
 
@@ -100,7 +100,7 @@ class TestNonBotChatNotificationFlow(unittest.TestCase):
         queue = types.ModuleType("cron.delivery_queue")
         queue.get_status = lambda eid: {"status": queue_status}
         with patch.dict(sys.modules, {"cron.executions": ledger, "cron.delivery_queue": queue}), \
-                patch("hermes_muse.host.profile_scope", lambda home: self.contextlib.nullcontext()):
+                patch("hermes_muse.host_v1.profile_scope", lambda home: self.contextlib.nullcontext()):
             HermesHost(case.store).reconcile()
 
     def test_notice_flows_to_sent_for_all_and_platform_destinations(self):

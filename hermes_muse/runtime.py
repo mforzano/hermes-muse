@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .handoff import MARKER, receiving_instructions, render_result
 from .audit import Audit
-from .host import HermesHost, ROOT, profile_scope
+from .host_v1 import HermesHost, ROOT, profile_scope
 from .service import Companion
 from .store import Store, is_background_message
 from .followup import context as followup_context

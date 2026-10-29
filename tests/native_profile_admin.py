@@ -25,7 +25,7 @@ def worker(home):
     subprocess.run(['git','add','.'],cwd=source,check=True)
     subprocess.run(['git','-c','user.name=Fixture','-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false','-c','core.hooksPath=/dev/null','commit','-qm','synthetic tested source'],cwd=source,check=True)
     from hermes_muse.store import Store
-    from hermes_muse.host import HermesHost,profile_scope
+    from hermes_muse.host_v1 import HermesHost,profile_scope
     from hermes_muse.service import Companion
     default_store=Store(home); default_host=HermesHost(default_store,source);default_host.initialize()
     with profile_scope(home):

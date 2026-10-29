@@ -55,7 +55,7 @@ def ask_key(goal_id, dormant_since):
 
 def _native_watch_check(home):
     """Host.is_active_watch bound to this profile without opening Muse's store."""
-    from .host import HermesHost
+    from .host_v1 import HermesHost
 
     class _Paths:
         def __init__(self, root):

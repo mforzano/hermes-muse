@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from unittest.mock import patch
 
 from hermes_muse.calendar import assemble, window
-from hermes_muse.host import JOBS
+from hermes_muse.host_v1 import JOBS
 from hermes_muse.service import Companion, DEFAULT_PREFERENCES
 from hermes_muse.runtime import Runtime, SCHEMA
 from test_companion import Host, prepare

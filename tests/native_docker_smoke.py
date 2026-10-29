@@ -22,7 +22,7 @@ sys.path[:0] = [str(root), os.environ["HERMES_SOURCE"]]
 with tempfile.TemporaryDirectory(prefix="muse-docker-") as directory:
     base = Path(directory)
     os.environ["HERMES_HOME"] = str(base / "a")
-    from hermes_muse.host import profile_scope
+    from hermes_muse.host_v1 import profile_scope
     from hermes_cli.plugins import discover_plugins, invoke_hook, get_plugin_manager
     from tools.registry import registry
     from model_tools import handle_function_call
