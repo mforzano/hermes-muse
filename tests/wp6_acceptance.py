@@ -62,6 +62,11 @@ def v1_jobs(home):
     return ids
 
 
+def prompt(key):
+    from hermes_muse.install import JOBS
+    return (ROOT / "prompts" / "jobs" / f"{JOBS[key][0]}.md").read_text()
+
+
 def part_install(home, ids):
     from hermes_muse.host import HostAdapter
     from hermes_muse.install import MARKER, PROMPTS_BACKUP, install
@@ -76,7 +81,7 @@ def part_install(home, ids):
           {"migration": {k: first["migration"].get(k) for k in ("shape", "counts")}, "templates": first["templates"]})
     check("install: 0.3.x jobs refreshed in place (same ids, new prompts, user schedule/pause kept), monthly paused",
           all(first["jobs"][k] == ids[k] for k in V1_KEYS if k != "monthly-system-audit")
-          and all((ROOT / "prompts" / f"{k}.md").read_text() == refreshed[k]["prompt"] for k in V1_KEYS if k != "monthly-system-audit")
+          and all(prompt(k) == refreshed[k]["prompt"] for k in V1_KEYS if k != "monthly-system-audit")
           and refreshed["memory-upkeep"]["schedule"].get("expr") == "15 * * * *"
           and refreshed["weekly-governance-review"]["state"] == "paused"
           and refreshed["monthly-system-audit"]["state"] == "paused" and "weekly digest" in refreshed["monthly-system-audit"]["paused_reason"]
@@ -118,8 +123,8 @@ def part_entry(home, ids):
     patrol = entry.run(home, "proactive-watch")
     weekly = entry.run(home, "weekly-governance-review")
     check("pre-run: patrol always wakes with a packet; weekly digest wakes with health + 7-day counts",
-          patrol["wakeAgent"] and patrol["packet"]["id"] and weekly["wakeAgent"] and "week" in weekly and "health" in weekly,
-          {"patrol_context": sorted(patrol["packet"].get("context") or {}), "week": weekly.get("week")})
+          patrol["wakeAgent"] and patrol["packet"]["id"] and weekly["wakeAgent"] and "last_7_days" in weekly and "health" in weekly,
+          {"patrol_context": sorted(patrol["packet"].get("context") or {}), "week": weekly.get("last_7_days")})
     silent = {key: entry.run(home, key) for key in ("deliver-abc", "watch-gone", "watch-523b6d11996b")}
     (home / MARKER).write_text(json.dumps({"at": now}))
     silent["marker"] = entry.run(home, "proactive-watch")
@@ -261,8 +266,14 @@ def part_rollback(home, ids, adapter):
     (home / MARKER).unlink()  # cancel the rollback: reload v2
     install(adapter, ROOT)
     jobs = {j["id"]: j for j in list_jobs(include_disabled=True)}
+    from hermes_muse.install import WATCH_PROMPT, watch_check
+    v1 = ("Read hermes-muse:companion ... Work only on goal g1. Check its status ... "
+          "With nothing approved return [SILENT].\nCheck the visa page\nStop condition: visa issued")
+    check("watch refresh: the check text is recovered from 0.3.x and v2 watch prompts, unknown prompts are left alone",
+          watch_check(v1) == "Check the visa page" == watch_check(WATCH_PROMPT.format(check="Check the visa page", stop="x"))
+          and watch_check("custom user prompt") is None)
     check("rollback cancelled: reinstall refreshes again, keeps the original 0.3.x prompt backup",
-          jobs[ids["proactive-watch"]]["prompt"] == (ROOT / "prompts" / "proactive-watch.md").read_text()
+          jobs[ids["proactive-watch"]]["prompt"] == prompt("proactive-watch")
           and all(p["prompt"].startswith("[hermes-muse:abc123:") for p in json.loads((home / PROMPTS_BACKUP).read_text()).values()))
 
 

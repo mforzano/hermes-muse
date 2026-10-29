@@ -13,16 +13,17 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from . import health, install
 from .content_io import DomainError, Files, revision
 from .host.sessions import redact
 from .kernel import goals, packets
 from .kernel.common import D, header, one, patch, render
 from .kernel.packets import enum, obj
 from .locks import file_lock
+from .views import FEED_DIR
 
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE = ROOT / "skills/companion/references/interface.md"
-FEED_DIR = "workspace/your_files/feed"
 
 
 def text(limit, description=None):
@@ -378,14 +379,13 @@ class Surface:
         n = sum(w["payload"].get("goal_id") == slug for w in store.query("watch")) + 1
         key = "watch-" + hashlib.sha256(f"{slug}:{n}".encode()).hexdigest()[:12]
         expires = self.time(d.get("expires"))
-        prompt = WATCH_PROMPT.format(prompt=d["prompt"].strip(), stop=d["stop_condition"].strip())
-        prefs = self.k.settings()
-        job = self.k.adapter.cron.ensure(key, schedule=d["schedule"], entry=ROOT / "job_entry.py", prompt=prompt,
-                                         deliver=watch_target(self.k, prefs))
+        job = install.ensure_watch(self.k.adapter, ROOT, key, schedule=d["schedule"], check=d["prompt"],
+                                   stop_condition=d["stop_condition"])
         if not job:
             raise DomainError("host_unavailable", "Hermes did not create the watch job; nothing was saved")
         e = store.create("watch", f"goal:{slug}:watch:{n}", {
-            "goal_id": slug, "job_id": job["id"], "key": key, "schedule": d["schedule"], "stop_condition": d["stop_condition"],
+            "goal_id": slug, "job_id": job["id"], "key": key, "schedule": d["schedule"], "check": d["prompt"],
+            "stop_condition": d["stop_condition"],
             "expires": expires}, deadline=expires or now + goals.WATCH_RENEW, now=now)
         return {"result": "created", "watch_id": e["id"], "job_id": job["id"], "expires": e["deadline"]}
 
@@ -473,7 +473,7 @@ class Surface:
                        "finding": ("open",), "watch": ("active",), "interest": ("active",), "idea": ("active",),
                        "signal": ("new", "parked")}
         counts = {kind: {s: len(self.k.store.query(kind, state=s)) for s in states} for kind, states in open_states.items()}
-        return {"health": health_summary(self.k.home), "open": counts}
+        return {"health": health.summary(self.k.home), "open": counts}
 
     def muse_manage_calendar_view(self, d, call):
         from . import calendar
@@ -521,67 +521,6 @@ class Surface:
                 if exc.code != "revision_conflict":
                     raise
         return rel
-
-
-def health_summary(home):
-    """health.json without its passing invariants: level, time and what is wrong."""
-    from .health import load
-    report = load(home)
-    if not report:
-        return None
-    return {"level": report.get("level"), "generated_at": report.get("generated_at"),
-            "findings": [{f: x.get(f) for f in ("id", "level", "detail", "fix", "first_seen")}
-                         for x in report.get("invariants", []) if x.get("level") != "ok"]}
-
-
-WATCH_PROMPT = """You run one Hermes Muse watch for the user's goal (its state is in Script Output).
-Check: {prompt}
-Stop condition: {stop}
-Use only read-only tools. If the stop condition is met, or something the user must act on changed, answer in one or two
-short sentences in the user's language with the evidence link. Otherwise answer exactly [SILENT]."""
-
-
-def watch_target(k, settings):
-    from .kernel.common import preferences
-    return preferences(k.home).get("deliver") or settings.get("deliver") or "bot-chat"
-
-
-# -- job runs ----------------------------------------------------------------------------------------
-JOB_SCHEDULES = {"intake": "every 1h", "patrol": "every 30m", "nightly": "30 2 * * *", "feed": "0 8 * * *", "weekly": "0 9 * * 1"}
-
-
-def job_prompt(job):
-    return (ROOT / "prompts" / "jobs" / f"{job}.md").read_text(encoding="utf-8")
-
-
-def ensure_jobs(adapter, deliver="local"):
-    """Create or refresh the five owned job runs; each launcher runs job_entry.py, whose stdout is the packet."""
-    return {job: adapter.cron.ensure(job, schedule=schedule, entry=ROOT / "job_entry.py", prompt=job_prompt(job),
-                                     deliver=deliver if job == "weekly" else "local")
-            for job, schedule in JOB_SCHEDULES.items()}
-
-
-def job_output(home, job, kernel=None):
-    """Script Output for one job run: the packet as JSON, or '' (Hermes then skips the model) when there is no work."""
-    from .kernel import Kernel
-    k = kernel or Kernel(home)
-    k.tick()
-    if job.startswith("watch-"):
-        watch = next((w for w in k.store.query("watch", state="active") if w["payload"].get("key") == job), None)
-        goal = watch and k.store.get(f"goal:{watch['payload']['goal_id']}")
-        if not goal or goal["state"] not in goals.OPEN:
-            return ""
-        return json.dumps({"type": "watch", "goal": goals.item(k, goal), "stop_condition": watch["payload"]["stop_condition"]},
-                          ensure_ascii=False)
-    if job == "weekly":
-        since, week = k.clock() - 7 * D, {}
-        for kind in ("signal", "notice", "goal", "feed", "finding", "interest", "idea"):
-            for e in k.store.query(kind, since=since):
-                week.setdefault(kind, {}).setdefault(e["state"], 0)
-                week[kind][e["state"]] += 1
-        return json.dumps({"type": "weekly", "health": health_summary(k.home), "last_7_days": week}, ensure_ascii=False)
-    packet = k.build_packet(job)
-    return json.dumps(packet, ensure_ascii=False) if packet["id"] else ""
 
 
 # -- registration and the generated reference --------------------------------------------------------

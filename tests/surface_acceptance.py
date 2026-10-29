@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 from kernel_acceptance import D, T0, FakeHost, make_home  # noqa: E402
-from hermes_muse import surface as s  # noqa: E402
+from hermes_muse import entry, install, surface as s  # noqa: E402
 from hermes_muse.kernel import Kernel, packets  # noqa: E402
 
 FAILED = []
@@ -55,7 +55,7 @@ def static():
     stale = {str(p.relative_to(ROOT)): sorted(set(REMOVED.findall(p.read_text()))) for p in docs if REMOVED.search(p.read_text())}
     tables = [str(p.relative_to(ROOT)) for p in docs if p != s.REFERENCE and re.search(r"^\|\s*`?field`?\s*\|", p.read_text(), re.M)]
     check("S4 five job prompts <=15 lines; no removed action, request_id or hand-written field table in prompts/skill",
-          jobs == sorted(s.JOB_SCHEDULES) == sorted([*packets.JOBS, "weekly"]) and not long and not stale and not tables,
+          jobs == sorted(j for j, _, _ in install.JOBS.values()) == sorted([*packets.JOBS, "weekly"]) and not long and not stale and not tables,
           {"jobs": jobs, "long": long, "stale": stale, "tables": tables})
 
 
@@ -76,11 +76,18 @@ class Host(FakeHost):
         return {"id": "j-" + key}
 
 
+def job_output(k, key):
+    """Script Output of one launcher run (cron_entry -> entry.output): the packet JSON, '' when silent."""
+    out = entry.output(k, key)
+    return "" if not out["wakeAgent"] else json.dumps(out.get("packet") or out, ensure_ascii=False)
+
+
 def dynamic(base):
     clock = [T0]
     host = Host(lambda: clock[0])
     home = make_home(base, {"goal_dormant_days": 7, "goal_fade_days": 7})
     k = Kernel(home, adapter=host, clock=lambda: clock[0])
+    host.home = k.home
     ui = s.Surface(k)
 
     def call(tool, action, data, caller=MAIN_CALL):
@@ -135,7 +142,7 @@ def dynamic(base):
     ensured = host.ensured[0] if host.ensured else (None, {})
     check("S7 fade question uses the user's template; watch job via host cron and stop pauses it; feedback stops; forget deletes; disable plan + pause",
           ask is not None and ask["payload"]["text"].startswith("「Learn piano」已 7 天") and watch["ok"]
-          and ensured[1].get("entry") == s.ROOT / "job_entry.py" and stop["result"]["job_paused"]
+          and ensured[1].get("entry") == s.ROOT / "cron_entry.py" and stop["result"]["job_paused"]
           and fb["result"]["state"] == "stopped" and gone["result"]["result"] == "deleted"
           and prep["result"]["read_only"] and paused["result"]["paused_jobs"] == list(host.jobs),
           {"ask": ask and ask["payload"]["text"], "watch": watch, "fb": fb, "paused": paused})
@@ -143,32 +150,32 @@ def dynamic(base):
     # S8 job runs: entry output, read/observe/submit, feed file written by the content writer
     host.add("chat", "user", "I decided: dentist on Friday at 3pm", clock[0] + 10)
     clock[0] += 60
-    out = s.job_output(home, "intake", kernel=k)
+    out = job_output(k, "memory-upkeep")
     packet = json.loads(out)
     item = packet["items"][0]
     read = call("muse_job", "read", {"packet_id": packet["id"], "ref": item["ref"]}, CRON_CALL)
     sub = call("muse_job", "submit", {"packet_id": packet["id"], "results": [
         {"ref": item["ref"], "disposition": "saved", "facts": ["Dentist Friday 3pm"], "goal_hint": "new"}]}, CRON_CALL)
-    patrol = json.loads(s.job_output(home, "patrol", kernel=k))
+    patrol = json.loads(job_output(k, "proactive-watch"))
     obs = call("muse_job", "observe", {"packet_id": patrol["id"], "source_id": "mail:work",
                                        "items": [{"upstream_id": "<m1@example.com>", "title": "Invoice due today", "ts": clock[0]}]}, CRON_CALL)
     verdict = call("muse_job", "submit", {"packet_id": patrol["id"], "results": [
         {"candidate_ref": obs["result"]["items"][0]["ref"], "verdict": "send", "text": "Invoice due today", "priority": "time_sensitive"}]}, CRON_CALL)
     # interest stopped above: record a fresh one for the feed packet
     call("muse_manage", "interest_record", {"title": "Rust async"})
-    feed = json.loads(s.job_output(home, "feed", kernel=k))
+    feed = json.loads(job_output(k, "feed-pulse"))
     fsub = call("muse_job", "submit", {"packet_id": feed["id"], "results": [{"interest_ref": feed["items"][0]["ref"], "article": {
         "title": "Async drop", "body": "What changed and why it matters.", "source_refs": ["https://example.com/a"]}}]}, CRON_CALL)
     path = fsub["result"][0].get("path", "")
     feed_file = home / "muse" / path
     listed_feed = call("muse_manage", "read", {"kind": "feed"})
     deleted = call("muse_manage", "feed_update", {"id": listed_feed["result"]["items"][0]["id"], "change": "delete"})
-    empty_nightly = s.job_output(home, "feed", kernel=k)
-    weekly = json.loads(s.job_output(home, "weekly", kernel=k))
+    empty_nightly = job_output(k, "feed-pulse")
+    weekly = json.loads(job_output(k, "weekly-governance-review"))
     check("S8 job runs: packet as Script Output, read/submit/observe through muse_job, article file written then deleted, empty packet silent",
           read["ok"] and sub["result"][0].get("state") == "disposed" and obs["ok"] and verdict["result"][0].get("result") == "drafted"
           and fsub["ok"] and "article" not in fsub["result"][0] and not feed_file.exists() and deleted["ok"]
-          and path.startswith(s.FEED_DIR) and empty_nightly == "" and weekly["type"] == "weekly" and "signal" in weekly["last_7_days"],
+          and path.startswith(s.FEED_DIR) and empty_nightly == "" and weekly["job"] == "weekly" and "signal" in weekly["last_7_days"],
           {"submit": sub, "verdict": verdict, "feed": fsub, "weekly": weekly["last_7_days"]})
 
     # S9 authorization by caller: cron/delegated/group/main boundaries
@@ -219,7 +226,7 @@ def native(base):
     caller = {**{sid: adapter.caller(session_id=sid) for sid in ("native", "phone", "hook", "q", "missing")},
               **{p: adapter.caller(session_id="x", platform=p) for p in ("cli", "ios", "webhook", "api_server", "kanban", "local")}}
     k = Kernel(home, adapter=adapter)
-    out = {job: s.job_output(home, job, kernel=k) for job in ("intake", "nightly", "feed")}
+    out = {job: job_output(k, key) for key, (job, _, _) in install.JOBS.items() if job in ("intake", "nightly", "feed")}
     registered = []
     s.register(SimpleNamespace(register_tool=lambda **kw: registered.append(kw)), k)
     reply = json.loads(registered[0]["handler"]({"action": "read", "data": {"kind": "goal"}}, session_id="native"))

@@ -37,6 +37,16 @@ def load(home):
         return None
 
 
+def summary(home):
+    """health.json without its passing checks: level, time and `items` (what is wrong and its fix)."""
+    report = load(home)
+    if not report:
+        return None
+    return {"level": report.get("level"), "generated_at": report.get("generated_at"),
+            "items": [{f: x.get(f) for f in ("id", "level", "detail", "fix", "first_seen")}
+                      for x in report.get("invariants", []) if x.get("level") != "ok"]}
+
+
 def iso(ts):
     return datetime.fromtimestamp(ts, timezone.utc).isoformat(timespec="seconds")
 

@@ -5,8 +5,9 @@
 2. Migrate 0.3.1/0.3.16 muse/state.db into muse/state-v2.db once (idempotent; v1 stays read-only).
 3. Create missing content files from templates (never overwrite) and the content folders.
 4. Refresh the Muse cron jobs in place. Keys keep their 0.3.x names, so job ids, user schedules, routes
-   and pauses survive and external callers keep their job references; the monthly audit is paused
-   (merged into the weekly digest). Watch jobs get the current watch prompt when one ships.
+   and pauses survive and external callers keep their job references; each gets `prompts/jobs/<job>.md`
+   and runs cron_entry.py. The monthly audit is paused (merged into the weekly digest). Watch jobs get
+   the current watch prompt (ensure_watch is also how muse_manage watch_create makes them).
 5. Create or refresh the Health no_agent cron. 6. Remove the marker.
 """
 import json
@@ -17,14 +18,13 @@ from pathlib import Path
 from . import health
 from .content_io import Files
 from .host import PLUGIN
-from .kernel import goals
 from .kernel.common import preferences
 from .kernel.store import Store
 from .locks import file_lock
 
 MARKER = "muse/migrating.json"
 PROMPTS_BACKUP = "muse/backup/cron-prompts-0.3.json"
-# cron key -> (kernel job, default schedule for a new install, delivers to the user)
+# cron key (0.3.x name) -> (job, default schedule for a new install, delivers to the user); prompt prompts/jobs/<job>.md
 JOBS = {
     "memory-upkeep": ("intake", "0 * * * *", False),
     "proactive-watch": ("patrol", "*/30 * * * *", True),
@@ -33,6 +33,12 @@ JOBS = {
     "weekly-governance-review": ("weekly", "15 21 * * 0", True),
 }
 RETIRED = {"monthly-system-audit": "merged into the weekly digest"}
+SKILLS = [f"{PLUGIN}:companion"]
+WATCH_PROMPT = """You run one Hermes Muse watch for the user's goal (its state is in Script Output).
+Check: {check}
+Stop condition: {stop}
+Use only read-only tools. If the stop condition is met, or something the user must act on changed, answer in one or two
+short sentences in the user's language with the evidence link. Otherwise answer exactly [SILENT]."""
 FOLDERS = ("memory/people", "memory/groups", "dreams/alignment/derived", "workspace/goals", "workspace/your_files/feed")
 
 
@@ -90,28 +96,43 @@ def backup_prompts(adapter):
     return True
 
 
+def watch_check(prompt):
+    """What a watch checks, from its current prompt: v2 (`Check: …`) or 0.3.x (after the generated instructions)."""
+    prompt = str(prompt or "")
+    head, found, _ = prompt.rpartition("\nStop condition: ")
+    if not found:
+        return None
+    for marker in ("\nCheck: ", "With nothing approved return [SILENT].\n"):
+        if marker in head:
+            return head.rpartition(marker)[2].strip() or None
+    return None
+
+
+def ensure_watch(adapter, root, key, *, schedule, check, stop_condition, deliver=None):
+    """Create or refresh the owned job of one watch; a refresh keeps its schedule, route and pause."""
+    prompt = WATCH_PROMPT.format(check=check.strip(), stop=str(stop_condition or "").strip())
+    return adapter.cron.ensure(key, schedule=schedule, entry=Path(root) / "cron_entry.py", prompt=prompt,
+                               skills=SKILLS, deliver=deliver or route(adapter))
+
+
 def jobs(adapter, root, store):
-    entry, skills, out = root / "cron_entry.py", [f"{PLUGIN}:companion"], {}
-    for key, (_, schedule, delivered) in JOBS.items():
-        job = adapter.cron.ensure(key, schedule=schedule, entry=entry, skills=skills,
-                                  prompt=(root / "prompts" / f"{key}.md").read_text(encoding="utf-8"),
-                                  deliver=route(adapter) if delivered else "local")
-        out[key] = job["id"] if job else None
+    entry, out = root / "cron_entry.py", {}
+    for key, (job, schedule, delivered) in JOBS.items():
+        found = adapter.cron.ensure(key, schedule=schedule, entry=entry, skills=SKILLS,
+                                    prompt=(root / "prompts" / "jobs" / f"{job}.md").read_text(encoding="utf-8"),
+                                    deliver=route(adapter) if delivered else "local")
+        out[key] = found["id"] if found else None
     for key, reason in RETIRED.items():
         job = owned(adapter, key)
         out[key] = "paused" if job and adapter.cron.pause(job["id"], reason) else None
-    template = root / "prompts" / "watch.md"
-    if template.is_file():
-        by_id = adapter.cron.jobs()
-        for w in store.query("watch", state="active"):
-            job = by_id.get(w["payload"].get("job_id"))
-            if not job:
-                continue
-            p, key = w["payload"], job["script"][len("hermes-muse-"):-3]
-            found = goals.read(adapter.home, p.get("goal_id"))
-            prompt = (template.read_text(encoding="utf-8") + f"\nGoal: {p.get('goal_id')}"
-                      + (f" ({found[0].get('title')})" if found else "") + f"\nStop condition: {p.get('stop_condition') or ''}\n")
-            out[key] = (adapter.cron.ensure(key, schedule=job.get("schedule"), entry=entry, prompt=prompt, skills=skills) or {}).get("id")
+    by_id = adapter.cron.jobs()
+    for w in store.query("watch", state="active"):
+        job = by_id.get(w["payload"].get("job_id"))
+        check = job and (w["payload"].get("check") or watch_check(job.get("prompt")))
+        if check:  # shortcut: a watch whose prompt Muse cannot parse keeps it; the user recreates it
+            key = job["script"][len("hermes-muse-"):-3]
+            out[key] = (ensure_watch(adapter, root, key, schedule=job.get("schedule"), check=check,
+                                     stop_condition=w["payload"].get("stop_condition")) or {}).get("id")
     return out
 
 
