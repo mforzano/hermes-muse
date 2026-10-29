@@ -135,7 +135,8 @@ def run(home):
                 with runtime.store.transaction() as store_db:
                     runtime.store.put(store_db, 'notification', notice_id, {**row, 'status': status, 'created': time.time() - 3 * DAY})
                 refused = call('goal_update', {'id': 'waiting2', 'status': 'cancelled'}, False, session='cron-night', task=night)
-                assert 'has not been delivered yet' in refused['error'], (status, refused)
+                # A withdrawn question (cancelled/expired/failed) is asked again under the next key.
+                assert ('has not been asked yet' if status in {'cancelled', 'expired', 'failed'} else 'has not been delivered yet') in refused['error'], (status, refused)
                 assert runtime.store.goal('waiting2')[0]['status'] == 'active'
             # A question the nightly review staged before the goal went dormant (its key is predictable) is not that question.
             early = call('notification_add', {'event_key': rows['mid']['ask_key'], 'message': 'Weather is nice today', 'rationale': 'x', 'sources': ['goal:mid'], 'goal_id': 'mid',

@@ -380,12 +380,33 @@ class OnlyADeliveredQuestionCounts(FadeCase):
             self.assertEqual((state["state"], state["fade_due"]), ("dormant", False), status)
             with self.assertRaises(DomainError, msg=status) as caught:
                 self.service.fade_goal({"id": "g", "status": "cancelled"})
-            self.assertIn("has not been delivered yet", str(caught.exception))
+            withdrawn = status in {"expired", "failed", "cancelled"}  # asked again under the next key
+            self.assertIn("has not been asked yet" if withdrawn else "has not been delivered yet", str(caught.exception))
+            self.assertEqual(state["ask_key"].endswith(":r1"), withdrawn, status)
             self.assertEqual(self.store.goal("g")[0]["status"], "active")
         self.put(row, status="sent", created=self.now - 2 * DAY)  # sent but never dispatched: nothing shows it reached the user
         self.assertFalse(self.state()["fade_due"])
         self.put(row, status="sent", created=self.now - 2 * DAY, dispatched_at=self.now - 2 * DAY)
         self.assertTrue(self.state()["fade_due"])
+
+    def test_dormancy_question_cannot_be_resolved_by_topic_and_is_reasked_after_withdrawal(self):
+        row = self.idle_goal()
+        self.at(43)
+        self.service.conversation_states = lambda **kw: {}
+        with self.assertRaises(DomainError) as caught:
+            self.service.notification_review({"id": row["id"], "verdict": "resolved", "reason": "a related topic moved"})
+        self.assertEqual(caught.exception.details["field"], "data.verdict")
+        self.assertEqual(self.service.notification_review({"id": row["id"], "verdict": "relevant", "reason": "still dormant"})["reviewed"], True)
+        base = self.state()["ask_key"]
+        for attempt in range(1, 4):  # withdrawn before delivery: the next key asks again, at most three times
+            self.put(self.store.read("notification", row["id"]), status="cancelled")
+            row = self.ask()
+            self.assertEqual(row["event_key"], f"{base}:r{attempt}")
+        self.put(row, status="cancelled")
+        self.assertEqual(self.state()["ask_key"], f"{base}:r3")
+        self.service.goal_update({"id": "g", "progress": "User revived it"})  # no longer dormant: the topic may close it
+        self.put(row, status="candidate")
+        self.assertTrue(self.service.notification_review({"id": row["id"], "verdict": "superseded", "reason": "goal revived"})["reviewed"])
 
     def test_the_day_counts_from_delivery_not_creation(self):
         row = self.idle_goal()

@@ -23,6 +23,9 @@ LIVE_OWNER = {"running", "stalling", "finalizing", "claimed"}
 UNSURE = "its fade data could not be read; retry later"
 # A native delegation or Cron owner whose record Hermes already purged reads as "unknown"; that only protects a goal this long.
 OWNER_UNKNOWN_DAYS = 30
+# A dormancy question withdrawn before delivery is asked again under the next key, at most this often per episode.
+WITHDRAWN = {"cancelled", "expired", "failed"}
+MAX_REASKS = 3
 _warned = set()
 
 
@@ -149,6 +152,16 @@ class Fade:
                 return f"an active subgoal is exempt ({reason[3:] if reason.startswith('it ') else reason})"
         return None
 
+    def current_ask_key(self, goal_id, since):
+        """This episode's question key: after a withdrawn, undelivered question, the next ':rN' key asks again."""
+        base = key = ask_key(goal_id, since)
+        for attempt in range(1, MAX_REASKS + 1):
+            rows = self._query("SELECT data FROM records WHERE kind='notification' AND id=?", (digest(key),))
+            if not rows or rows[0].get("status") not in WITHDRAWN:
+                break
+            key = f"{base}:r{attempt}"
+        return key
+
     def asked(self, key, goal_id, since):
         """None when the dormancy question for this goal was delivered at least a day ago, else why the cancel must wait.
         Only status "sent" counts: an expired, failed, cancelled, dismissed or unknown notice never reached the user."""
@@ -192,7 +205,7 @@ class Fade:
         if view["exempt"] or self.now < since:
             return view
         fade_days = self.cfg["goal_fade_days"]
-        key = ask_key(goal["id"], since)
+        key = self.current_ask_key(goal["id"], since)
         view.update(state="dormant", dormant_since=since, ask_key=key, wait=self.asked(key, goal['id'], since))
         if fade_days is not None:
             view["fade_at"] = since + fade_days * DAY

@@ -433,6 +433,10 @@ class Companion:
             raise fail("notification_review", "data.verdict", "is not an accepted value", expected="one of relevant, resolved, superseded", got=verdict,
                        fix="use exactly one of the listed values and add data.reason")
         reason = bounded(data.get("reason"), 2000)
+        if verdict != "relevant" and str(candidate.get("event_key", "")).startswith("goal-fade-ask:") and self.fade_ask_current(candidate):
+            raise fail("notification_review", "data.verdict", "must be relevant for a dormancy question while its goal is still dormant",
+                       expected="relevant (a related topic moving is not the user's answer)", got=verdict,
+                       fix="review it as relevant and let the patrol deliver it; only the user's answer or a parent goal_update settles a dormant goal")
         with self.store.transaction() as db:
             row = self.store.get(db, "notification", key)
             if not row or row["status"] not in {"candidate", "pending"}:
@@ -444,6 +448,16 @@ class Companion:
                 row.pop("delivery_gate", None)
             self.store.put(db, "notification", key, row)
         return {"reviewed": True, "notification": row}
+
+    def fade_ask_current(self, row):
+        """True while the notice is the current dormancy question of a still-dormant active goal."""
+        from .fade import Fade
+        try:
+            goal, _ = self.store.goal(identifier(row.get("goal_id") or ""))
+        except (ValueError, FileNotFoundError, KeyError):
+            return False
+        state = Fade(self.store.home, self.store.goals(), self.clock()).of(goal)
+        return bool(state and state["state"] == "dormant" and state["ask_key"] == row["event_key"])
 
     def source_snapshot(self, data, db=None):
         if not isinstance(data, dict) or set(data) - {"item_id", "title", "due", "timezone", "checked_at"}:
