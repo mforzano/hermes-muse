@@ -267,6 +267,23 @@ class ContentTests(unittest.TestCase):
         )
         self.assertEqual(len(self.store.all("memory_feedback")), 1)
 
+    def test_memory_receipts_newest_unsaved_within_a_day_and_not_after_defer(self):
+        now = [1800000000]
+        ledger = MemoryFeedback(self.store, lambda: now[0])
+        for call in ("zz-old", "aa-mid", "mm-new"):  # IDs sort differently from creation order
+            ledger.capture("hindsight_retain", {"content": "x"}, "Memory stored successfully.",
+                           session_id="session", turn_id="s", tool_call_id=call)
+            now[0] += 3600
+        by_call = {r["tool_call_id"]: r for r in self.store.all("memory_feedback")}
+        ids = lambda: [r["id"] for r in ledger.candidates("session")]
+        self.assertEqual(ids(), [by_call[c]["id"] for c in ("zz-old", "aa-mid", "mm-new")])
+        ledger.review({"receipt_id": by_call["aa-mid"]["id"], "decision": "defer", "reason": "not now",
+                       "expected_revision": 1, "request_id": "defer-mid"}, "session", "s")
+        self.assertEqual(ids(), [by_call["zz-old"]["id"], by_call["mm-new"]["id"]])
+        now[0] = by_call["zz-old"]["created"] + 86400 + 1  # unsaved receipts stop being news after a day
+        self.assertEqual(ids(), [by_call["mm-new"]["id"]])
+        self.assertEqual(len(self.store.all("memory_feedback")), 3)  # kept for audit
+
     def test_forget_tombstone_and_owned_lessons_preserve_user_text(self):
         result = self.write()
         self.service.signal("delete", "session", "Please delete g files/report.md")

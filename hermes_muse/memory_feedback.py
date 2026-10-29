@@ -3,7 +3,7 @@
 import json
 import re
 from .content_io import DomainError
-from .store import digest
+from .store import DAY, digest
 
 TOOLS = {"memory", "skill_manage", "hindsight_retain", "muse_preferences"}
 
@@ -167,13 +167,18 @@ class MemoryFeedback:
 
     def candidates(self, session_id):
         current_turn = self.store.read("session", session_id, {}).get("turn_id")
+        now = self.clock()
+        rows = sorted(self.store.all("memory_feedback"), key=lambda r: (r.get("created", 0), r["id"]))
         return [
             {k: r[k] for k in ("id", "revision", "classified_state", "tool")}
-            for r in self.store.all("memory_feedback")
+            for r in rows
             if r["session_id"] == session_id
             and self.informable(r, current_turn)
             and not r.get("reply_ref")
             and r["decision"] != "silent"
+            # Reviewed as defer means "not now"; an unsaved receipt is only news for a day. Records stay for audit.
+            and not (r["decision"] == "defer" and "inform_turn_id" in r)
+            and (r["classified_state"] == "saved" or now - r.get("created", now) <= DAY)
         ][-10:]
 
     def context(self, session_id):
