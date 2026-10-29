@@ -15,7 +15,7 @@ Not connected when the tools are missing from the tool list or report that no ba
 
 ## Patrol and Feed reading
 
-Feed and research search with focused queries, then extract and read the original pages they cite. Prefer original sources over aggregators. Record results as Feed sources or research evidence, not as source_check rows. A failed search or extract is a research gap: retry another query or backend-supported alternative within the run, then state the gap; never write an article from snippets alone.
+Feed and research search with focused queries, then extract and read the original pages they cite. Prefer original sources over aggregators. Record results as Feed `source_refs`; web research is not a patrol source. A failed search or extract is a research gap: retry another query or backend-supported alternative within the run, then state the gap; never write an article from snippets alone.
 
 ## Known limits
 

@@ -18,7 +18,7 @@ Not connected when the command is missing or status is not authorized (notDeterm
 
 ## Normalization
 
-source_check identity: connection `remindctl`, account `local-reminders`, resource `reminders:open`, `checked_resources` the list IDs read. A notice's source_snapshot uses the reminder ID, literal title and original due date.
+Patrol `source_id`: `reminders:local`. Observe each relevant reminder with its reminder ID as `upstream_id`, the literal title and the original due date.
 
 ## Known limits
 

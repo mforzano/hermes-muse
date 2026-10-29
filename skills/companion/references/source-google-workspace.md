@@ -29,7 +29,7 @@ Not connected when the check prints anything other than `AUTHENTICATED`, the tok
 
 ## Normalization
 
-Calendar events follow the strict [calendar](calendar.md) contract: `start.dateTime` (RFC3339) or `start.date` (all-day, end date already exclusive) with the event or calendar `timeZone`; `recurringEventId` plus `originalStartTime` as `occurrence_id`; `status:"cancelled"` instances stay as evidence; `transparency:"transparent"` or the user's declined response means `busy:false`; `iCalUID` as `uid`; `htmlLink` as locator. source_check identity: connection `google-workspace` (or the recorded route), account the Google address label, resource `calendars:rolling-30d`/`calendars:natural-month` or `mail:inbox`.
+Calendar events follow the strict [calendar](calendar.md) contract: `start.dateTime` (RFC3339) or `start.date` (all-day, end date already exclusive) with the event or calendar `timeZone`; `recurringEventId` plus `originalStartTime` as `occurrence_id`; `status:"cancelled"` instances stay as evidence; `transparency:"transparent"` or the user's declined response means `busy:false`; `iCalUID` as `uid`; `htmlLink` as locator. Patrol `source_id`s: `calendar:<address label>` and `mail:<address label>`; a Gmail message's `upstream_id` is its message id, and an event's is its id plus `updated`.
 
 ## Known limits
 

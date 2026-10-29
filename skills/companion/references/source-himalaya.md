@@ -19,7 +19,7 @@ Not connected when the binary is missing, the account is absent, or the server r
 
 ## Normalization
 
-source_check identity: connection `himalaya`, account the configured account name, resource `mail:inbox` (or `mail:<folder>`), with `checked_resources` listing each folder actually read. Notices keep subject, sender, account, date and the message ID as locator.
+Patrol `source_id`: `mail:<configured account name>`. Observe each relevant message with its Message-ID as `upstream_id`, and the subject and sender in `title`.
 
 ## Known limits
 

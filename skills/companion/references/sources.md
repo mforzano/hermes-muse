@@ -22,15 +22,15 @@ Read one account through one route. When two routes reach the same data (Gmail v
 
 Every patrol classifies each in-scope source before reading it:
 
-- **Connected:** its self-check passes. Read it and record source_check from the actual read: checked, partial or error.
-- **Not connected:** the tool, CLI or MCP server is absent, not signed in, or the OS/account permission is missing. Record `source_check` with `status:"unavailable"` and a summary starting `not connected:` that names the missing piece and the fix from its procedure (for example `not connected: remindctl reports denied; grant Reminders access in System Settings > Privacy & Security`). Use the identity already recorded in TOOLS.md; for an undeclared default-scope source with no known identity, keep the same sentence in the run summary instead of inventing an account. This is not a read failure and is never silent. Stop before protected reads and never trigger an authorization prompt from a patrol.
-- **Failing:** connected, but a read failed. Record error or partial with the cause, keep the previous successful watermark and retry under the normal recovery rules.
+- **Connected:** its self-check passes. Read it and `observe` what you saw; add `limitation_code` when only part could be read.
+- **Not connected:** the tool, CLI or MCP server is missing, not signed in, or lacks an OS or account permission. `observe` it with no items and `error` starting `not connected:`, naming the missing piece and the fix from its procedure (for example `not connected: remindctl reports denied; grant Reminders access in System Settings > Privacy & Security`). This is never silent. Stop before protected reads and never trigger an authorization prompt from a patrol.
+- **Failing:** connected, but a read failed. `observe` with `error` set to the cause, and retry once if the cause is recoverable.
 
-A not-connected source that stays unchanged is one stable gap, not a new warning every patrol. It becomes a notice only through the normal impact, dedup and attention rules.
+Muse turns 5 identical limitation codes in a row into a known limitation, and 3 errors in a row into a Health alert, so an unchanged gap is never a new warning every patrol.
 
 ## Recording a source in TOOLS.md
 
-After a passing self-check, record through `content_write(kind=tools_note,id=current)`: the source name, route (Skill, CLI or MCP server), account label without secrets, resources in scope, tested read commands with window and pagination, source_check identity (connection/account/resource), last verification date and known limits. Never store passwords, tokens or private connection URLs.
+After a passing self-check, record through `content_write(kind=tools_note,id=current)`: the source name, route (Skill, CLI or MCP server), account label without secrets, resources in scope, tested read commands with window and pagination, patrol `source_id` (`<kind>:<account>`), last verification date and known limits. Never store passwords, tokens or private connection URLs.
 
 ## Personal sources (layer 3)
 
@@ -41,9 +41,9 @@ A personal source needs no plugin change. Install its tool or Skill as usual, th
 - Route: `worktracker` CLI (company internal; installed by the user)
 - Self-check: `worktracker whoami --json` → passes when it prints the signed-in user
 - Read: `worktracker list --assigned-to-me --updated-since <RFC3339 of last success> --json`; follow `next_cursor` until empty
-- Identity: connection=worktracker, account=<work login label>, resources=["tickets:assigned"]
-- Not connected: `whoami` exits non-zero → unavailable, fix: `worktracker login`
+- source_id: `tickets:<work login label>`; upstream_id = ticket key
+- Not connected: `whoami` exits non-zero → error `not connected: …`, fix: `worktracker login`
 - Limits: no deleted-ticket history
 ```
 
-The patrol treats it like any other source: scope decides whether it is read, the self-check decides connected or not connected, and source_check records the result. Personal calendar choices (which calendars, which account is primary, which duplicates to skip) belong here too.
+The patrol treats it like any other source: scope decides whether it is read, the self-check decides connected or not connected, and `observe` records the result. Personal calendar choices (which calendars, which account is primary, which duplicates to skip) belong here too.

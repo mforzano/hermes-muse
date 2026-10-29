@@ -1,21 +1,24 @@
-# Goals, interests and watches
+# Goals, interests, ideas and watches
 
-A clear accepted request or promise becomes a goal. A passing interest stays an
-interest; an Idea stays a suggestion until accepted. Preserve the user's criteria.
+- **Goal**: a clear request or promise the user accepted (the words "create a goal" are not needed). Write
+  `criteria` as what done looks like in the user's terms. Before creating one, check `read(kind=goal, query=…)`.
+  The same title in the same conversation returns the existing goal.
+- **Interest**: something the user cares about for now (Feed and patrol use it). It lasts 14 days, or until
+  `expires`. Only a new mention from the user renews it; an article Muse wrote does not.
+- **Idea**: a suggestion for later. It authorizes nothing until the user accepts it.
+- **Watch**: only on the user's explicit request to monitor something for an open goal. It needs a concrete stop
+  condition and a schedule no tighter than the thing changes. A watch stops when its goal closes or it expires.
+  A watch that has no `expires` renews while its goal is open.
 
-- goal_create: id?, title, description, completion_criteria, signal_id?, parent_id?, deadline?, external_ref?, owner?. One subgoal level; timezone-aware deadlines.
-- Nightly intake: the nightly review is the only Cron that may goal_create. It needs signal_id, creates at most 5 per run, must itself dedupe against active, done and cancelled goals first (prompt-level; the code only rejects a reused id), and never calls goal_update. Ordinary conversations remain the first line: every user turn carries a one-line check to cover accepted requests.
-- Fade: an active goal idle for goal_dormant_days (7) is dormant (derived, status stays active): it leaves followups and patrol attention and lists dormant_since/fade_at/fade_due/ask_key in context(section=goal,status=dormant). Idle means no goal_update, no subgoal update, no user message containing its ID or title, and no deadline or watch that just ended; a future deadline, an enabled watch, a running owner or an exempt subgoal exempts it, waiting_user/blocked do not. Mentions by the user are your cue to goal_update the goal with a note, and to reactivate one that shows status cancelled with a latest note ending "auto-faded": goal_update(status=active). The nightly review asks once per dormancy episode (notice event_key = the row's ask_key) and may cancel only when fade_due is true, which needs the question delivered at least a day earlier; it sends goal_update with only id and status="cancelled" and the service refuses anything else. goal_dormant_days/goal_fade_days (parent conversation only, never Cron) and no_fade are the user's choices.
-- no_fade (boolean on goal_create/goal_update, parent conversation only): set true only when the user explicitly wants a standing goal kept open indefinitely (for example a long-term goal that a scheduled job reports on without a deadline). It exempts the goal from dormancy and auto-cancel; set it back to false to let it fade. The nightly review never sets it.
-- goal_update: id, status?, note?, progress?, owner?, next_check_at?, waiting_user?, blocked?, description?, completion_criteria?, research_review_at?, expected_revision?. Status is active/done/cancelled. Explain a checked result, then record done with a note. Cancellation stops owned watches; it does not stop an external agent by implication.
-- A watch-cleanup warning means the goal was committed. Inspect its owned watches and finish cleanup; do not repeat completion as though the goal write failed.
-- interest_record: id?, title, signal_id, expires?, rationale?. Default14 days from the actual mention. Only a newer user mention renews it.
-- idea_add: goal_id?, title, rationale, sources?, expires?, plus a run-unique request_id and expected_revision="absent". Ideas are not execution authority. The nightly review has its own short Ideas step: at most 0-3 from active goals/interests, recent Feed and recently verified user signals, no quota, and run_complete's summary says how many were proposed or why none.
-- feedback: kind, id, action, signal_id, until?. Distinguish accept/done/dismiss/stop/snooze.
-- watch_create: goal_id, signal_id, schedule?, prompt, stop_condition, expires?. Only explicitly requested monitoring. New repeating watches must be provably at least30 minutes apart; once is exempt. Respect cron.allow_agent_scheduling.
-- watch_stop: job_id. Pauses only Muse-owned watches; never change user pauses or unrelated jobs.
-- Watch completion: content_read(kind=installation,id=current) supplies the owned watch key, owner and saved stop_condition. After reading this run's actual sources, call review_complete with that job key, goal_id, the exact saved stop_condition, source_check_ids and summary (no up_to needed for watches); then run_complete with outcome/summary/gaps, before final notification preparation. A source check must be checked and started in this run to support complete. A legacy watch without a saved condition remains partial until its parent restores the originally authorized condition; never invent one or create another watch.
+Completion: check the actual result first, explain it to the user, then call `goal_update(status=done, progress_note=…)`.
+Cancel when the user drops the work. `waiting_user` marks a goal that waits on the user. `owner` records a native
+delegation handle now working on it. An owner's finished result still needs your review before the goal is done.
+Every update moves the next check to tomorrow. Nightly reviews due goals and records an assessment;
+`done_suggested` there is a hint for you to confirm with the user, never a closure.
 
-Review stale research after30 days without closing a goal merely because it went
-quiet. Never add a watch for every goal or interest. Follow [followup](followup.md)
-for simple completion and owner checks, and proactivity for notification rules.
+Dormancy (code-run): after `goal_dormant_days` with no activity, Muse asks the user once whether they still want
+the goal. If they do not answer, it cancels the goal `goal_fade_days` after dormancy began, and at least a day after
+the question was delivered. A future deadline, an active watch, a running owner or `no_fade` exempts a goal. Set
+`no_fade` only on the user's explicit wish for a standing goal. The question's text is the `fade_question`
+preference: when the user does not write in English, set it once in their language with `{title}`, `{days}` and
+`{date}`. If the user mentions a dormant goal, update it with a note; that revives it.

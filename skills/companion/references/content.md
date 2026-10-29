@@ -1,17 +1,20 @@
-# Scoped tool access
+# Content files
 
-Use `skill_view(name="hermes-muse:companion", file_path="references/<procedure>.md")` for instructions. Instructions do not perform IO. All Muse business state uses `muse_manage`; native memory, SOUL, skills and connectors keep their existing tools and authority. This works through host tools from local or container models without extra Muse mounts. Never give workers private host paths.
+Muse's files live under `<home>/muse` and keep their formats.
+- Daily notes: `note`, `daily:YYYY-MM-DD`.
+- Person and group pages: `note`, `person:<name>` or `group:<name>`, using names made of letters, digits, `_` and `-`.
+- Dreams: `dream`, `YYYY-MM-DD`.
+- Alignment synthesis: `alignment`.
+- Tool recipes: `tools_note`, the file TOOLS.md.
+- Working lessons: `working_lessons`, the file AGENTS.md.
+- Goal attachments: `goal_file`, `<goal>/<name>.md`.
+- Preferences (read only): `preferences`.
 
-`content_read` takes `kind`, optional `id`, `resource`, `cursor`, `limit` (1–100), `offset`, `length` (1–24000), `revision`, `topic`, `query`. Omit ID for supported collections; retain `next_cursor` until complete. For text continuation send the original revision. No profile/home/root/path/sql arguments. A changed snapshot requires a fresh first page.
+Write the whole file:
+1. `read(kind, id)` returns `body` and `revision`; a new file reads as `revision: "absent"`.
+2. Edit the body and pass `content_write(kind, id, body, expected_revision=<that revision>)`.
+3. A conflict means someone else changed the file. Read it again and merge, and never overwrite blindly.
 
-Kinds: goal, goal_file, feed, interest, idea, notice, run, finding, research, source_check, preferences/current, tools_note/current, note/daily:YYYY-MM-DD, note/person:id, note/group:id, note_index/people|groups, working_lessons/current, dream/YYYY-MM-DD, alignment/current, review_report/run_id, installation/current. Goal-file resources are `files/name.md`; hidden_files requires trusted assigned maintenance authority and is not exposed by the ordinary UI.
-
-`content_write` takes kind, id, optional resource, body, expected_revision, request_id, and signal_id for explicit user edits. Creation uses revision `absent`; replacement uses the full current file revision. Reuse request_id for the same logical operation. Body is limited to 60000 characters / 256 KiB. Only goal_file, tools_note, note, note_index, working_lessons, dream, alignment and review_report accept body writes. Goals, Feed, preferences, receipts, installation and run state require semantic actions. Working lessons updates only the marked plugin-owned region, preserving other instructions. Unmarked legacy regions need explicit ownership repair; do not overwrite them.
-
-Non-goal semantic actions retain expected_revision/request_id. Goals use optional integer expected_revision only. Read the object first; conflicts mean reread and merge, not substitute the newest version blindly. Non-goal creates require request_id; stable event keys still deduplicate Feed/notices. `outcome_unknown` means inspect the original object/receipt and preserve the pending request; never retry external work under a new key. Operations retain their token/batch/checkpoint contracts. All errors include code/retryable; no error creates new authority.
-
-For explicit content forgetting use `forget(kind="content", object_kind, id, resource?, signal_id, expected_revision, request_id)`. Allowed object kinds: note, goal_file, dream, alignment, review_report. Stop rewriting first; cancel the goal or obtain explicit single-file deletion authority. A tombstone prevents late reconstruction. Read returned remaining_review; this never deletes native memory, history or backups.
-
-Pure reads: content_read, feed_list, operations_evidence, calendar_window/view. Child context/status return paginated Views projections without refresh/reconcile; parent context/status retain refresh semantics. Child conversation_read is pure; parents use read_only=true for filtered pure history, or default served-coverage semantics. research_status can recover legacy execution and remains parent-only. Children read current-profile public business objects and evidence without extra grants, but cannot write or advance checkpoints. None is a reading-progress feature. The host profile/private-user boundary determines read scope. Existing hidden-artifact maintenance and secret-field protections remain; the parent persists returned evidence.
-
-Installation preparation accepts only a current whole-message Muse imperative matching the requested operation: “Please disable Muse now.” / “请停用Muse插件” for disable, “Please uninstall Muse now.” / “请卸载Muse插件” for remove. A quotation, question, deferred instruction or deletion of another object is not authorization; do not rewrite it into a synthetic user signal.
+Job runs may write only notes, dreams and alignment. Write in the user's language and keep sources as references, not
+copies. TOOLS.md holds tested read recipes, never passwords, tokens or private URLs. People pages hold only what the
+user shared.

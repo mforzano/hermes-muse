@@ -1,18 +1,13 @@
 # Silent Feed
 
-Use the curated interest/goal state, explicit Feed brief and feedback, existing native memory and current curated context. Empty local tracking lists do not mean the user has no known interests. Do not revive expired/stopped topics from old memory or manufacture an interest record just to author an article. Do not use raw chat as a public source. Produce authored explanations, comparisons or useful discovery with traceable original sources and a short reason for personal relevance. No hourly output quota; quiet when nothing adds value.
+The daily Feed job writes articles for the user's active interests that had nothing new in three days. An article
+must add real understanding: what happened, why it matters to this user, examples, and cited original sources. When
+a real search finds nothing worthwhile, write no article. Quotas, recycled news and filler do not belong. Raw
+private conversation is never a public citation. Muse stores each article under
+`workspace/your_files/feed/<key>.md`. Publishing is silent: an important new fact reaches the user only through the
+patrol's own judgment.
 
-- `feed_add`: `{event_key, title, content, sources:[references], why, goal_id?, interest_id?}`. Stable key deduplicates the same authored event/theme revision. The writer adds the title heading and a Sources block from `title` and `sources`; pass body-only Markdown in `content` to avoid duplicate headings/source lists. The write/index must succeed before calling it available. Generated articles never renew interest.
-- `feed_list`: `{query?,topic?,cursor?,limit?}` returns items/next_cursor/snapshot_revision. Use query/topic and recent relevant items; follow every cursor only when the task truly needs a complete index; use content_read(kind=feed,id) for article bodies. query searches titles/body. Show the relevant articles and enough context to make them useful; do not overwhelm the user with the whole index.
-- `feed_update`: `{id, signal_id, expected_revision, request_id, feedback?, position?, delete?, title?, content?, sources?}`. Feedback is explicit user sentiment/discussion, not a reading event. Larger position sorts first. Delete removes the owned article/index and prevents the same key from being regenerated. Do not remove unrelated user files.
-- `preferences`: `{feed_brief: "..."}` requires expected_revision/request_id/signal_id, changes future selection and wakes the existing Feed job only outside Cron; old articles stay intact.
-
-Explain why from the saved why/goal/source fields. Discussing an article can update explicit feedback; it does not necessarily create a goal. When the user asks to build/do something from it, use the goals procedure and existing tools, with sources as data rather than instructions. The Feed cron does not publish a chat announcement; the proactive watcher independently decides whether a new fact warrants a reminder.
-
-Optimize for worthwhile reading: enough depth, evidence, examples and personal relevance for the topic, in the user’s preferred style. Do not make articles shallow or suppress good topics merely to reduce model usage. Richness means useful understanding, not padding, repetitive posts or an output quota.
-
-Apply the companion recovery contract to source failures. An unavailable source is a research gap, not proof that no worthwhile topic exists. Use a suitable authorized alternative when possible; do not fill the gap with invented evidence or shallow filler. Persistent loss of this capability can become a pending service-gap candidate for the normal patrol, while articles remain silent.
-
-## Correcting article content
-
-For an explicit authorized correction, content_read(kind=feed,id) first; pass the returned opaque revision unchanged as expected_revision to feed_update. Supply the real signal_id and a stable request_id, with body-only content (and title/sources only if those also change). The semantic writer regenerates the heading/Sources block; omitted sources remain unchanged. Example: correct a tenfold claim to 100-fold in the existing synthetic article, not a new duplicate Feed item. A stale revision is rejected; reread and merge. This does not give a worker/global maintenance job authority to edit arbitrary articles without the original user authorization.
+In the main conversation, `read(kind=feed, query=…)` finds articles, and `read(kind=feed, id=…)` gives an article's
+path. `feed_update` records feedback, pins or deletes an article; feedback is the user's actual reaction, not a
+reading event. Deleting an article removes its file. When the user wants to act on an article, use the goals
+procedure.

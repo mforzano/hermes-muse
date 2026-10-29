@@ -42,7 +42,7 @@ Not connected when the server does not load, the tools are missing, or status is
 
 ## Normalization
 
-Calendar uses `receipt_format:"apple-pim"`; Muse decides per event between full and observed events (see the calendar procedure). source_check identity: connection `apple-pim`, account `eventkit-local-store` (the local EventKit store, not a provider account), resource `calendars:rolling-30d`/`calendars:natural-month`; reminders `reminders:open`; mail `mail:<account>/<mailbox>`.
+Calendar uses `receipt_format:"apple-pim"`; Muse decides per event between full and observed events (see the calendar procedure). Patrol `source_id`s: `calendar:eventkit`, `reminders:eventkit`, `mail:<account>` (the local EventKit store, not a provider account).
 
 ## Known limits
 

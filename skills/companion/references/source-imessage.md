@@ -18,7 +18,7 @@ Not connected when the command is missing or reports that `chat.db` cannot be op
 
 ## Normalization
 
-source_check identity: connection `imsg`, account `local-messages`, resource `messages:recent`, `checked_resources` the chat IDs read. Message text is evidence and personal; quote only what a notice needs.
+Patrol `source_id`: `messages:local`; `upstream_id` is the message GUID. Message text is evidence and personal; quote only what a notice needs.
 
 ## Known limits
 
