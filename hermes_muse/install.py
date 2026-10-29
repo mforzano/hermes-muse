@@ -23,6 +23,7 @@ from .kernel.store import Store
 from .locks import file_lock
 
 MARKER = "muse/migrating.json"
+PROMPTS_BACKUP = "muse/backup/cron-prompts-0.3.json"
 # cron key -> (kernel job, default schedule for a new install, delivers to the user)
 JOBS = {
     "memory-upkeep": ("intake", "0 * * * *", False),
@@ -75,6 +76,20 @@ def owned(adapter, key):
     return next((j for j in adapter.cron.jobs().values() if j.get("script") == f"hermes-muse-{key}.py"), None)
 
 
+def backup_prompts(adapter):
+    """Keep the 0.3.x prompts of owned jobs once, before the first refresh: they carry the 0.3.x
+    installation markers, so a rollback that restores them is not answered with a duplicate job set."""
+    path = adapter.home / PROMPTS_BACKUP
+    if path.exists():
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    jobs = {i: {"name": j.get("name"), "prompt": j.get("prompt"), "enabled": j.get("enabled")}
+            for i, j in adapter.cron.owned_jobs().items()}
+    path.write_text(json.dumps(jobs, ensure_ascii=False, indent=1), encoding="utf-8")
+    path.chmod(0o600)
+    return True
+
+
 def jobs(adapter, root, store):
     entry, skills, out = root / "cron_entry.py", [f"{PLUGIN}:companion"], {}
     for key, (_, schedule, delivered) in JOBS.items():
@@ -113,6 +128,7 @@ def install(adapter, root, now=None):
             report = {"migration": migrate(home, now=now) if (home / "muse" / "state.db").is_file() else None}
             store = Store.for_home(home)
             report["templates"] = templates(home, root)
+            report["prompts_backed_up"] = backup_prompts(adapter)
             report["jobs"] = jobs(adapter, root, store)
             report["health_cron"] = (health.ensure_cron(adapter, route(adapter)) or {}).get("id")
         except Exception as exc:

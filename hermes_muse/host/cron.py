@@ -110,6 +110,24 @@ class Cron(Part):
             return bool(pause_job(job_id, reason=f"Hermes Muse: {reason}"))
 
     @tolerant(False)
+    def resume(self, job_id):
+        """Resume an owned paused job (rollback of a Muse pause)."""
+        if job_id not in self.jobs():
+            return False
+        from cron.jobs import resume_job
+        with self.scope():
+            return bool(resume_job(job_id))
+
+    @tolerant(False)
+    def set_prompt(self, job_id, prompt):
+        """Replace an owned job's prompt only; schedule, route and pause stay (rollback restores 0.3.x prompts)."""
+        if job_id not in self.jobs():
+            return False
+        from cron.jobs import update_job
+        with self.scope():
+            return bool(update_job(job_id, {"prompt": prompt}))
+
+    @tolerant(False)
     def wake(self, job_id):
         """Run an enabled owned job now as a manual fire; pause and schedule stay as they are."""
         job = self.jobs().get(job_id)
