@@ -8,7 +8,8 @@ from .store import machine
 H, D = 3600, 86400
 PREFIX = "<!-- hermes-muse "
 DEFAULT_PREFERENCES = {"start_hour": 9, "end_hour": 22, "ordinary_per_day": None, "time_sensitive_per_day": 3,
-                       "blocked_topics": [], "deliver": None, "goal_dormant_days": 7, "goal_fade_days": 7}
+                       "blocked_topics": [], "deliver": None, "goal_dormant_days": 7, "goal_fade_days": 7,
+                       "fade_question": None}
 
 
 def header(text):

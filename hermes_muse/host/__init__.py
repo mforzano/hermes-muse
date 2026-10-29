@@ -128,6 +128,21 @@ class HostAdapter:
             self.fault("adapter.now", exc)
             return datetime.now().astimezone()
 
+    def caller(self):
+        """Who is calling a Muse tool now: {platform, private, cron, delegated}; unknown fails closed."""
+        try:
+            from agent.delegation_context import is_delegated_child_context
+            from gateway.session_context import get_session_env
+            from .sessions import GROUP_CHATS
+            platform = get_session_env("HERMES_SESSION_PLATFORM", "")
+            chat_type = get_session_env("HERMES_SESSION_CHAT_TYPE", "").lower()
+            return {"platform": platform, "private": chat_type not in GROUP_CHATS and platform != "curator",
+                    "cron": get_session_env("HERMES_CRON_SESSION", "") == "1" or platform == "cron",
+                    "delegated": is_delegated_child_context()}
+        except Exception as exc:
+            self.fault("adapter.caller", exc)
+            return {"platform": "", "private": False, "cron": False, "delegated": True}
+
     def probe(self, **kwargs):
         from .probe import run
         return run(self, **kwargs)

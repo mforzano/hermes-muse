@@ -148,16 +148,17 @@ def slug_for(signal_ref):
     return "g" + hashlib.sha256(str(signal_ref).encode()).hexdigest()[:11]
 
 
-def create(k, *, title, criteria, signal_ref, now, by="nightly"):
-    """A goal authorized by a user signal; one per signal, at most 5 per day from cron."""
-    signal = one(k.store, "signal", signal_ref)
+def create(k, *, title, criteria, signal_ref=None, now, by="nightly", session_id=None, extra=None):
+    """A goal authorized by a user signal (cron: one per signal, at most 5 per day) or, with by='user', by the
+    private main session itself; the same session and title give the same goal."""
+    signal = one(k.store, "signal", signal_ref) if signal_ref else None
     source = (signal or {}).get("payload", {}).get("source")
-    if not signal or source and classify(source) != "user":
+    if by != "user" and not signal or source and classify(source) != "user":
         raise PermissionError("a goal needs a user signal as authority")
     title, criteria = str(title or "").strip()[:200], str(criteria or "").strip()[:4000]
     if not title or not criteria:
         raise ValueError("title and criteria are required")
-    slug = slug_for(signal_ref)
+    slug = slug_for(signal_ref or f"{session_id}:{' '.join(title.casefold().split())}")
     found = read(k.home, slug)
     if found:
         return {"result": "existing", "goal_id": slug}
@@ -167,8 +168,9 @@ def create(k, *, title, criteria, signal_ref, now, by="nightly"):
     def mutate(_, __):
         record = {"id": slug, "title": title, "status": "active", "revision": 0, "parent_id": None, "created": now,
                   "deadline": None, "external_ref": None, "research_review_at": now + 30 * D, "source_signal": signal_ref,
-                  "session_id": signal["payload"].get("session_id"), "progress": [], "owner": None,
-                  "next_check_at": now + CHECK_EVERY, "waiting_user": False, "blocked": None, "created_by": by}
+                  "session_id": signal["payload"].get("session_id") if signal else session_id, "progress": [], "owner": None,
+                  "next_check_at": now + CHECK_EVERY, "waiting_user": False, "blocked": None, "created_by": by,
+                  "no_fade": False, **{f: v for f, v in (extra or {}).items() if f in ("deadline", "parent_id", "no_fade")}}
         return record, f"# {title}\n\n## Completion criteria\n{criteria}\n"
     write(k, slug, mutate, reason=f"create:{by}", now=now, create=True)
     return {"result": "created", "goal_id": slug}
@@ -183,6 +185,14 @@ def item(k, e):
 
 
 # -- dormancy and fade -------------------------------------------------------------------------------
+def question(prefs, title, days, date):
+    """The dormancy question: the user's `fade_question` template (their language) or the English default."""
+    template = prefs.get("fade_question")
+    if template:
+        return template.format(title=title, days=days, date=date or "-")
+    return ASK.format(title=title, days=days) + (CLOSES.format(date=date) if date else ".")
+
+
 def owner_handle(owner):
     return (owner.get("handle") or owner.get("id")) if isinstance(owner, dict) else owner
 
@@ -228,7 +238,7 @@ def fade(k, now):
                 keep.add(key)
                 if ask is None:
                     date = datetime.fromtimestamp(max(fade_at or now, now + D), tz).date().isoformat()
-                    text = ASK.format(title=record.get("title") or slug, days=days) + (CLOSES.format(date=date) if fade_at else ".")
+                    text = question(prefs, record.get("title") or slug, days, date if fade_at else None)
                     notifier.draft(k, text=text, topic=notifier.FADE_TOPIC, goal_id=slug, source_key=key,
                                    title=record.get("title") or slug, evidence=[f"goal:{slug}"],
                                    expires=max(fade_at or 0, now + 2 * D) + D, now=now)
