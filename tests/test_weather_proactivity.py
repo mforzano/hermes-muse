@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import unittest
 
-from hermes_muse.host import HermesHost
+from hermes_muse.host_v1 import HermesHost
 from hermes_muse.service import Companion
 from hermes_muse.store import Store
 from hermes_muse.views import validate_tools_note

@@ -17,7 +17,7 @@ def call(action,data):
     return json.loads(handle_function_call('muse_manage',{'action':action,'data':data},session_id='origin',turn_id='user-repair',enabled_toolsets=['muse']))
 # Plans below are authored fixtures, not inferred by a model or a new plugin policy engine.
 from cron.jobs import list_jobs, update_job, pause_job, get_job
-from hermes_muse.host import profile_scope
+from hermes_muse.host_v1 import profile_scope
 from native_calendar_smoke import run as calendar_checks
 assert not rt.store.goals(), 'Empty goals must not prevent the calendar tool path'
 calendar_checks(registry.get_entry('muse_manage'),rt)

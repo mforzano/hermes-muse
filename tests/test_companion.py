@@ -650,7 +650,7 @@ class CompanionTests(unittest.TestCase):
     def test_native_receipt_unknown_is_never_assumed_sent(self):
         import sys
         import types
-        from hermes_muse.host import HermesHost
+        from hermes_muse.host_v1 import HermesHost
         row = self.notice(priority="urgent")
         self.service.notification_queue({"id": row["id"]})
         self.dispatch(row["id"])
@@ -658,7 +658,7 @@ class CompanionTests(unittest.TestCase):
         ledger.get_execution = lambda execution_id: {"id": "attempt-one", "status": "unknown", "delivery_outcome": None}
         if not hasattr(ledger, "latest_execution"):
             ledger.latest_execution = ledger.get_execution
-        with patch.dict(sys.modules, {"cron.executions": ledger}), patch("hermes_muse.host.profile_scope", lambda home: contextlib.nullcontext()):
+        with patch.dict(sys.modules, {"cron.executions": ledger}), patch("hermes_muse.host_v1.profile_scope", lambda home: contextlib.nullcontext()):
             HermesHost(self.store).reconcile()
         current = self.store.read("notification", row["id"])
         self.assertEqual(current["status"], "unknown")
@@ -668,7 +668,7 @@ class CompanionTests(unittest.TestCase):
     def test_native_queue_ack_is_not_final_delivery(self):
         import sys
         import types
-        from hermes_muse.host import HermesHost
+        from hermes_muse.host_v1 import HermesHost
         row = self.notice(priority="urgent")
         self.service.notification_queue({"id": row["id"]})
         self.dispatch(row["id"])
@@ -677,7 +677,7 @@ class CompanionTests(unittest.TestCase):
         ledger.latest_execution = ledger.get_execution
         queue = types.ModuleType("cron.delivery_queue")
         queue.get_status = lambda execution_id: {"status": "pending"}
-        with patch.dict(sys.modules, {"cron.executions": ledger, "cron.delivery_queue": queue}), patch("hermes_muse.host.profile_scope", lambda home: contextlib.nullcontext()):
+        with patch.dict(sys.modules, {"cron.executions": ledger, "cron.delivery_queue": queue}), patch("hermes_muse.host_v1.profile_scope", lambda home: contextlib.nullcontext()):
             HermesHost(self.store).reconcile()
             self.assertEqual(self.store.read("notification", row["id"])["status"], "transport_queued")
             revision = self.store.read("notification", row["id"])["_revision"]
@@ -690,7 +690,7 @@ class CompanionTests(unittest.TestCase):
     def test_bot_chat_receipts_track_live_and_deferred_completion_without_replay(self):
         import sys
         import types
-        from hermes_muse.host import HermesHost
+        from hermes_muse.host_v1 import HermesHost
         self.host.destination = {"deliver": "bot-chat"}
         modules = {name: types.ModuleType(name) for name in
                    ("cron.executions", "cron.jobs", "tools.bot_live_delivery")}
@@ -707,7 +707,7 @@ class CompanionTests(unittest.TestCase):
             self.dispatch(row["id"])
             receipt = {"status": "queued"}
             modules["tools.bot_live_delivery"].read_delivery_result = lambda home, key: None if deferred else receipt
-            with patch.dict(sys.modules, modules), patch("hermes_muse.host.profile_scope", lambda home: contextlib.nullcontext()):
+            with patch.dict(sys.modules, modules), patch("hermes_muse.host_v1.profile_scope", lambda home: contextlib.nullcontext()):
                 for state, expected in (("queued", "transport_queued"), ("claimed", "transport_queued"),
                                         ("settled" if deferred else "ambiguous", "sent" if deferred else "unknown")):
                     receipt["status"] = state
@@ -725,7 +725,7 @@ class CompanionTests(unittest.TestCase):
 
     def test_settled_exact_receipt_repairs_unknown_after_later_run_without_resend(self):
         import sys, types
-        from hermes_muse.host import HermesHost, bot_receipt_key
+        from hermes_muse.host_v1 import HermesHost, bot_receipt_key
         self.host.destination = {"deliver": "bot-chat"}
         row = self.notice(priority="urgent")
         self.dispatch(row["id"])
@@ -739,7 +739,7 @@ class CompanionTests(unittest.TestCase):
         modules["cron.executions"].latest_execution = lambda jid: {"id": "later-run", "status": "completed", "delivery_outcome": "delivered"}
         modules["cron.jobs"].get_job = lambda jid: {"last_delivery_queued": None}
         modules["tools.bot_live_delivery"].read_delivery_result = lambda home, k: {"status": "settled"} if k == key else None
-        with patch.dict(sys.modules, modules), patch("hermes_muse.host.profile_scope", lambda home: contextlib.nullcontext()):
+        with patch.dict(sys.modules, modules), patch("hermes_muse.host_v1.profile_scope", lambda home: contextlib.nullcontext()):
             HermesHost(self.store).reconcile()
             self.assertEqual(self.store.read("notification", row["id"])["status"], "sent")
             self.assertEqual(HermesHost(self.store).bot_delivery_status("patrol", "unrelated-attempt"), "unknown")
@@ -747,7 +747,7 @@ class CompanionTests(unittest.TestCase):
 
     def test_profile_bot_chat_route_reconciles_and_one_bad_row_does_not_block_others(self):
         import sys, types
-        from hermes_muse.host import HermesHost
+        from hermes_muse.host_v1 import HermesHost
         self.host.destination = {"deliver": "bot-chat:default"}
         good, bad = self.notice("good", priority="urgent"), self.notice("bad", priority="urgent")
         for row in (good, bad):
@@ -764,7 +764,7 @@ class CompanionTests(unittest.TestCase):
         modules["cron.executions"].latest_execution = modules["cron.executions"].get_execution = execution
         modules["cron.jobs"].get_job = lambda job: {"last_delivery_queued": {"bot-chat:default": {"delivery_id": "receipt-one"}}}
         modules["tools.bot_live_delivery"].read_delivery_result = lambda home, key: {"status": "settled"}
-        with patch.dict(sys.modules, modules), patch("hermes_muse.host.profile_scope", lambda home: contextlib.nullcontext()):
+        with patch.dict(sys.modules, modules), patch("hermes_muse.host_v1.profile_scope", lambda home: contextlib.nullcontext()):
             HermesHost(self.store).reconcile()
         self.assertEqual(self.store.read("notification", good["id"])["status"], "sent")
         self.assertEqual(self.store.read("notification", bad["id"])["status"], broken["status"])
@@ -803,7 +803,7 @@ class CompanionTests(unittest.TestCase):
     def test_direct_receipt_does_not_use_later_patrol_success(self):
         import sys
         import types
-        from hermes_muse.host import HermesHost
+        from hermes_muse.host_v1 import HermesHost
         row = self.notice(priority="urgent")
         self.dispatch(row["id"])
         ledger = types.ModuleType("cron.executions")
@@ -811,21 +811,21 @@ class CompanionTests(unittest.TestCase):
         ledger.latest_execution = lambda job: {"id": "later-run", "status": "completed", "delivery_outcome": "delivered"}
         if not hasattr(ledger, "latest_execution"):
             ledger.latest_execution = ledger.get_execution
-        with patch.dict(sys.modules, {"cron.executions": ledger}), patch("hermes_muse.host.profile_scope", lambda home: contextlib.nullcontext()):
+        with patch.dict(sys.modules, {"cron.executions": ledger}), patch("hermes_muse.host_v1.profile_scope", lambda home: contextlib.nullcontext()):
             HermesHost(self.store).reconcile()
         self.assertEqual(self.store.read("notification", row["id"])["status"], "unknown")
 
     def test_unfinalized_status_summary_cannot_count_as_notice_sent(self):
         import sys
         import types
-        from hermes_muse.host import HermesHost
+        from hermes_muse.host_v1 import HermesHost
         row = self.notice(priority="urgent")
         self.service.notification_queue({"id": row["id"]},
             {"job_id": "patrol", "execution_id": "run", "route": {"deliver": "bot-chat"}})
         ledger = types.ModuleType("cron.executions")
         ledger.get_execution = lambda key: {"id": key, "status": "completed", "delivery_outcome": "delivered"}
         ledger.latest_execution = ledger.get_execution
-        with patch.dict(sys.modules, {"cron.executions": ledger}), patch("hermes_muse.host.profile_scope", lambda home: contextlib.nullcontext()):
+        with patch.dict(sys.modules, {"cron.executions": ledger}), patch("hermes_muse.host_v1.profile_scope", lambda home: contextlib.nullcontext()):
             HermesHost(self.store).reconcile()
         self.assertEqual(self.store.read("notification", row["id"])["status"], "unknown")
 

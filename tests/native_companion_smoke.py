@@ -16,7 +16,7 @@ def run(home):
     (home / "config.yaml").write_text("plugins:\n  enabled: [hermes-muse]\ntimezone: UTC\n")
     from cron.jobs import get_job, list_jobs, remove_job
     from gateway.session_context import set_session_vars, clear_session_vars
-    from hermes_muse.host import profile_scope, enabled, cron_run
+    from hermes_muse.host_v1 import profile_scope, enabled, cron_run
     from hermes_muse.runtime import Runtime
     from hermes_muse.store import stamp
 

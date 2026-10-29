@@ -14,7 +14,7 @@ def run(home):
     home.mkdir(parents=True)
     (home/'config.yaml').write_text('plugins:\n  enabled: [hermes-muse]\ntimezone: UTC\ndelegation:\n  max_concurrent_children: 1\n')
     shutil.copytree(PROJECT,home/'plugins/hermes-muse',ignore=shutil.ignore_patterns('.git','__pycache__','.venv','.hermes-core'))
-    from hermes_muse.host import profile_scope
+    from hermes_muse.host_v1 import profile_scope
     from hermes_cli.plugins import discover_plugins
     from hermes_cli.lifecycle import invoke_hook
     from hermes_cli.config import load_config_readonly

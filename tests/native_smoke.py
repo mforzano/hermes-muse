@@ -40,7 +40,7 @@ def main():
         from cron.jobs import list_jobs, pause_job, get_job
         from cron.scheduler_script import _run_job_script
         from cron.scheduler_prompt import _parse_wake_gate
-        from hermes_muse.host import HermesHost, profile_scope
+        from hermes_muse.host_v1 import HermesHost, profile_scope
         from hermes_muse.store import Store
         first_ids = None
         for visit, index in enumerate((0, 1, 0)):
@@ -147,9 +147,9 @@ def main():
                 assert changed and final == prepared["final_response"] and "Verified test body." in final
                 # Compare our read-only receipt lookup with the actual host producer key.
                 from cron.scheduler_delivery import _deliver_to_bot_chat
-                from hermes_muse.host import bot_receipt_key
+                from hermes_muse.host_v1 import bot_receipt_key
                 with patch("tools.bot_live_delivery.read_delivery_result", return_value=None), \
-                     patch("hermes_muse.host.read_bot_pending", return_value=None), \
+                     patch("hermes_muse.host_v1.read_bot_pending", return_value=None), \
                      patch("tools.bot_live_delivery.find_canonical_live_owner", return_value={"test": True}), \
                      patch("tools.bot_live_delivery.deliver_to_live_owner", side_effect=lambda home, owner, message, **kw: {"status": "queued", "message": message}) as deliver:
                     _deliver_to_bot_chat({"id": patrol, "name": "muse-proactive-watch", "execution_id": attempt["id"]}, final, "")

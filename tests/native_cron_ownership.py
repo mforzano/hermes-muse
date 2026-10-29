@@ -6,7 +6,7 @@ import time
 def run(base):
     from cron.jobs import create_job, get_job, list_jobs, pause_job, update_job
     from cron.executions import create_execution, mark_execution_running, finish_execution
-    from hermes_muse.host import HermesHost, profile_scope
+    from hermes_muse.host_v1 import HermesHost, profile_scope
     from hermes_muse.installation import prepare_owned
     from hermes_muse.service import Companion
     from hermes_muse.store import Store

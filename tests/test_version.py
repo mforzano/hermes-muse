@@ -7,7 +7,7 @@ import unittest
 
 from hermes_muse import __version__
 from hermes_muse.store import Store, VERSION
-from hermes_muse.host import HermesHost
+from hermes_muse.host_v1 import HermesHost
 
 
 class VersionTests(unittest.TestCase):

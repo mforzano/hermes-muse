@@ -6,7 +6,7 @@ from .contracts import CAS, CREATES, validate
 from .guidance import SAME_AGAIN, fresh_key
 from .content_io import DomainError, revision, check_cancelled
 from .views import Views, canonical
-from .host import file_lock, profile_scope
+from .host_v1 import file_lock, profile_scope
 
 
 def target(action, data):

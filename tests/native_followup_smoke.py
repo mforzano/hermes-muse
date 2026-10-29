@@ -10,7 +10,7 @@ def run(home):
     (home/'config.yaml').write_text('plugins:\n  enabled: [hermes-muse]\ntimezone: UTC\n')
     repo=Path(__file__).resolve().parents[1]
     shutil.copytree(repo,home/'plugins/hermes-muse',ignore=shutil.ignore_patterns('.git','__pycache__'))
-    from hermes_muse.host import profile_scope
+    from hermes_muse.host_v1 import profile_scope
     from hermes_cli.plugins import discover_plugins, get_plugin_manager, invoke_hook
     from hermes_state import SessionDB
     from tools.registry import registry
