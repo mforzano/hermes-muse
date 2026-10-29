@@ -182,7 +182,7 @@ def part_hooks(home, ids):
         hooks.post_tool(tool_name="memory", args={"action": "list" if call == "c-read" else "add"}, result=result,
                         session_id="s1", tool_call_id=call, platform="cron" if call == "c-cron" else "cli")
     store = Store.for_home(home)
-    receipts = sorted(e["natural_key"] for e in store.query("receipt") if e["natural_key"].startswith("c-"))
+    receipts = sorted(e["natural_key"] for e in store.query("memory_receipt") if e["natural_key"].startswith("c-"))
     once = (hooks.pre_turn(session_id="s1", platform="cli") or {}).get("context", "")
     again = hooks.pre_turn(session_id="s1", platform="cli")
     later = Hooks(hooks.k, clock=lambda: time.time() + D + 60)

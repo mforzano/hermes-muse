@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 from kernel_acceptance import D, T0, FakeHost, make_home  # noqa: E402
 from hermes_muse import entry, install, surface as s  # noqa: E402
-from hermes_muse.kernel import Kernel, packets  # noqa: E402
+from hermes_muse.kernel import Kernel, packets, records  # noqa: E402
 
 FAILED = []
 MAIN_CALL = {"kind": "user", "session_id": "chat"}
@@ -80,6 +80,13 @@ def job_output(k, key):
     """Script Output of one launcher run (cron_entry -> entry.output): the packet JSON, '' when silent."""
     out = entry.output(k, key)
     return "" if not out["wakeAgent"] else json.dumps(out.get("packet") or out, ensure_ascii=False)
+
+
+def writes_only_in_kernel():
+    hits = {f: n for f in ("surface.py", "hooks.py", "entry.py", "install.py", "views.py")
+            if (n := len(re.findall(r"store\.(?:create|transition|attempt)\(|\bpatch\(", (ROOT / "hermes_muse" / f).read_text())))}
+    check("S11 entity state is written only in kernel/: surface, hooks, entry, install and views call kernel functions",
+          not hits, hits)
 
 
 def dynamic(base):
@@ -175,7 +182,7 @@ def dynamic(base):
     check("S8 job runs: packet as Script Output, read/submit/observe through muse_job, article file written then deleted, empty packet silent",
           read["ok"] and sub["result"][0].get("state") == "disposed" and obs["ok"] and verdict["result"][0].get("result") == "drafted"
           and fsub["ok"] and "article" not in fsub["result"][0] and not feed_file.exists() and deleted["ok"]
-          and path.startswith(s.FEED_DIR) and empty_nightly == "" and weekly["job"] == "weekly" and "signal" in weekly["last_7_days"],
+          and path.startswith(records.FEED_DIR) and empty_nightly == "" and weekly["job"] == "weekly" and "signal" in weekly["last_7_days"],
           {"submit": sub, "verdict": verdict, "feed": fsub, "weekly": weekly["last_7_days"]})
 
     # S9 authorization by caller: cron/delegated/group/main boundaries
@@ -242,6 +249,7 @@ def native(base):
 
 def main():
     static()
+    writes_only_in_kernel()
     with tempfile.TemporaryDirectory() as tmp:
         dynamic(Path(tmp) / "a")
         native(Path(tmp) / "b")

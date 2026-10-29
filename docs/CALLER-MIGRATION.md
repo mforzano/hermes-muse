@@ -19,6 +19,6 @@ Job ids do not change: the install refreshes the Muse jobs in place under their 
 and `muse-health` is new.
 
 Record kinds map to entity kinds as `notification` → `notice`, `interest` → `interest` and `idea`,
-`source_check` → `source`, `memory_feedback` → `receipt`, `operation_finding` → `finding`. `run`,
+`source_check` → `source`, `memory_feedback` → `memory_receipt`, `operation_finding` → `finding`. `run`,
 `signal` and `feed` keep their names; migrated rows keep their 0.3.x id in `payload.v1_id`. Status names
 changed, for example a run is `ok/degraded/failed/abandoned` and a notice `drafted/scheduled/sending/sent/…`.

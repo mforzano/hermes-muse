@@ -264,6 +264,29 @@ def fade(k, now):
     return {"asked": asked, "cancelled": cancelled, "blocked": blocked}
 
 
+def watch_slot(k, slug):
+    """(n, job key) for the next watch of an open goal; KeyError when the goal is not open."""
+    goal = k.store.get(f"goal:{slug}")
+    if not goal or goal["state"] not in OPEN:
+        raise KeyError(f"no open goal {slug!r}")
+    n = sum(w["payload"].get("goal_id") == slug for w in k.store.query("watch")) + 1
+    return n, "watch-" + hashlib.sha256(f"{slug}:{n}".encode()).hexdigest()[:12]
+
+
+def add_watch(k, slug, n, *, job_id, key, schedule, check, stop_condition, expires=None, now):
+    """Record the watch whose owned job the caller already created (install.ensure_watch)."""
+    return k.store.create("watch", f"goal:{slug}:watch:{n}", {
+        "goal_id": slug, "job_id": job_id, "key": key, "schedule": schedule, "check": check,
+        "stop_condition": stop_condition, "expires": expires}, deadline=expires or now + WATCH_RENEW, now=now)
+
+
+def stop_watch(k, e, *, reason, now):
+    """(stopped now, job paused) for a user stop; the job is paused even when the watch already ended."""
+    moved = patch(k.store, e["id"], "stopped", expect=("active",), reason=reason, now=now)
+    job_id = e["payload"].get("job_id")
+    return bool(moved), bool(job_id) and bool(k.adapter.cron.pause(job_id, "watch stopped by the user"))
+
+
 def watches(k, now):
     """Stop watches of closed goals; renew an open goal's watch that has no user-set expiry."""
     out = {"renewed": 0, "stopped": []}

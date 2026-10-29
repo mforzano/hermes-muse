@@ -7,9 +7,9 @@ from pathlib import Path
 
 from .content_io import Files, revision
 from .kernel import goals
+from .kernel.records import FEED_DIR
 from .kernel.store import Store
 
-FEED_DIR = "workspace/your_files/feed"
 BODY_MAX = 24000
 SUMMARY = ("title", "status", "created", "updated", "goal_id", "interest_id", "why", "rationale", "deadline",
            "next_check_at", "waiting_user", "blocked", "no_fade")

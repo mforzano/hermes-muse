@@ -45,3 +45,8 @@ def notice_key(item_id=None, sources=(), title="", ts=None):
 
 def signal_key(session_id, turn_id):
     return turn_id if str(turn_id).startswith(f"{session_id}:") else f"{session_id}:{turn_id}"
+
+
+def title_key(title):
+    """Interest/idea natural key: the casefolded, whitespace-normalized title."""
+    return hashlib.sha256(" ".join(str(title).casefold().split()).encode()).hexdigest()[:16]

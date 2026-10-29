@@ -123,7 +123,7 @@ def _migrate(home, store, now):
                     skipped["memory_feedback:not_noticeable"] += 1
                     continue
                 fresh = row.get("created", 0) >= now - D
-                put("receipt", row.get("tool_call_id") or key, kind, key,
+                put("memory_receipt", row.get("tool_call_id") or key, kind, key,
                     {f: row.get(f) for f in ("session_id", "turn_id", "tool", "classified_state", "created")},
                     "pending_notice" if fresh else "noticed", why="recent" if fresh else "already_repeated")
             elif kind == "operation_finding":

@@ -7,7 +7,6 @@ muse_job: a Muse job run's read / observe / submit against the packet in its Scr
 result shapes are kernel.packets.SCHEMAS. Code fills every ID, key, next_check and managed revision;
 only content files take an expected_revision.
 """
-import hashlib
 import json
 import sys
 from datetime import datetime
@@ -16,11 +15,10 @@ from pathlib import Path
 from . import health, install
 from .content_io import DomainError, Files, revision
 from .host.sessions import redact
-from .kernel import goals, packets
-from .kernel.common import D, header, one, patch, render
+from .kernel import goals, packets, records
+from .kernel.common import header, one, render
 from .kernel.packets import enum, obj
 from .locks import file_lock
-from .views import FEED_DIR
 
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE = ROOT / "skills/companion/references/interface.md"
@@ -194,10 +192,6 @@ def bad(path, problem):
     return DomainError("invalid_argument", f"{path} {problem}", field=path)
 
 
-def topic_key(title):
-    return hashlib.sha256(" ".join(str(title).casefold().split()).encode()).hexdigest()[:16]
-
-
 def content_path(kind, key):
     key = str(key)
     if kind == "note":
@@ -300,14 +294,8 @@ class Surface:
         return {"result": "updated", "goal_id": slug, "status": record.get("status"), "next_check_at": record.get("next_check_at")}
 
     def remember(self, kind, d, extra):
-        store, now = self.k.store, self.now()
-        deadline = self.time(d.get("expires")) or now + 14 * D
-        payload = {"title": d["title"].strip(), "rationale": d.get("rationale") or "", **extra}
-        with store.atomic():
-            e = store.create(kind, topic_key(d["title"]), {**payload, "created": now}, deadline=deadline, now=now)
-            if e["existing"]:
-                e = patch(store, e["id"], "active", reason="renew", payload=payload, deadline=deadline, now=now)
-        return {"result": "renewed" if e["version"] > 1 else "recorded", "id": e["id"], "expires": e["deadline"]}
+        return records.remember(self.k, kind, d["title"], rationale=d.get("rationale"), expires=self.time(d.get("expires")),
+                                extra=extra, now=self.now())
 
     def muse_manage_interest_record(self, d, call):
         return self.remember("interest", d, {"session_id": call.get("session_id")})
@@ -337,84 +325,42 @@ class Surface:
         return {"result": "saved", "changed": sorted(d), **({"paused_jobs": paused} if pause else {})}
 
     def muse_manage_feedback(self, d, call):
-        e = self.entity(d["kind"], d["id"])
-        now, value = self.now(), d["value"]
-        mark = {"feedback": {"value": value, "note": d.get("note") or "", "at": now}}
-        to, expect = None, None
-        if d["kind"] == "finding":
-            to, expect = ("resolved" if value == "useful" else "dismissed"), ("open",)
-        elif d["kind"] in ("interest", "idea") and value == "stop":
-            to, expect = "stopped", ("active", "expired")
-        if d["kind"] == "notice" and value == "stop":
-            from .kernel import notifier
-            notifier.withdraw(self.k, e["id"], reason="user_feedback", now=now)
-        moved = patch(self.k.store, e["id"], to, expect=expect, reason=f"feedback:{value}", payload=mark, now=now)
-        return {"result": "recorded", "id": e["id"], "state": (moved or self.k.store.get(e["id"]))["state"]}
+        return records.feedback(self.k, self.entity(d["kind"], d["id"]), d["value"], d.get("note"), now=self.now())
 
     def muse_manage_forget(self, d, call):
-        kind, store, now = d["kind"], self.k.store, self.now()
+        kind = d["kind"]
         if kind in CONTENT:
             if not d.get("expected_revision"):
                 raise ValueError("forgetting a file needs expected_revision from read")
             with self.lock():
                 self.files.unlink(content_path(kind, d["id"]), d["expected_revision"])
             return {"result": "deleted", "kind": kind, "id": d["id"]}
-        e = self.entity(kind, d["id"])
-        if kind == "feed":
-            self.delete_feed(e)
-            return {"result": "deleted", "id": e["id"]}
-        with store.atomic():
-            store.create("tombstone", e["natural_key"], {"kind": kind, "at": now}, now=now)
-            scrub = {"excerpt": "", "facts": [], "pointer": {}} if kind == "signal" else {"title": "", "rationale": "", "sources": []}
-            to = {"signal": "disposed", "interest": "stopped", "idea": "stopped"}[kind]
-            patch(store, e["id"], to, expect=("new", "parked") if kind == "signal" else ("active", "expired"),
-                  reason="forget", payload={**scrub, "forgotten": True}, now=now) or \
-                patch(store, e["id"], reason="forget", payload={**scrub, "forgotten": True}, now=now)
-        return {"result": "forgotten", "id": e["id"]}
+        return records.forget(self.k, self.entity(kind, d["id"]), now=self.now())
 
     def muse_manage_watch_create(self, d, call):
-        store, now, slug = self.k.store, self.now(), d["goal_id"]
-        goal = store.get(f"goal:{slug}")
-        if not goal or goal["state"] not in goals.OPEN:
-            raise KeyError(f"no open goal {slug!r}")
-        n = sum(w["payload"].get("goal_id") == slug for w in store.query("watch")) + 1
-        key = "watch-" + hashlib.sha256(f"{slug}:{n}".encode()).hexdigest()[:12]
-        expires = self.time(d.get("expires"))
+        slug = d["goal_id"]
+        n, key = goals.watch_slot(self.k, slug)
         job = install.ensure_watch(self.k.adapter, ROOT, key, schedule=d["schedule"], check=d["prompt"],
                                    stop_condition=d["stop_condition"])
         if not job:
             raise DomainError("host_unavailable", "Hermes did not create the watch job; nothing was saved")
-        e = store.create("watch", f"goal:{slug}:watch:{n}", {
-            "goal_id": slug, "job_id": job["id"], "key": key, "schedule": d["schedule"], "check": d["prompt"],
-            "stop_condition": d["stop_condition"],
-            "expires": expires}, deadline=expires or now + goals.WATCH_RENEW, now=now)
+        e = goals.add_watch(self.k, slug, n, job_id=job["id"], key=key, schedule=d["schedule"], check=d["prompt"],
+                            stop_condition=d["stop_condition"], expires=self.time(d.get("expires")), now=self.now())
         return {"result": "created", "watch_id": e["id"], "job_id": job["id"], "expires": e["deadline"]}
 
     def muse_manage_watch_stop(self, d, call):
         e = self.entity("watch", d["watch_id"])
-        moved = patch(self.k.store, e["id"], "stopped", expect=("active",), reason="user", now=self.now())
-        paused = bool(e["payload"].get("job_id")) and self.k.adapter.cron.pause(e["payload"]["job_id"], "watch stopped by the user")
+        moved, paused = goals.stop_watch(self.k, e, reason="user", now=self.now())
         return {"result": "stopped" if moved else "not_active", "watch_id": e["id"], "job_paused": paused}
 
     def muse_manage_feed_update(self, d, call):
         e = self.entity("feed", d["id"])
         if d["change"] == "delete":
-            self.delete_feed(e)
+            records.delete_feed(self.k, e, now=self.now())
             return {"result": "deleted", "id": e["id"]}
         if d["change"] == "feedback" and not d.get("feedback"):
             raise bad("data.feedback", "is required for change=feedback")
-        mark = {"feedback": {"text": d["feedback"], "at": self.now()}} if d["change"] == "feedback" else {"pinned": d["change"] == "pin"}
-        patch(self.k.store, e["id"], expect=("published",), reason=f"feed:{d['change']}", payload=mark, now=self.now())
-        return {"result": "updated", "id": e["id"], **mark}
-
-    def delete_feed(self, e):
-        rel = f"{FEED_DIR}/{e['natural_key']}.md"
-        with self.lock():
-            try:
-                self.files.unlink(rel, revision(self.files.read(rel)))
-            except FileNotFoundError:
-                pass
-            patch(self.k.store, e["id"], "deleted", expect=("published",), reason="user_delete", now=self.now())
+        return records.mark_feed(self.k, e, d["change"], d.get("feedback"), now=self.now())
 
     def muse_manage_content_write(self, d, call):
         rel = content_path(d["kind"], d["id"])
@@ -442,7 +388,7 @@ class Surface:
             if found:
                 out.update(record=found[0], body=found[1])
             if kind == "feed":
-                out["path"] = f"{FEED_DIR}/{e['natural_key']}.md"
+                out["path"] = records.feed_path(e)
             return out
         rows = [row(e) for e in reversed(store.query(kind))
                 if not query or query in json.dumps(e["payload"], ensure_ascii=False).casefold()]
@@ -502,26 +448,7 @@ class Surface:
         return self.k.observe(d["packet_id"], d["source_id"], d["items"], d.get("limitation_code"), d.get("error"))
 
     def muse_job_submit(self, d, call):
-        out = self.k.submit(d["packet_id"], d["results"])
-        for r in out:
-            article = r.pop("article", None)
-            if article:
-                r["path"] = self.write_feed(self.k.store.get(r["feed"]), article)
-        return out
-
-    def write_feed(self, e, article):
-        """feed/<key>.md for a newly recorded FeedItem; the Store entity is the record, the file its body.
-        shortcut: a crash between the record and this write loses the body; resubmit returns `existing`."""
-        rel = f"{FEED_DIR}/{e['natural_key']}.md"
-        raw = (f"# {article['title']}\n\n{article['body']}\n\n## Sources\n"
-               + "".join(f"- {s}\n" for s in article["source_refs"])).encode("utf-8")
-        with self.lock():
-            try:
-                self.files.replace(rel, raw, "absent")
-            except DomainError as exc:
-                if exc.code != "revision_conflict":
-                    raise
-        return rel
+        return self.k.submit(d["packet_id"], d["results"])
 
 
 # -- registration and the generated reference --------------------------------------------------------

@@ -52,7 +52,7 @@ MACHINES = {
     "feed": Machine("published", {}, edges({"published": "deleted"})),
     "source": Machine("ok", {}, edges({s: "ok limited failing unavailable" for s in ("ok", "limited", "failing", "unavailable")})),
     "finding": Machine("open", {"open": (14 * D, "dismissed")}, edges({"open": "resolved dismissed"})),
-    "receipt": Machine("pending_notice", {"pending_notice": (24 * H, "noticed")},
+    "memory_receipt": Machine("pending_notice", {"pending_notice": (24 * H, "noticed")},
                        edges({"pending_notice": "noticed", "noticed": "pending_notice"})),
     "packet": Machine("issued", {"issued": (None, "expired")}, edges({"issued": "submitted expired"})),
     "run": Machine("running", {"running": (2 * H, None)}, edges({"running": "ok degraded failed abandoned"})),

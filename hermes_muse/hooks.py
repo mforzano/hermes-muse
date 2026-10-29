@@ -15,8 +15,8 @@ import time
 from . import health
 from .host.sessions import failed_result
 from .install import migrating, owned
-from .kernel import intake
-from .kernel.common import D, clip, patch
+from .kernel import intake, receipts
+from .kernel.common import clip
 
 log = logging.getLogger(__name__)
 MEMORY_TOOLS = frozenset({"memory", "skill_manage", "hindsight_retain"})
@@ -34,10 +34,6 @@ def receipt_state(result):
     if isinstance(value, dict) and (value.get("staged") or value.get("proposal_staged")):
         return "staged"
     return "failed" if failed_result(text) else None
-
-
-def kind_of(receipt):
-    return receipt.get("state") or receipt.get("classified_state")  # the latter on receipts migrated from 0.3.x
 
 
 def titles(goals):
@@ -89,24 +85,12 @@ class Hooks:
         return line or None
 
     def receipts(self, session_id, now):
-        """Failed/staged receipts of this session, each injected once; a staged one once more a day later."""
-        store, hits = self.k.store, []
-        for e in store.query("receipt", state="pending_notice"):
-            if e["payload"].get("session_id") == session_id and patch(
-                    store, e["id"], "noticed", expect=("pending_notice",), reason="injected",
-                    payload={"noticed_at": now}, now=now):
-                hits.append(e["payload"])
-        for e in store.query("receipt", state="noticed", since=now - 3 * D):
-            p = e["payload"]
-            if (p.get("session_id") == session_id and kind_of(p) == "staged" and not p.get("reminded")
-                    and (p.get("noticed_at") or now) <= now - D
-                    and patch(store, e["id"], expect=("noticed",), reason="staged_reminder",
-                              payload={"reminded": True}, now=now)):
-                hits.append(p)
+        """Failed/staged receipts of this session (kernel marks each shown once; a staged one once more a day later)."""
+        hits = receipts.due(self.k, session_id, now)
         if not hits:
             return None
-        failed = sorted({str(p.get("tool")) for p in hits if kind_of(p) == "failed"})
-        staged = sorted({str(p.get("tool")) for p in hits if kind_of(p) == "staged"})
+        failed = sorted({str(p.get("tool")) for p in hits if receipts.state_of(p) == "failed"})
+        staged = sorted({str(p.get("tool")) for p in hits if receipts.state_of(p) == "staged"})
         return ("[Muse memory receipts] " + "; ".join(filter(None, (
             failed and "write failed, nothing was saved: " + ", ".join(failed),
             staged and "write staged, it waits for the user's approval: " + ", ".join(staged))))
@@ -119,9 +103,7 @@ class Hooks:
             return None
         state = receipt_state(result)
         if state:
-            now = self.clock()
-            self.k.store.create("receipt", str(tool_call_id), {"session_id": session_id, "tool": tool_name,
-                                                                "state": state, "at": now}, now=now)
+            receipts.record(self.k, tool_call_id, session_id=session_id, tool=tool_name, state=state, now=self.clock())
         return None
 
     # -- post_llm_call --------------------------------------------------------------------------------

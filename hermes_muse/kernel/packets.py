@@ -10,7 +10,7 @@ import hashlib
 import json
 import statistics
 
-from . import goals, intake, notifier, review, sources
+from . import goals, intake, notifier, records, review, sources
 from .common import D, H, clip, patch, preferences
 from .store import notice_key
 
@@ -207,9 +207,8 @@ def feed_result(k, item, r, now):
         raise ValueError("article needs title, body and source_refs")
     key = hashlib.sha256(json.dumps(refs, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()[:24]
     e = k.store.create("feed", key, {"title": title, "interest_id": item["ref"], "sources": refs, "created": now}, now=now)
-    # Writing feed/*.md stays with the content writer; the article is returned for it.
-    return {"result": "existing" if e["existing"] else "recorded", "feed": e["id"],
-            **({} if e["existing"] else {"article": {"title": title, "body": body, "source_refs": refs}})}
+    path = records.feed_path(e) if e["existing"] else records.write_feed(k, e, {"title": title, "body": body, "source_refs": refs})
+    return {"result": "existing" if e["existing"] else "recorded", "feed": e["id"], "path": path}
 
 
 HANDLERS = {
