@@ -8,5 +8,5 @@ homepage: https://github.com/xiaohei-info/hermes-muse
 kind: standalone
 requires_hermes: ">=0.21.5"
 tags: [automation, memory, companion]
-provides_tools: [muse_manage]
+provides_tools: [muse_manage, muse_job]
 provides_hooks: [pre_llm_call, post_llm_call, post_tool_call]
