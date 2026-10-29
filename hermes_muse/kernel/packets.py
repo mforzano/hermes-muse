@@ -210,7 +210,7 @@ HANDLERS = {
     "goal": lambda k, i, r, now: goals.assess(k, i["ref"], r.get("assessment"), r.get("progress_note"), now),
     "signal": lambda k, i, r, now: goals.create(k, title=(r.get("create") or {}).get("title"),
                                                 criteria=(r.get("create") or {}).get("criteria"), signal_ref=i["ref"], now=now),
-    "review": lambda k, i, r, now: review.record(k, i["ref"], r.get("verdict"), r.get("reason"), now),
+    "review": lambda k, i, r, now: review.record(k, i["ref"], r.get("verdict"), r.get("reason"), now, i.get("rules", ())),
     "interest": feed_result,
 }
 REF_FIELDS = ("ref", "candidate_ref", "goal_id", "interest_ref")

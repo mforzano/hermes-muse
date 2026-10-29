@@ -3,7 +3,8 @@
 Each check returns one or more `finding(id, level, value, threshold, detail, evidence)`; level is
 ok | low | medium | high. Checks only read; they never repair, so a kernel bug stays visible.
 Payload fields read here are the kernel's contract: signal.source, notice.next_eligible/priority/strong_key,
-goal.fade_at, finding.evidence, source.failures.
+goal.fade_at/fade_blocked (goals.fade), finding.evidence (review.record), source.health (sources.record).
+Tests seed these through the kernel writers, never with hand-written payloads.
 """
 from __future__ import annotations
 
@@ -155,17 +156,20 @@ def goals(store, now):
     """No active goal overdue more than 3 days; fade executed within 2 days of fade_at."""
     live = store.query("goal", state=("active", "waiting"))
     overdue = [g for g in live if g["state"] == "active" and g["deadline"] is not None and g["deadline"] < now - 3 * D]
-    faded = [g for g in live if (g["payload"].get("fade_at") or now) < now - 2 * D]
+    active = [g for g in live if g["state"] == "active"]
+    faded = [g for g in active if (g["payload"].get("fade_at") or now) < now - 2 * D]
+    stuck = [g for g in active if g["payload"].get("fade_blocked")]
     return [finding("goals_overdue", "medium" if overdue else "ok", len(overdue), 0,
                     f"{len(overdue)} active goals with next_check over 3 days old", ids(overdue),
                     "Nightly goals packets are not touching due goals"),
-            finding("goal_fade", "medium" if faded else "ok", len(faded), 0,
-                    f"{len(faded)} goals over 2 days past fade_at and still open", ids(faded),
-                    "Fade ask was not delivered or the code cancel did not run")]
+            finding("goal_fade", "medium" if faded or stuck else "ok", len(faded) + len(stuck), 0,
+                    f"{len(faded)} goals over 2 days past fade_at and still open; "
+                    f"{len(stuck)} whose dormancy question was withdrawn every time", ids(faded + stuck),
+                    "Fade ask was not delivered, the code cancel did not run, or the question keeps being withdrawn")]
 
 
 def sources(store, now):
-    failing = [s for s in store.query("source", state="failing") if s["payload"].get("failures", 3) >= 3]
+    failing = [s for s in store.query("source", state="failing") if s["payload"].get("health")]
     return finding("sources_failing", "medium" if failing else "ok", len(failing), 0,
                    f"{len(failing)} sources failing 3+ times in a row", ids(failing),
                    "Check the source's tool or credentials")

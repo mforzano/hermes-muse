@@ -75,14 +75,16 @@ def candidates(k, now, limit=LIMIT):
     return picked
 
 
-def record(k, ref, verdict, reason, now):
-    """agent_gap -> open Finding (14 days); latent_need -> Idea candidate; fine -> dismissed Finding."""
+def record(k, ref, verdict, reason, now, rules=()):
+    """agent_gap -> open Finding (14 days); latent_need -> Idea candidate; fine -> dismissed Finding.
+    `evidence` is the reviewed turn (a pointer for read) plus the pick rules that matched it."""
     if verdict not in VERDICTS:
         raise ValueError(f"verdict must be one of {', '.join(VERDICTS)}")
     reason = str(reason or "").strip()[:500]
     if not reason:
         raise ValueError("reason is required")
-    payload = {"reason": reason, "verdict": verdict, "turn": ref.removeprefix("review:")}
+    turn = ref.removeprefix("review:")
+    payload = {"reason": reason, "verdict": verdict, "turn": turn, "evidence": [turn, *(f"rule:{r}" for r in rules)]}
     with k.store.atomic():
         found = one(k.store, "finding", ref) or one(k.store, "idea", ref)
         if found:

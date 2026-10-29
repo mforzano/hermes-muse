@@ -31,26 +31,33 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def seed_store(home, now):
-    """Store v2 holding today's failure patterns (synthetic ids only)."""
+def seed_store(home, now, host):
+    """Store v2 holding today's failure patterns (synthetic ids only). Fields Health reads come from the kernel
+    writers; raw creates only reproduce states the kernel prevents (oneshot captured, duplicate sends, stuck rows)."""
+    from hermes_muse.kernel import Kernel, goals, notifier, review, sources
     from hermes_muse.kernel.store import Store
     s = Store.for_home(home, clock=lambda: now)
+    k = Kernel(home, adapter=host, store=s, clock=lambda: now)
     s.create("signal", "chat:long", {"source": "cli"}, now=now - 80 * H)          # watermark stuck, tick not run
     s.create("signal", "once:1", {"source": "oneshot"}, now=now - H)               # E16 oneshot captured
-    for i in range(2):                                                             # Railway: urgent sent twice
+    for i in range(2):                                                             # Railway: urgent sent twice (0.3.x)
         s.create("notice", "src:msgaaa", {"priority": "urgent", "strong_key": True}, state="sent",
                  now=now - (2 - i) * D, dedupe=False)
-    s.create("notice", "src:thr-bbb", {"next_eligible": now - 8 * H}, state="scheduled", deadline=now + D, now=now - 10 * H)
+    notifier.draft(k, text="Thread bbb", priority="urgent", upstream_id="thr-bbb", now=now - 10 * H)  # eligible, unsent
     s.create("notice", "src:ccc", {}, state="unknown", now=now - 3 * H)            # trading send went unknown
     s.create("goal", "trading-goal", {}, deadline=now - 12 * D, now=now - 20 * D)  # next_check 12 days old
-    s.create("goal", "faded", {"fade_at": now - 3 * D}, state="waiting", deadline=now + D, now=now - 9 * D)
+    goals.create(k, title="Learn piano", criteria="Play one piece", by="user", session_id="chat", now=now - 20 * D)
+    goals.fade(k, now)                                                             # dormant: fade_at 6 days ago
     s.create("run", "exec-stuck", {}, now=now - 3 * H)
     s.create("run", "exec-ok", {}, state="ok", now=now - 2 * H)
     s.create("run", "exec-bad", {}, state="degraded", now=now - H)
     s.create("packet", "intake:1", {}, state="expired", now=now - 6 * H)
     s.create("packet", "intake:2", {}, state="submitted", now=now - 5 * H)
-    s.create("source", "cal", {"failures": 4}, state="failing", now=now - H)
-    s.create("finding", "review:chat:9", {}, now=now - H)
+    for _ in range(3):
+        sources.record(s, "calendar:home", error="timeout", now=now - H)           # 3 in a row: Health
+    sources.record(s, "mail:work", error="timeout", now=now - H)                   # 1: not yet
+    review.record(k, "review:chat:8", "agent_gap", "claimed sent without a send", now - H, rules=["claim_without_write"])
+    s.create("finding", "review:chat:9", {}, now=now - H)                          # migrated 0.3.x finding, no evidence
     return s
 
 
@@ -89,7 +96,7 @@ def main():
             from cron.jobs import update_job
             update_job(job["id"], {"last_delivery_error": "bot_relay.deliver refused: invalid_params field=cwd"})
         now = time.time()
-        store = seed_store(home, now)
+        store = seed_store(home, now, host)
         db_file = store.path
         before = digest(db_file)
 
@@ -111,7 +118,14 @@ def main():
         check("A4 probe->level mapping (missing=high, degraded=medium)",
               all(levels[k] == expected[k] for k in expected if k.startswith("probe.")),
               {k: levels[k] for k in levels if k.startswith("probe.")})
-        purity = next(f for f in report["invariants"] if f["id"] == "probe.signal_purity")["detail"]
+        by = {f["id"]: f for f in report["invariants"]}
+        check("kernel-written fields: fade_at from goals.fade, fail_streak/health from sources.record (3 in a row only), "
+              "evidence from review.record (only the migrated finding is bare)",
+              by["goal_fade"]["value"] == 1 and by["goal_fade"]["evidence"][0].startswith("goal:g")
+              and by["sources_failing"]["value"] == 1
+              and "1 open without evidence" in by["review_findings"]["detail"],
+              {k: [by[k]["value"], by[k]["evidence"], by[k]["detail"]] for k in ("goal_fade", "sources_failing", "review_findings")})
+        purity = by["probe.signal_purity"]["detail"]
         check("signal_purity gets 24h captured sources from Store; unknown 'local' reported unclassified",
               "['oneshot']" in purity and "'local'" in purity, {"detail": purity})
         check("A7/A8/A9/A10 and kernel watchdogs reproduce today's issues", levels == expected,

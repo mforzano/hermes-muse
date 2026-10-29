@@ -210,51 +210,54 @@ def fade(k, now):
     days, fade_days = prefs.get("goal_dormant_days"), prefs.get("goal_fade_days")
     asked = cancelled = blocked = 0
     keep = set()
-    if days:
-        goals = k.store.query("goal", state="active")
-        watches = {w["payload"].get("goal_id") for w in k.store.query("watch", state="active")}
-        child_activity = {}
-        for g in goals:
-            parent = g["payload"].get("parent_id")
-            if parent:
-                child_activity[parent] = max(child_activity.get(parent, 0), g["payload"].get("updated") or 0)
-        for g in goals:
-            slug = g["natural_key"]
-            found = read(k.home, slug)
-            if not found or found[0].get("status") != "active":
-                continue
+    # Only active goals fade: `waiting` (on the user or an owner) is an explicit pause in the design 2.2 state
+    # machine and, like the overdue check of 7.3, exempt; its return to active is a touch that restarts dormancy.
+    goals = k.store.query("goal", state="active")
+    watches = {w["payload"].get("goal_id") for w in k.store.query("watch", state="active")}
+    child_activity = {}
+    for g in goals:
+        parent = g["payload"].get("parent_id")
+        if parent:
+            child_activity[parent] = max(child_activity.get(parent, 0), g["payload"].get("updated") or 0)
+    for g in goals:
+        slug = g["natural_key"]
+        found = days and read(k.home, slug)
+        fade_at = stuck = None
+        if found and found[0].get("status") == "active":
             record = found[0]
             last = max(record.get("created") or 0, record.get("updated") or 0, child_activity.get(slug, 0))
             since = last + days * D
-            if not last or now < since or exempt(k, record, now, watches):
-                continue
-            episode = time.strftime("%Y%m%d", time.gmtime(since))
-            fade_at = since + fade_days * D if fade_days else None
-            for attempt in range(1, MAX_ASKS + 1):
-                key = f"goal:{slug}:fade:{episode}:{attempt}"
-                ask = one(k.store, "notice", key)
-                if ask and ask["state"] in CLOSED_ASK:
-                    continue
-                keep.add(key)
-                if ask is None:
-                    date = datetime.fromtimestamp(max(fade_at or now, now + D), tz).date().isoformat()
-                    text = question(prefs, record.get("title") or slug, days, date if fade_at else None)
-                    notifier.draft(k, text=text, topic=notifier.FADE_TOPIC, goal_id=slug, source_key=key,
-                                   title=record.get("title") or slug, evidence=[f"goal:{slug}"],
-                                   expires=max(fade_at or 0, now + 2 * D) + D, now=now)
-                    asked += 1
-                elif ask["state"] == "sent" and fade_at and now >= fade_at:
-                    sent = ask["payload"].get("sent_at") or ask["payload"].get("dispatched_at") or now
-                    if sent <= now - D:
-                        update(k, slug, {"status": "cancelled", "progress_note":
-                                         f"Closed by Muse: dormant since {episode}, question delivered, no reply."},
-                               by="fade", now=now)
-                        cancelled += 1
-                break
-            else:
-                blocked += 1  # every attempt was withdrawn; Health reports the goal instead of looping
-                if g["payload"].get("fade_blocked") != episode:
-                    patch(k.store, g["id"], reason="fade_blocked", payload={"fade_blocked": episode}, now=now)
+            if last and now >= since and not exempt(k, record, now, watches):
+                episode = time.strftime("%Y%m%d", time.gmtime(since))
+                fade_at = since + fade_days * D if fade_days else None
+                for attempt in range(1, MAX_ASKS + 1):
+                    key = f"goal:{slug}:fade:{episode}:{attempt}"
+                    ask = one(k.store, "notice", key)
+                    if ask and ask["state"] in CLOSED_ASK:
+                        continue
+                    keep.add(key)
+                    if ask is None:
+                        date = datetime.fromtimestamp(max(fade_at or now, now + D), tz).date().isoformat()
+                        text = question(prefs, record.get("title") or slug, days, date if fade_at else None)
+                        notifier.draft(k, text=text, topic=notifier.FADE_TOPIC, goal_id=slug, source_key=key,
+                                       title=record.get("title") or slug, evidence=[f"goal:{slug}"],
+                                       expires=max(fade_at or 0, now + 2 * D) + D, now=now)
+                        asked += 1
+                    elif ask["state"] == "sent" and fade_at and now >= fade_at:
+                        sent = ask["payload"].get("sent_at") or ask["payload"].get("dispatched_at") or now
+                        if sent <= now - D:
+                            update(k, slug, {"status": "cancelled", "progress_note":
+                                             f"Closed by Muse: dormant since {episode}, question delivered, no reply."},
+                                   by="fade", now=now)
+                            cancelled += 1
+                            fade_at = None
+                    break
+                else:
+                    blocked += 1  # every attempt was withdrawn; Health reports the goal instead of looping
+                    stuck = episode
+        # Health reads both: when code will cancel this goal, and an episode whose every question was withdrawn.
+        if (g["payload"].get("fade_at"), g["payload"].get("fade_blocked")) != (fade_at, stuck):
+            patch(k.store, g["id"], reason="fade_state", payload={"fade_at": fade_at, "fade_blocked": stuck}, now=now)
     for e in k.store.query("notice", state=notifier.UNSENT):
         if e["payload"].get("topic") == notifier.FADE_TOPIC and e["natural_key"] not in keep:
             notifier.withdraw(k, e["id"], reason="goal_revived_or_closed", now=now, by_code=True)
