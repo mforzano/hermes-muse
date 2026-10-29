@@ -46,8 +46,15 @@ def interrupted():
     return is_interrupted()
 
 
+HOST_ERROR = "host_error"
+
+
 def tolerant(default):
-    """Turn a raised host error into `default` (called when callable) and a recorded fault."""
+    """Turn a raised host error into `default` (called when callable) and a recorded fault.
+
+    A call whose answer leads to a write, a resend or a final state must default to an answer the caller can
+    tell from "the host has none" (HOST_ERROR), or raise (Cron.by_script); only reads may degrade to empty.
+    """
     def wrap(fn):
         @wraps(fn)
         def call(self, *args, **kwargs):
@@ -96,9 +103,10 @@ FAILED_DELEGATION = {"error", "failed", "failure", "timeout", "stalled", "unknow
 
 
 class Owners(Part):
-    @tolerant(lambda: {"state": "unknown"})
+    @tolerant(lambda: {"state": HOST_ERROR})
     def status(self, handle):
-        """Native async delegation `handle` as running/done/failed/unknown; never re-dispatches."""
+        """Native async delegation `handle` as running/done/failed/unknown (no record), or host_error when the
+        host could not be read; never re-dispatches."""
         from tools.async_delegation import get_durable_delegation
         with self.scope():
             row = get_durable_delegation(str(handle))

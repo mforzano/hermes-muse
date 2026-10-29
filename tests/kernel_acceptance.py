@@ -456,13 +456,15 @@ def part_goals(base):
     k.start_run("nightly", job_id="job-n", execution_id="e-ok", packet_id=packet["id"])
     k.start_run("nightly", job_id="job-n", execution_id="e-fail")
     k.start_run("nightly", job_id="job-n", execution_id="e-lost")
-    host.outcomes.update({"e-ok": {"status": "completed"}, "e-fail": {"status": "failed"}})
+    k.start_run("nightly", job_id="job-n", execution_id="e-flaky")
+    host.outcomes.update({"e-ok": {"status": "completed"}, "e-fail": {"status": "failed"},
+                          "e-flaky": {"execution_id": None, "status": "host_error"}})  # what Cron.outcome gives on a fault
     k.tick()
     clock[0] += 3 * H
     k.tick()
     states = {r["natural_key"]: r["state"] for r in k.store.query("run")}
-    check("R3 runs: degraded/failed from host + packet, abandoned when the host has no record",
-          states == {"e-ok": "degraded", "e-fail": "failed", "e-lost": "abandoned"}, states)
+    check("R3 runs: degraded/failed from host + packet, abandoned when the host has no record, kept when the host read failed",
+          states == {"e-ok": "degraded", "e-fail": "failed", "e-lost": "abandoned", "e-flaky": "running"}, states)
     return k
 
 

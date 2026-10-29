@@ -201,7 +201,8 @@ def exempt(k, record, now, watches):
     if record.get("no_fade") or (record.get("deadline") or 0) > now or record["id"] in watches:
         return True
     handle = owner_handle(record.get("owner"))
-    return bool(handle) and k.adapter.owners.status(handle).get("state") == "running"
+    # An owner whose status could not be read is treated as running: a host fault must not fade a goal.
+    return bool(handle) and k.adapter.owners.status(handle).get("state") in ("running", "host_error")
 
 
 def fade(k, now):

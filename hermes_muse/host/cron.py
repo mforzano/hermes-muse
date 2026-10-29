@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import Part, tolerant
+from . import HOST_ERROR, Part, tolerant
 
 KEY = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 PREFIX = "hermes-muse-"
@@ -138,9 +138,10 @@ class Cron(Part):
         with self.scope():
             return bool(update_job(job_id, {"next_run_at": at, "manual_run_at": at}))
 
-    @tolerant(lambda: None)
+    @tolerant(lambda: {"execution_id": None, "status": HOST_ERROR})
     def outcome(self, job_id, execution_id=None):
-        """One execution (default: latest) as {execution_id, status, delivery_outcome, error, start, end}."""
+        """One execution (default: latest) as {execution_id, status, delivery_outcome, error, start, end};
+        None when the host has no such execution, status host_error when it could not be read."""
         from cron.executions import get_execution, latest_execution
         with self.scope():
             row = get_execution(execution_id) if execution_id else latest_execution(job_id)
@@ -209,6 +210,8 @@ class Deliver(Part):
         if not job:
             return {"status": "unknown", "reason": "no_delivery_job"}
         run = self.adapter.cron.outcome(job["id"])
+        if run and run["status"] == HOST_ERROR:
+            return {"status": "unknown", "reason": HOST_ERROR}  # notifier.apply leaves the notice for the next tick
         base = {"job_id": job["id"], **({"execution_id": run["execution_id"], "outcome": run["delivery_outcome"]} if run else {})}
         if not run or run["status"] in ("claimed", "running"):
             return {**base, "status": "sending"}

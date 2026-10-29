@@ -21,11 +21,14 @@ def outcome(k, host, packet_id):
 
 
 def check(k, now):
-    """Close runs whose host execution ended; extend a still-running one; abandon one the host has no record of."""
+    """Close runs whose host execution ended; extend a still-running one; abandon one the host has no record of
+    (a host read error is neither)."""
     closed = 0
     for run in k.store.query("run", state="running"):
         p = run["payload"]
         host = k.adapter.cron.outcome(p["job_id"], p["execution_id"]) if p.get("job_id") else None
+        if host and host["status"] == "host_error":
+            continue  # the host could not be read: not "no record"; the next tick asks again
         if host and host["status"] not in ("claimed", "running"):
             closed += bool(patch(k.store, run["id"], outcome(k, host, p.get("packet_id")), expect=("running",),
                                  reason=f"host:{host['status']}", now=now))
