@@ -42,6 +42,17 @@ SECRETS = [
 ]
 
 
+def failed_result(text: str) -> bool:
+    """A native tool result whose JSON root reports failure (never words quoted in its body)."""
+    try:
+        value = json.loads(text or "null")
+    except (ValueError, TypeError, RecursionError):
+        return False
+    return isinstance(value, dict) and (
+        value.get("ok") is False or value.get("success") is False or value.get("isError") is True
+        or bool(value.get("error")) or value.get("status") in ("error", "failed"))
+
+
 def redact(text: str) -> str:
     for pattern, replacement in SECRETS:
         text = pattern.sub(replacement, text)
@@ -155,6 +166,26 @@ class Sessions(Part):
                 "WHERE started_at > ? AND (source = 'cron' OR id LIKE 'cron\\_%' ESCAPE '\\')", (since,))]
         jobs, executions = self.adapter.cron.jobs(), self.adapter.cron.executions(since - 86400)
         return [{**row, "job_id": match_job(row, jobs, executions)} for row in rows]
+
+    @tolerant(list)
+    def tool_results(self, since, oversized=20000):
+        """Per owned-cron session after `since`: tool results, failures, results over `oversized` chars,
+        and results still matching a credential pattern (what reached the model unredacted)."""
+        runs = [s for s in self.cron_sessions(since) if s["job_id"]]
+        out = []
+        if not runs:
+            return out
+        with reader(self.path) as db:
+            for run in runs:
+                stats = {"session_id": run["id"], "job_id": run["job_id"], "tools": 0, "failed": 0, "oversized": 0, "secrets": 0}
+                for (content,) in db.execute("SELECT content FROM messages WHERE session_id = ? AND role = 'tool'", (run["id"],)):
+                    text = as_text(content or "")
+                    stats["tools"] += 1
+                    stats["failed"] += failed_result(text)
+                    stats["oversized"] += len(text) > oversized
+                    stats["secrets"] += redact(text) != text
+                out.append(stats)
+        return out
 
     @tolerant(Counter)
     def sources(self, since):
