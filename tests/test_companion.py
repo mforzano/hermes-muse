@@ -675,9 +675,11 @@ class CompanionTests(unittest.TestCase):
         from hermes_muse.host import HermesHost
         self.host.destination = {"deliver": "bot-chat"}
         modules = {name: types.ModuleType(name) for name in
-                   ("cron.executions", "cron.jobs", "cron.bot_chat_delivery", "tools.bot_live_delivery")}
+                   ("cron.executions", "cron.jobs", "tools.bot_live_delivery")}
         modules["cron.executions"].get_execution = lambda execution_id: {
             "id": "attempt-one", "status": "completed", "delivery_outcome": "queued"}
+        pending = self.store.home / "cron" / "bot_chat_pending"
+        pending.mkdir(parents=True)
         modules["cron.executions"].latest_execution = modules["cron.executions"].get_execution
         modules["cron.jobs"].get_job = lambda job: {
             "last_delivery_queued": {"bot-chat:(own)": {"delivery_id": "receipt-one"}}}
@@ -687,11 +689,12 @@ class CompanionTests(unittest.TestCase):
             self.dispatch(row["id"])
             receipt = {"status": "queued"}
             modules["tools.bot_live_delivery"].read_delivery_result = lambda home, key: None if deferred else receipt
-            modules["cron.bot_chat_delivery"].read_pending = lambda key: receipt if deferred else None
             with patch.dict(sys.modules, modules), patch("hermes_muse.host.profile_scope", lambda home: contextlib.nullcontext()):
                 for state, expected in (("queued", "transport_queued"), ("claimed", "transport_queued"),
                                         ("settled" if deferred else "ambiguous", "sent" if deferred else "unknown")):
                     receipt["status"] = state
+                    if deferred:  # Hermes's cron/bot_chat_legacy.defer() record for a never-admitted output.
+                        (pending / "receipt-one.json").write_text(json.dumps(receipt))
                     HermesHost(self.store).reconcile()
                     self.assertEqual(self.store.read("notification", row["id"])["status"], expected)
                 before = len(self.host.jobs)
@@ -713,17 +716,40 @@ class CompanionTests(unittest.TestCase):
         self.store.write("notification", row["id"], row)
         key = bot_receipt_key(self.temp.name, "patrol", "attempt-one")
         modules = {name: types.ModuleType(name) for name in
-            ("cron.executions", "cron.jobs", "cron.bot_chat_delivery", "tools.bot_live_delivery")}
+            ("cron.executions", "cron.jobs", "tools.bot_live_delivery")}
         modules["cron.executions"].get_execution = lambda eid: {"id": eid, "status": "completed", "delivery_outcome": "queued"}
         modules["cron.executions"].latest_execution = lambda jid: {"id": "later-run", "status": "completed", "delivery_outcome": "delivered"}
         modules["cron.jobs"].get_job = lambda jid: {"last_delivery_queued": None}
-        modules["cron.bot_chat_delivery"].read_pending = lambda k: None
         modules["tools.bot_live_delivery"].read_delivery_result = lambda home, k: {"status": "settled"} if k == key else None
         with patch.dict(sys.modules, modules), patch("hermes_muse.host.profile_scope", lambda home: contextlib.nullcontext()):
             HermesHost(self.store).reconcile()
             self.assertEqual(self.store.read("notification", row["id"])["status"], "sent")
             self.assertEqual(HermesHost(self.store).bot_delivery_status("patrol", "unrelated-attempt"), "unknown")
         self.assertEqual(self.host.jobs, [])
+
+    def test_profile_bot_chat_route_reconciles_and_one_bad_row_does_not_block_others(self):
+        import sys, types
+        from hermes_muse.host import HermesHost
+        self.host.destination = {"deliver": "bot-chat:default"}
+        good, bad = self.notice("good", priority="urgent"), self.notice("bad", priority="urgent")
+        for row in (good, bad):
+            self.service.notification_queue({"id": row["id"]})
+            self.dispatch(row["id"])
+        broken = self.store.read("notification", bad["id"])
+        broken.update(job_id="broken", execution_id="broken")
+        self.store.write("notification", bad["id"], broken)
+        modules = {name: types.ModuleType(name) for name in ("cron.executions", "cron.jobs", "tools.bot_live_delivery")}
+        def execution(key):
+            if key == "broken":
+                raise RuntimeError("unreadable execution")
+            return {"id": "attempt-one", "status": "completed", "delivery_outcome": "queued"}
+        modules["cron.executions"].latest_execution = modules["cron.executions"].get_execution = execution
+        modules["cron.jobs"].get_job = lambda job: {"last_delivery_queued": {"bot-chat:default": {"delivery_id": "receipt-one"}}}
+        modules["tools.bot_live_delivery"].read_delivery_result = lambda home, key: {"status": "settled"}
+        with patch.dict(sys.modules, modules), patch("hermes_muse.host.profile_scope", lambda home: contextlib.nullcontext()):
+            HermesHost(self.store).reconcile()
+        self.assertEqual(self.store.read("notification", good["id"])["status"], "sent")
+        self.assertEqual(self.store.read("notification", bad["id"])["status"], broken["status"])
 
     def test_bot_handoff_preserves_evidence_and_direct_channels_get_only_user_content(self):
         from hermes_muse.handoff import MARKER, render_result

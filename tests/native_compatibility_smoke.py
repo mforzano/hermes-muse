@@ -77,7 +77,8 @@ def run(home):
             # Actual public delegate handler and actual core stateless fallback; provider work is stubbed.
             parent=SimpleNamespace(valid_tool_names={'delegate_task'},session_id='source',_delegate_depth=0,model='fixture-parent',provider='custom',base_url='https://fixture.invalid/v1',api_key='synthetic',api_mode='chat_completions',request_overrides=None)
             def children(tasks,schemas,creds,**kwargs):
-                assert creds['model'] is None and creds['provider'] is None
+                # Older Hermes passes one credentials dict; newer passes per-task routes resolved from host config.
+                assert not isinstance(creds,dict) or creds['model'] is None and creds['provider'] is None
                 return [(i,t,SimpleNamespace()) for i,t in enumerate(tasks)],None
             with bind_subagent_parent(parent),patch('tools.delegate_tool._build_children',side_effect=children),patch('tools.delegate_tool_dispatch._execute_and_aggregate',return_value={'results':[{'status':'completed','summary':'Synthetic joined result'}]}):
                 result=call('delegate',{'goal':'Inspect synthetic evidence'},task=task)

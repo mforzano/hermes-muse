@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
+import re
 import time
 import uuid
 from contextlib import contextmanager
@@ -350,64 +352,71 @@ class HermesHost:
             return pause_job(job_id, reason="Hermes Muse: watch completed or cancelled")
 
     def reconcile(self):
-        from cron.executions import latest_execution
         updates = []
         for row in self.store.all("notification"):
-            reconcilable = row["status"] in {"dispatching", "queued", "transport_queued"}
-            reconcilable |= bool(row["status"] == "unknown" and row.get("direct_delivery") and row.get("output_finalized"))
-            if not reconcilable or not row.get("job_id"):
-                continue
-            with profile_scope(self.home):
-                if row.get("direct_delivery"):
-                    from cron.executions import get_execution
-                    execution = get_execution(row["execution_id"])
-                else:
-                    execution = latest_execution(row["job_id"])
-            if not execution or execution["status"] in {"claimed", "running"}:
-                continue
-            outcome = execution.get("delivery_outcome")
-            if row.get("direct_delivery") and not row.get("output_finalized"):
-                status = "unknown"  # a delivered status summary is not delivery of the notice body
-            elif row["status"] == "queued":
-                # The script was never entered: preparation failed, no receipt is implied.
-                status = "failed" if execution["status"] == "failed" else "unknown"
-            elif execution["status"] == "completed" and outcome == "delivered":
-                status = "sent"
-            elif outcome == "queued" and row.get("route", {}).get("deliver") == "bot-chat":
-                status = self.bot_delivery_status(row["job_id"], row.get("execution_id") if row.get("direct_delivery") else None)
-            elif outcome == "queued":
-                from cron.delivery_queue import get_status
-                with profile_scope(self.home):
-                    receipt = get_status(execution["id"])
-                queue_status = (receipt or {}).get("status")
-                status = "sent" if queue_status == "delivered" else "unknown" if queue_status in {"failed", "unknown", "suppressed"} else "transport_queued"
-            else:
-                status = "unknown"  # including partial sends/timeouts: never blindly replay
-            row_before_status = row["status"]
-            before = dict(row)
-            if status == "failed" and row_before_status == "queued" and not row.get("output_finalized"):
-                row["definitive_not_accepted"] = True
-            row.update(status=status, execution_id=execution["id"], delivery_outcome=outcome,
-                       delivery_note="Native transport report; not a phone display/read receipt.")
-            if row == before:
-                continue  # Rewriting an unchanged row bumps _revision and expires every notice cursor.
-            with self.store.transaction() as db:
-                current = self.store.get(db, "notification", row["id"])
-                if current and current["status"] == row_before_status:
-                    self.store.put(db, "notification", row["id"], row)
-            updates.append(row)
+            try:
+                if (updated := self._reconcile_one(row)) is not None:
+                    updates.append(updated)
+            except Exception as exc:
+                # One unreadable receipt must not fail every context/status call; the row stays as it was.
+                logging.getLogger(__name__).warning("Muse notice %s reconcile skipped: %s", row.get("id"), exc)
         return updates
+
+    def _reconcile_one(self, row):
+        from cron.executions import latest_execution
+        reconcilable = row["status"] in {"dispatching", "queued", "transport_queued"}
+        reconcilable |= bool(row["status"] == "unknown" and row.get("direct_delivery") and row.get("output_finalized"))
+        if not reconcilable or not row.get("job_id"):
+            return None
+        with profile_scope(self.home):
+            if row.get("direct_delivery"):
+                from cron.executions import get_execution
+                execution = get_execution(row["execution_id"])
+            else:
+                execution = latest_execution(row["job_id"])
+        if not execution or execution["status"] in {"claimed", "running"}:
+            return None
+        outcome = execution.get("delivery_outcome")
+        if row.get("direct_delivery") and not row.get("output_finalized"):
+            status = "unknown"  # a delivered status summary is not delivery of the notice body
+        elif row["status"] == "queued":
+            # The script was never entered: preparation failed, no receipt is implied.
+            status = "failed" if execution["status"] == "failed" else "unknown"
+        elif execution["status"] == "completed" and outcome == "delivered":
+            status = "sent"
+        elif outcome == "queued" and str(row.get("route", {}).get("deliver", "")).startswith("bot-chat"):
+            status = self.bot_delivery_status(row["job_id"], row.get("execution_id") if row.get("direct_delivery") else None)
+        elif outcome == "queued":
+            from cron.delivery_queue import get_status
+            with profile_scope(self.home):
+                receipt = get_status(execution["id"])
+            queue_status = (receipt or {}).get("status")
+            status = "sent" if queue_status == "delivered" else "unknown" if queue_status in {"failed", "unknown", "suppressed"} else "transport_queued"
+        else:
+            status = "unknown"  # including partial sends/timeouts: never blindly replay
+        row_before_status = row["status"]
+        before = dict(row)
+        if status == "failed" and row_before_status == "queued" and not row.get("output_finalized"):
+            row["definitive_not_accepted"] = True
+        row.update(status=status, execution_id=execution["id"], delivery_outcome=outcome,
+                   delivery_note="Native transport report; not a phone display/read receipt.")
+        if row == before:
+            return None  # Rewriting an unchanged row bumps _revision and expires every notice cursor.
+        with self.store.transaction() as db:
+            current = self.store.get(db, "notification", row["id"])
+            if current and current["status"] == row_before_status:
+                self.store.put(db, "notification", row["id"], row)
+        return row
 
     def bot_delivery_status(self, job_id, execution_id=None):
         from cron.jobs import get_job
-        from cron.bot_chat_delivery import read_pending
         from tools.bot_live_delivery import read_delivery_result
         with profile_scope(self.home):
             if execution_id:
                 # Mirrors the native same-profile Bot Chat key on the tested Hermes baseline.
                 # Read only: a missing/changed host receipt never authorizes a resend.
                 key = bot_receipt_key(self.home, job_id, execution_id)
-                actual = read_delivery_result(self.home, key) or read_pending(key)
+                actual = read_delivery_result(self.home, key) or read_bot_pending(self.home, key)
                 if actual:
                     return bot_receipt_status([actual.get("status")])
                 from cron.executions import latest_execution
@@ -425,7 +434,7 @@ class HermesHost:
                 key = receipt.get("delivery_id")
                 if not key:
                     return "unknown"
-                actual = read_delivery_result(self.home, key) or read_pending(key) or {}
+                actual = read_delivery_result(self.home, key) or read_bot_pending(self.home, key) or {}
                 states.append(actual.get("status"))
         return bot_receipt_status(states)
 
@@ -439,6 +448,17 @@ def bot_receipt_key(home, job_id, execution_id):
     home = str(Path(home).resolve())
     return hashlib.sha256(json.dumps([home, job_id, str(execution_id), home],
                                     ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+
+
+def read_bot_pending(home, key):
+    """Deferred Bot Chat record written by Hermes's cron/bot_chat_legacy.defer(), or None."""
+    path = Path(home) / "cron" / "bot_chat_pending" / f"{key}.json"
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", str(key)) or path.is_symlink() or not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None
 
 
 def bot_receipt_status(states):

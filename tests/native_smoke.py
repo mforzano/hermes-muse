@@ -149,7 +149,7 @@ def main():
                 from cron.scheduler_delivery import _deliver_to_bot_chat
                 from hermes_muse.host import bot_receipt_key
                 with patch("tools.bot_live_delivery.read_delivery_result", return_value=None), \
-                     patch("cron.bot_chat_delivery.read_pending", return_value=None), \
+                     patch("hermes_muse.host.read_bot_pending", return_value=None), \
                      patch("tools.bot_live_delivery.find_canonical_live_owner", return_value={"test": True}), \
                      patch("tools.bot_live_delivery.deliver_to_live_owner", side_effect=lambda home, owner, message, **kw: {"status": "queued", "message": message}) as deliver:
                     _deliver_to_bot_chat({"id": patrol, "name": "muse-proactive-watch", "execution_id": attempt["id"]}, final, "")
