@@ -14,7 +14,7 @@ against the accepted request, and tell the user. Then call
 `goal_update(id=...,status=done,note="Result checked and explained")` once.
 No reply receipt, handoff, source hash or delivery confirmation is required.
 
-For unfinished work, update note/progress and next_check_at. Use waiting_user=true
+For unfinished work, update note/progress and next_check_at; note/progress on an active goal without next_check_at moves the next check one day later (a revived goal stays due). The conversation hint about due goals repeats only when the due set changes. Use waiting_user=true
 or blocked="reason" when appropriate. Respect the user's current changes; cancel
 tracking with status=cancelled when asked. Cancellation does not prove the external
 owner stopped. Inspect unknown writes through their owner; never automatically resend.

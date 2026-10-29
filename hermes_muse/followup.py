@@ -74,17 +74,21 @@ def owner_status(home, handle):
     return 'unknown'
 
 
-def snapshot(home, *, now=None, session_id=None, cursor='', limit=25):
-    now = time.time() if now is None else now
-    if not isinstance(cursor, str) or len(cursor) > 80 or type(limit) is not int or not 1 <= limit <= 50:
-        raise DomainError('invalid_argument', 'Use a goal ID cursor and limit 1..50')
+def due_goals(home, now, session_id=None):
     view = Views(home)
     view.manifest()
     goals = [view.object('goal', key)[1] for key in view.keys('goal')]
     fade = Fade(view.home, goals, now)
-    due = [goal for goal in goals
-           if (goal['status'] == 'active' and (not session_id or goal.get('session_id') == session_id)
-               and goal.get('next_check_at', 0) <= now and not fade.dormant(goal))]
+    return view, [goal for goal in goals
+                  if (goal['status'] == 'active' and (not session_id or goal.get('session_id') == session_id)
+                      and goal.get('next_check_at', 0) <= now and not fade.dormant(goal))]
+
+
+def snapshot(home, *, now=None, session_id=None, cursor='', limit=25):
+    now = time.time() if now is None else now
+    if not isinstance(cursor, str) or len(cursor) > 80 or type(limit) is not int or not 1 <= limit <= 50:
+        raise DomainError('invalid_argument', 'Use a goal ID cursor and limit 1..50')
+    view, due = due_goals(home, now, session_id)
     selected = [g for g in due if g['id'] > cursor][:limit]
     items = []
     from .responses import LIMIT
@@ -102,9 +106,24 @@ def snapshot(home, *, now=None, session_id=None, cursor='', limit=25):
             'instruction': 'Inspect owner results, tell the user, then goal_update(status=done,note=...). Unknown writes are never automatically retried.'}
 
 
+_shown = {}  # (home, session) -> fingerprint of the due set last injected in this process
+
+
 def context(home, *, now=None, session_id=None):
-    value = snapshot(home, now=now, session_id=session_id, limit=2)
-    if not value['items']:
+    """Inject only when the due set changed; name the goals that have waited longest."""
+    now = time.time() if now is None else now
+    _, due = due_goals(home, now, session_id)
+    key = (str(home), session_id)
+    if not due:
+        _shown.pop(key, None)
         return ''
-    names = '; '.join(g['id'] + ' ' + g['title'][:60] for g in value['items'])
-    return f"[Muse] {value['due_total']} active goal(s) need attention: {names}.\nRead context(section=followups); inspect owners, respect changed user instructions, and never resend an unknown write."
+    fingerprint = sorted((g['id'], g.get('next_check_at'), g.get('revision')) for g in due)
+    if _shown.get(key) == fingerprint:
+        return ''
+    _shown[key] = fingerprint
+    oldest = sorted(due, key=lambda g: (g.get('next_check_at', 0), g['id']))[:2]
+    names = '; '.join(g['id'] + ' ' + g['title'][:60] for g in oldest)
+    return (f"[Muse] {len(due)} active goal(s) need attention, past their next check; longest waiting: {names}.\n"
+            "For each: read context(section=followups) and inspect its owner, then goal_update(id, progress=<what changed>) "
+            "(moves its next check one day), goal_update(id, next_check_at=<when to look again>), or status=done/cancelled with a note. "
+            "Respect changed user instructions and never resend an unknown write.")

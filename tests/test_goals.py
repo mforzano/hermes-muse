@@ -117,6 +117,20 @@ class GoalTests(unittest.TestCase):
         self.service.goal_update({'id':'g','next_check_at':self.now+3600})
         self.assertEqual(context(self.home,now=self.now),'')
 
+    def test_progress_moves_next_check_and_unchanged_due_set_is_not_reinjected(self):
+        for key,due in (('newer',self.now-60),('older',self.now-7200),('third',self.now-600)):
+            self.goal(key);self.service.goal_update({'id':key,'next_check_at':due})
+        first=context(self.home,now=self.now,session_id='parent')
+        self.assertIn('3 active goal(s) need attention',first);self.assertIn('longest waiting: older',first)
+        self.assertIn('goal_update(id, progress=',first)
+        self.assertEqual(context(self.home,now=self.now,session_id='parent'),'')  # same due set: no repeat
+        updated=self.service.goal_update({'id':'older','progress':'Checked the owner result'})
+        self.assertEqual(updated['next_check_at'],self.now+86400)
+        second=context(self.home,now=self.now,session_id='parent')
+        self.assertIn('2 active goal(s)',second);self.assertNotIn('older',second)
+        pinned=self.service.goal_update({'id':'third','note':'Wait for the reply','next_check_at':self.now+3600})
+        self.assertEqual(pinned['next_check_at'],self.now+3600)  # an explicit next check wins
+
     def test_due_pages_allow_done_between_pages_without_skipping(self):
         for i in range(33):self.goal(f'g{i:02}');self.service.goal_update({'id':f'g{i:02}','next_check_at':self.now})
         ids=[];cursor=''

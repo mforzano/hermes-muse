@@ -177,7 +177,7 @@ The existing six jobs, schedules, notification lifecycle/quiet time/budgets, hoo
 ## Simple goals (0.3.0)
 
 GOAL.md has one active/done/cancelled status, an integer revision, progress,
-optional owner handle, next_check_at and optional waiting_user/blocked annotations.
+optional owner handle, next_check_at (a note/progress update on an already active goal without one moves it to one day later; a revival stays due) and optional waiting_user/blocked annotations. The due-goal conversation hint is injected only when the session's due set (id, next check, revision) changes and names the longest-waiting goals.
 Private parent conversations create/update goals. Native child/Cron context decides
 write permission; task_id only correlates native work and is not an identity gate.
 The parent reads results and tells the user before recording done with a note.

@@ -260,6 +260,8 @@ class Companion:
             for field in ('note', 'progress'):
                 if data.get(field):
                     record['progress'] = (record['progress'] + [{'at': now, 'text': bounded(data[field], 2000)}])[-50:]
+            if status == record['status'] == 'active' and (data.get('note') or data.get('progress')) and 'next_check_at' not in data:
+                record['next_check_at'] = now + DAY  # a reported step is the follow-up; look again tomorrow (a revival stays due)
             record.update(status=status, updated=now, revision=record['revision'] + 1)
             self.store.save_goal(record, body, expected_hash=fingerprint)
             if status != 'active':
