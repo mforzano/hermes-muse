@@ -25,6 +25,7 @@ if _package not in sys.modules:
     _spec.loader.exec_module(_module)
 _views = __import__(_package + ".views", fromlist=["Views"])
 _admin = __import__(_package + ".profile_admin", fromlist=["profiles"])
+_health = __import__(_package + ".health", fromlist=["load"])
 router = APIRouter()
 
 
@@ -159,6 +160,12 @@ def goal(
             "revision": revision,
         }, selected_profile
     )
+
+
+@router.get("/health")
+def health(selected_profile: str | None = None):
+    """The profile's last muse/health.json as written by the health cron; never runs a check."""
+    return _health.load(view(selected_profile).home) or {"available": False}
 
 
 @router.get("/profiles")
