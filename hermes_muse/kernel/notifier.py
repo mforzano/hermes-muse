@@ -1,5 +1,6 @@
-"""Notifier: code-derived keys, 7-day sent-history dedupe, quiet hours, daily budget, delivery through
-host.deliver and reconcile from host receipts. The model only says send / skip / withdraw / supersede.
+"""Notifier: code-derived keys, 7-day sent-history dedupe, quiet hours, daily budget, delivery by the owned
+no-agent `muse-deliver` run (claim, then its stdout is the message) and reconcile from that run's receipt.
+The model only says send / skip / withdraw / supersede.
 
 Keys come from kernel.store.notice_key (upstream ID; weak title+day key when there is none). A strong
 key with a drafted/scheduled/sending/sent notice in the last 7 days returns that notice; a weak key only
@@ -20,6 +21,9 @@ VERIFY_EVERY = D      # evidence older than this goes back to patrol before it i
 STUCK_AFTER = 6 * H   # eligible this long and still unsent: forced into the next patrol packet
 FADE_TOPIC = "goal-fade"
 TEXT_MAX = 2000
+DELIVER = "deliver"   # cron key of the owned no-agent job that prints claimed notices
+PER_MESSAGE = 5       # notices in one delivered message; the rest go in the next run
+SEPARATOR = "\n\n---\n\n"
 
 
 def delivery_key(key, generation=0):
@@ -115,8 +119,13 @@ def schedule(k, e, now, prefs=None):
         why = "topic_blocked" if eligible is not None else "priority_off"
         return patch(k.store, e["id"], "withdrawn", expect=UNSENT, reason=why, now=now) or k.store.get(e["id"])
     over = {"priority": priority, "requested_priority": requested} if priority != requested else {}
-    return patch(k.store, e["id"], "scheduled", expect=UNSENT, reason="schedule" + (":urgent_cap" if over else ""),
-                 payload={"next_eligible": eligible, **over}, now=now) or k.store.get(e["id"])
+    moved = patch(k.store, e["id"], "scheduled", expect=UNSENT, reason="schedule" + (":urgent_cap" if over else ""),
+                  payload={"next_eligible": eligible, **over}, now=now)
+    if moved and priority == "urgent" and eligible <= now:
+        job = k.adapter.cron.job(DELIVER)  # urgent does not wait for the next muse-deliver run
+        if job:
+            k.adapter.cron.wake(job["id"])
+    return moved or k.store.get(e["id"])
 
 
 def withdraw(k, notice_id, *, reason, now, by_code=False):
@@ -140,7 +149,7 @@ def supersede(k, old_id, *, text, evidence, now):
             raise ValueError("the previous notice is still being delivered; decide after its receipt")
         if old["state"] in UNSENT:
             patch(k.store, old_id, "superseded", reason="superseded", now=now)
-        drop = {"delivery_key", "job_id", "dispatched_at", "sent_at", "receipt", "target", "next_eligible", "message"}
+        drop = {"delivery_key", "job_id", "execution_id", "dispatched_at", "sent_at", "receipt", "target", "next_eligible", "message"}
         payload = {**{f: v for f, v in old["payload"].items() if f not in drop}, "text": check_text(text),
                    "evidence": list(evidence)[:20], "generation": old["payload"].get("generation", 0) + 1,
                    "supersedes": old_id, "verified_at": now}
@@ -194,39 +203,43 @@ def due_items(k, now, limit=5):
              "why": "stale" if stale(e["payload"], now) else "stuck"} for e in rows[:limit]]
 
 
-def dispatch(k, now):
-    """Send every scheduled notice whose gate is open now; returns how many were handed to the host."""
-    store, handed = k.store, 0
+def claim(k, job, execution_id, now):
+    """Claim for one muse-deliver run (`job`, its host `execution_id`) the scheduled notices whose gate is open
+    now, most urgent first, at most PER_MESSAGE. Budgets are checked and notices claimed in one write
+    transaction, so two runs cannot both spend a budget or claim a notice."""
+    store = k.store
     for e in reversed(store.query("notice", state="drafted")):
         schedule(k, e, now)
     prefs, tz = preferences(k.home), k.tz()
-    target = prefs.get("deliver") or k.adapter.config.get().get("deliver") or "bot-chat"
     rank = {p: i for i, p in enumerate(PRIORITIES)}
-    queue = sorted(store.query("notice", state="scheduled"),
-                   key=lambda e: (rank.get(e["payload"].get("priority"), 2), e["payload"].get("next_eligible") or 0))
-    for e in queue:
-        if interest_closed(k, e["payload"]):
-            schedule(k, e, now, prefs)
-            continue
-        if (e["payload"].get("next_eligible") or 0) > now or stale(e["payload"], now):
-            continue
-        with store.atomic():  # budget check and claim in one write transaction: two dispatchers cannot both spend it
-            current = store.get(e["id"])
-            if current["state"] != "scheduled":
+    claimed = []
+    with store.atomic():
+        queue = sorted(store.query("notice", state="scheduled"),
+                       key=lambda e: (rank.get(e["payload"].get("priority"), 2), e["payload"].get("next_eligible") or 0))
+        for e in queue:
+            p = e["payload"]
+            if len(claimed) == PER_MESSAGE:
+                break
+            if interest_closed(k, p):
+                schedule(k, e, now, prefs)
                 continue
-            p = current["payload"]
+            if (p.get("next_eligible") or 0) > now or stale(p, now):
+                continue
             priority = p.get("priority", "ordinary")
             eligible = gate(priority, prefs, now, tz, spent_today(store, priority, now, tz))
             if (eligible is None or eligible > now or p.get("topic") in prefs["blocked_topics"]
                     or effective(store, priority, prefs, now, tz) != priority):
-                schedule(k, current, now, prefs)
+                schedule(k, e, now, prefs)
                 continue
-            moved = patch(store, e["id"], "sending", reason="dispatch", now=now, payload={
-                "delivery_key": delivery_key(current["natural_key"], p.get("generation", 0)), "target": target,
-                "dispatched_at": now})
-        apply(k, moved, k.adapter.deliver.send(target, render(moved["payload"]), moved["payload"]["delivery_key"]), now)
-        handed += 1
-    return handed
+            claimed.append(patch(store, e["id"], "sending", reason="claim", now=now, payload={
+                "delivery_key": delivery_key(e["natural_key"], p.get("generation", 0)), "target": job.get("deliver"),
+                "job_id": job["id"], "execution_id": execution_id, "dispatched_at": now}))
+    return claimed
+
+
+def message(notices):
+    """The run's stdout: each claimed notice's own text and sources, separated by a rule ('' is silent)."""
+    return SEPARATOR.join(render(e["payload"]) for e in notices)
 
 
 def apply(k, e, receipt, now):
@@ -249,14 +262,21 @@ def apply(k, e, receipt, now):
 
 
 def reconcile(k, now):
-    """Read receipts of sending/unknown notices. A notice claimed but never handed to the host (crash) is sent
-    again under the same key, which the host turns into the existing receipt if it did arrive."""
+    """Read receipts of sending/unknown notices: the muse-deliver run that printed them, or (0.4.1) their one-shot
+    job by delivery key. Nothing is ever resent: a notice whose run is unreadable stays until its TTL."""
     for e in k.store.query("notice", state=("sending", "unknown")):
         p = e["payload"]
         if not p.get("delivery_key"):
             continue  # migrated v1 delivery: its TTL closes it
-        if e["state"] == "sending" and not p.get("job_id"):
-            receipt = k.adapter.deliver.send(p["target"], render(p), p["delivery_key"])
+        if p.get("execution_id"):
+            receipt = k.adapter.deliver.receipt(p["job_id"], p["execution_id"])
         else:
-            receipt = k.adapter.deliver.receipt(p["delivery_key"])
+            receipt = k.adapter.deliver.legacy_receipt(p["delivery_key"])
         apply(k, e, receipt, now)
+
+
+def sweep(k):
+    """Remove the finished 0.4.1 one-shot delivery jobs whose notice no longer waits for a receipt; idempotent."""
+    waiting = {e["payload"].get("delivery_key") for e in k.store.query("notice", state=("sending", "unknown"))}
+    return sum(bool(k.adapter.cron.remove(job["id"]))
+               for key, job in k.adapter.deliver.legacy_jobs().items() if key not in waiting)
