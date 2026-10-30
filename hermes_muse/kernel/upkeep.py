@@ -2,7 +2,7 @@
 
 When a store is at least 90% full and intake has new facts, the packet names it (`memory_full`, at most 3
 packets a day); the model may then merge duplicate entries or shorten verbose ones in one native batch, never
-delete an entry outright (the pre_tool_call guard refuses a remove without a patch beside it). Every change is
+delete an entry outright (the pre_tool_call guard refuses more removes than patches in one call). Every change is
 diffed from before/after snapshots, appended to the day's Muse note and handed to the next nightly packet
 (`memory_changes`) for the dream, so the user can see and recover it.
 """
@@ -16,7 +16,7 @@ from .common import D, clip, count_today, local_day
 
 FULL, ASKS = 0.9, 3
 KEEP = 7 * D
-REFUSED = ("Muse intake may merge duplicate entries (patch one, remove the duplicates in the same batch) or shorten "
+REFUSED = ("Muse intake may merge duplicate entries (one patch per remove in the same batch) or shorten "
            "entries; it never deletes an entry outright. Nothing was written; leave the item unanswered if the fact does not fit.")
 
 
@@ -34,11 +34,12 @@ def full(k, now):
 
 
 def guard(args):
-    """REFUSED for a native memory write that removes an entry without a patch in the same call, else None.
-    shortcut: a remove beside any patch passes; the recorded old text keeps it recoverable."""
-    ops = args.get("operations") if isinstance(args.get("operations"), list) else [args]
-    actions = {str((op or {}).get("action")) for op in ops if isinstance(op, dict)}
-    return REFUSED if "remove" in actions and "patch" not in actions else None
+    """REFUSED for a native memory write with more removes than patches, else None. `operations` is read with
+    Hermes' own truthiness (an empty list means the single action).
+    shortcut: does not check that a patch really merged the removed text; the recorded old text keeps it recoverable."""
+    ops = args.get("operations") or [args]
+    actions = [str(op.get("action")) for op in ops if isinstance(op, dict)]
+    return REFUSED if actions.count("remove") > actions.count("patch") else None
 
 
 def diff(before, after):
@@ -65,8 +66,8 @@ def record(k, before, after, now):
     rel = f"memory/{local_day(now, k.tz())}.md"  # the note id daily:<day> (surface.content_path)
     lines = [f"\n## Native memory upkeep {datetime.fromtimestamp(now, k.tz()):%H:%M}\n"]
     for c in changes:
-        lines += [f"- {c['target']}: before\n", *(f"  - {e}\n" for e in c["old"]),
-                  "  after\n", *(f"  - {e}\n" for e in c["new"] or ["(nothing)"])]
+        lines += [f"- {c['target']}: before\n", *(f"  - {clip(redact(e), 500)}\n" for e in c["old"]),
+                  "  after\n", *(f"  - {clip(redact(e), 500)}\n" for e in c["new"] or ["(nothing)"])]
     files = Files(k.home)
     with file_lock(k.home / "muse" / "mutations.lock"):
         try:
