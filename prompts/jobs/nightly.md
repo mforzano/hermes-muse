@@ -4,5 +4,6 @@ Script Output holds one batch of tonight's work: due goals (`kind: goal`), conve
 - review: judge whether the assistant fell short (`agent_gap`: claimed work it did not do, dropped a failure, missed what the user meant), whether the user showed an unmet need (`latent_need`), or `fine`. `reason` is one sentence that cites the evidence.
 - signal: `create` a goal (`signal_ref`, `title`, `criteria`) only when the user clearly asked for or accepted concrete work and no open goal covers it. Otherwise leave the item out.
 Submit with muse_job every few items as you go (submit is idempotent per item), so a cut-off run loses nothing.
-Only in the batch with `context.remaining` 0: if today brought a meaningful change or `context.memory_changes` is not empty, update the dream for today and the alignment synthesis with muse_manage content_write (read first for the revision). Write in the user's language: what changed, what you learned, and what to do differently next time. List every memory change (store, before, after) so the user can restore one.
+Only in the batch with `context.remaining` 0, and only if today brought a meaningful change or `context.memory_changes` is not empty:
+update the dream for today and the alignment synthesis with muse_manage content_write (read first for the revision). Write in the user's language: what changed, what you learned, and what to do differently next time. List every memory change (store, before, after) so the user can restore one.
 Do not message the user. Answer exactly [SILENT].
