@@ -147,8 +147,8 @@ def part_hooks(home, ids):
     ctx = Ctx()
     hooks = runtime.register(ctx, plugin_root=ROOT)
     names = [c[0] for c in ctx.calls]
-    check("register: Skill, prompt section, muse_manage + muse_job, three hooks and unload",
-          sorted(a[0] for n, a, _ in ctx.calls if n == "register_hook") == ["post_llm_call", "post_tool_call", "pre_llm_call"]
+    check("register: Skill, prompt section, muse_manage + muse_job, four hooks and unload",
+          sorted(a[0] for n, a, _ in ctx.calls if n == "register_hook") == ["post_llm_call", "post_tool_call", "pre_llm_call", "pre_tool_call"]
           and "register_skill" in names and "register_system_prompt_section" in names and "on_unload" in names
           and [k["name"] for n, _, k in ctx.calls if n == "register_tool"] == ["muse_manage", "muse_job"], names)
 
@@ -192,6 +192,28 @@ def part_hooks(home, ids):
           receipts == ["c-fail", "c-stage"] and "write failed" in once and "staged" in once and again is None
           and "staged" in reminder and "failed" not in reminder and later.pre_turn(session_id="s1", platform="cli") is None,
           {"receipts": receipts, "once": once[:200], "reminder": reminder[:200]})
+
+    # Muse's intake run may compact native memory but never delete an entry outright; every change is recorded.
+    from hermes_muse.install import owned
+    job = owned(hooks.k.adapter, "memory-upkeep")
+    run = f"cron_{job['id']}_20261030_032000"
+    with sqlite3.connect(home / "state.db") as db:
+        db.execute("INSERT INTO sessions (id, source, chat_type, title, started_at) VALUES (?,?,?,?,?)",
+                   (run, "cron", "dm", None, time.time()))
+    (home / "memories").mkdir(exist_ok=True)
+    user_md = home / "memories" / "USER.md"
+    user_md.write_text("Likes tea\n§\nLikes green tea\n§\nLives in Porto", encoding="utf-8")
+    remove = {"action": "remove", "target": "user", "old_text": "Likes tea"}
+    refused = hooks.pre_tool(tool_name="memory", args=remove, session_id=run, tool_call_id="m1", platform="cron")
+    merge = {"target": "user", "operations": [{"action": "patch", "old_text": "Likes green tea", "content": "Likes tea, green best"}, remove]}
+    allowed = hooks.pre_tool(tool_name="memory", args=merge, session_id=run, tool_call_id="m2", platform="cron")
+    user_md.write_text("Likes tea, green best\n§\nLives in Porto", encoding="utf-8")  # what Hermes' batch wrote
+    hooks.post_tool(tool_name="memory", args=merge, result={"success": True}, session_id=run, tool_call_id="m2", platform="cron")
+    user_side = hooks.pre_tool(tool_name="memory", args=remove, session_id="s1", tool_call_id="m3", platform="cli")
+    notes = "".join(f.read_text(encoding="utf-8") for f in (home / "muse" / "memory").glob("20*.md"))
+    check("intake memory upkeep: a bare remove is refused, a merge passes and its before/after lands in the day's note; user turns untouched",
+          (refused or {}).get("action") == "block" and allowed is None and user_side is None
+          and "Likes green tea" in notes and "Likes tea, green best" in notes, {"refused": refused, "notes": notes[-300:]})
 
     clock = [time.time()]
     quiet = Hooks(hooks.k, quiet_seconds=0.5, clock=lambda: clock[0])
