@@ -58,6 +58,7 @@ Requires Hermes 0.21.5 or later with the plugin APIs for tools, Skills, prompt s
 | nightly (`nightly-review`) | 03:20 | assesses every due goal, judges review candidates (up to 30 a night), writes dream and alignment | local |
 | feed (`feed-pulse`) | 08:00 | researches each active interest once a day, writes Feed articles, may raise one notice for real news | silent; a notice goes through the notice gates |
 | weekly (`weekly-governance-review`) | Sunday 21:15 | one digest from the Health summary and 7-day counts | your route |
+| deliver (`deliver`) | every 10 min | nothing: no model. Sends the notices that are due as one message (urgent ones wake it at once) | your route |
 
 Each job's launcher first runs the kernel and builds a bounded packet; intake, nightly and feed leave the model asleep when their packet is empty, nightly and feed work through their queue in batches and Muse wakes them again until it is done, while patrol wakes every period because only the model can read your sources. Code captures messages, derives every id and key, dedupes notices against 7 days of history, applies quiet hours and budgets, delivers, reads delivery receipts, moves next checks, and asks about and closes dormant goals. The model returns only references, enum values and text. Behavior lives in `prompts/jobs/<job>.md`; fields in the generated [interface](skills/companion/references/interface.md). See the [design](docs/DESIGN.md) and [feature coverage](docs/FEATURE-COVERAGE.md).
 
@@ -79,8 +80,8 @@ Settings in the profile's Hermes `config.yaml` that Muse reads or depends on. Qu
 |---|---|---|
 | `plugins.enabled` contains `hermes-muse` (and not in `plugins.disabled`) | enabled | Every Muse job launcher checks this first; when disabled, or when the config cannot be read, all jobs stay silent. |
 | `plugins.entries.hermes-muse.settings` | the place for Muse plugin settings | Read first, over `.config` and the legacy `plugins.hermes-muse`. If the legacy block exists, Health reports `probe.config_location` degraded until you move it. |
-| ↳ `deliver` | unset (falls back to this profile's Bot Chat) | Route for notices, patrol/weekly/watch jobs and `muse-health`, used when `deliver` is not set in preferences. Jobs take the route when they are created; later refreshes keep the job's existing route. |
-| ↳ `health_deliver` | optional second route | Health alerts are also sent here when the alert set changes. Without it they appear only in the main session, on the Muse page and in the cron output. |
+| ↳ `deliver` | unset (falls back to this profile's Bot Chat) | Route for `muse-deliver` (notices), patrol/weekly/watch jobs and `muse-health`, used when `deliver` is not set in preferences. Jobs take the route when they are created; later refreshes keep the job's existing route. |
+| ↳ `health_deliver` | optional second route | Added to the `muse-health` job's route at install, so Health alerts are also sent here when the alert set changes. Without it they appear only in the main session, on the Muse page and in the cron output. Removing the setting later does not remove the route; edit the job's delivery then. |
 | ↳ `source_intervals` | unset (built-in: mail 30 min, calendar 2 h, reminders 1 h, web/rss 6 h) | `{source id or kind: minutes}`; how often the patrol re-checks a source. Shorter intervals cost more model time. |
 | `platform_toolsets` (only if you maintain explicit lists) | include `muse` | The `muse_manage`/`muse_job` tools are registered in toolset `muse`. A list that omits it hides them, so jobs cannot submit and chat cannot manage goals. |
 | `timezone` (or `HERMES_TIMEZONE`) | your IANA zone | Quiet hours, daily budgets, the daily goal-creation cap and the default job schedules use Hermes' profile time. Without it Muse uses server-local time. |
@@ -92,7 +93,7 @@ Settings in the profile's Hermes `config.yaml` that Muse reads or depends on. Qu
 
 ## Health
 
-`muse-health` runs every 30 minutes without a model and writes `muse/health.json`: host probes plus invariants over signals, packets, notices, deliveries, runs, goals and sources, each with a level and a fix. A high item appears in your next private conversation and on the Muse page; the cron prints when the alert set changes; the plugin setting `health_deliver` (under `plugins.entries.hermes-muse.settings`) also sends it to a second route. Health never goes through the notice pipeline and never repairs anything. Ask "what is Muse's health?" or `muse_manage read(kind=status)`.
+`muse-health` runs every 30 minutes without a model and writes `muse/health.json`: host probes plus invariants over signals, packets, notices, deliveries, runs, goals and sources, each with a level and a fix. A high item appears in your next private conversation and on the Muse page; the cron prints when the alert set changes; the plugin setting `health_deliver` (under `plugins.entries.hermes-muse.settings`) is added as a second route of that job. Health never goes through the notice pipeline and never repairs anything. Ask "what is Muse's health?" or `muse_manage read(kind=status)`.
 
 ## Use
 

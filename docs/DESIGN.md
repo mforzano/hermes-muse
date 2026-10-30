@@ -106,11 +106,13 @@ Owned jobs keep their 0.3.x cron keys so ids, user schedules, routes and pauses 
 | nightly-review | nightly | 03:20 | local |
 | feed-pulse | feed | 08:00 | local |
 | weekly-governance-review | weekly | Sunday 21:15 | user route |
+| deliver | deliver (no agent) | every 10 minutes | user route |
 
 `monthly-system-audit` is paused (merged into weekly), `muse-health` is a no-agent cron every 30 minutes, and each
 Watch is its own owned job. Every launcher runs `scripts/hermes-muse-<key>.py` → `cron_entry.py` → `entry.run`,
 which checks that the plugin is enabled and no migration marker exists, runs `Kernel.tick()`, builds the job's
-output and prints one JSON line; `{"wakeAgent": false}` keeps the model asleep.
+output and prints one JSON line; `{"wakeAgent": false}` keeps the model asleep. The `deliver` job never calls a
+model: it prints the message itself (plain text, empty when nothing is due) and Hermes delivers that stdout.
 
 A packet job (intake, patrol, nightly, feed) gets one bounded Packet at a time: items with refs that are valid only
 inside that packet, redacted excerpts, budgets and a lease. Nightly and feed drain their whole queue within one
@@ -136,9 +138,13 @@ counts and state names come from code.
    verdict, text, priority and topic. The notifier derives the notice key (`src:<upstream id>` or a weak title+day
    key), dedupes against 7 days of history and gates it: quiet hours and per-priority daily budgets; urgent may pass
    quiet hours only within `urgent_per_day` (default 2) and is gated as time-sensitive past it; blocked topics are
-   withdrawn. Dispatch claims `sending` and checks the budget in one transaction, then sends through a one-shot
-   no-agent cron keyed by the delivery_key; reconciliation reads the delivery receipt. An outcome that is unknown
-   is never resent blindly.
+   withdrawn. Only the owned no-agent `muse-deliver` job sends (the tick, other jobs and hooks never do): each run
+   re-checks the gates and claims the due notices as `sending` in one transaction, tied to its own host execution,
+   and prints them as one message (at most 5, separated by a rule) that Hermes delivers to the job's route. An
+   urgent notice that may go now wakes `muse-deliver` at once instead of waiting up to 10 minutes. Reconciliation
+   reads that execution's delivery receipt; an outcome that is unknown is never resent. Notices that 0.4.1 left
+   `sending` keep being read from their one-shot job by delivery key until they settle; finished one-shot jobs
+   that no notice waits for are removed by install and by each deliver run.
 3. **Nightly.** Every due goal gets an assessment and progress note (`done_suggested` never closes a goal); the
    next check moves to 1 day − 6h so the goal is due again the next night. Code picks review candidates from the last
    72h by rules, oldest first, at most 30 a night; the overflow waits and Health reports it. The model's `agent_gap`
@@ -166,7 +172,8 @@ counts and state names come from code.
 plus invariants over the Store, deliveries, tool errors and jobs. Each health item has an id, level
 (`ok/low/medium/high`), detail, evidence and fix. Alerts never use the Notifier; they reach the user through the
 main-session injection, the Dashboard and Desktop page, cron stdout when the alert set changes, and an optional
-`health_deliver` route. Probes judge capability and semantics, not version ranges; a missing capability degrades
+`health_deliver` route added as a second target of the health job, so Hermes delivers the same stdout to both.
+`deliver_stalled` reports notices due for over 30 minutes that `muse-deliver` did not claim. Probes judge capability and semantics, not version ranges; a missing capability degrades
 only its feature and raises a high item.
 
 ## Install, upgrade and rollback
@@ -174,7 +181,8 @@ only its feature and raises a high item.
 On plugin load, `install.install` holds `muse/install.lock`, writes `muse/migrating.json`, migrates the 0.3.1 or
 0.3.16 `muse/state.db` into Store v2 once (the old file becomes read-only), adds missing content files from
 `templates/` without overwriting, backs up the 0.3.x job prompts once to `muse/backup/cron-prompts-0.3.json`,
-refreshes owned jobs and watches in place, creates the Health cron and removes the marker. A failed install keeps
+refreshes owned jobs and watches in place (creating `muse-deliver`), removes settled 0.4.1 one-shot delivery
+jobs, creates the Health cron and removes the marker. A failed install keeps
 the marker and its error: jobs and the background tick stay silent and the main session is told. Cutover and
 rollback steps are in [CUTOVER.md](CUTOVER.md); the rollback bridge writes v2's sent notices and settled signals back
 into the 0.3.x database so the old version neither resends nor reprocesses them.

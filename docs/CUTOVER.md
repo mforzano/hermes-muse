@@ -17,7 +17,8 @@ Every step is `PYTHONPATH=<hermes-agent> <hermes python> scripts/cutover.py <ste
    - migrates `muse/state.db` into `muse/state-v2.db` once; the old file stays, read-only;
    - saves the 0.3.x job prompts to `muse/backup/cron-prompts-0.3.json` (once);
    - refreshes the Muse jobs in place under their 0.3.x names (ids, schedules, routes and pauses are kept),
-     pauses `muse-monthly-system-audit` (merged into the weekly digest), creates the `muse-health` no_agent job;
+     pauses `muse-monthly-system-audit` (merged into the weekly digest), creates the `muse-deliver` and
+     `muse-health` no_agent jobs and removes settled 0.4.1 one-shot delivery jobs;
    - removes the marker. A failed install keeps the marker and its error; jobs stay silent and the main
      session says so. `apply` repeats the install without a gateway (or on a copy).
 4. **Swap the external callers** to their rewritten versions (user-authorized step).
@@ -31,7 +32,7 @@ Use it when a high Health finding cannot be fixed within 2 hours.
 1. **`rollback`** sets the marker (v2 jobs go silent), runs the rollback bridge (v2 sent notices and
    settled signals are written back into `muse/state.db`, so 0.3.x neither resends nor reprocesses them),
    restores the saved 0.3.x job prompts (with their installation markers, so 0.3.x finds its jobs
-   instead of creating duplicates), resumes the job the install paused and pauses `muse-health`.
+   instead of creating duplicates), resumes the job the install paused and pauses `muse-health` and `muse-deliver`.
 2. Reinstall the 0.3.x version (catalog users: the 0.3.1 SHA; local: the previous checkout).
 3. Put back the external callers' previous prompts and scripts.
 4. After 0.3.x has loaded, delete `muse/migrating.json`. Goals need nothing: GOAL.md is shared.

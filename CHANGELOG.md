@@ -1,3 +1,23 @@
+# 0.4.2 — One fixed `muse-deliver` job instead of a one-shot cron per notice (unreleased)
+
+- Delivery: one owned no-agent job `muse-deliver` (cron key `deliver`, every 10 minutes, on the user's route, no
+  model, added to `install.JOBS`) sends notices. Each run ticks, re-checks the gates (quiet hours, budgets,
+  `urgent_per_day`, blocked topics), claims the due notices as `sending` in one transaction tied to its own host
+  execution, and prints them as one message (at most 5, separated by a rule); Hermes delivers that stdout, and an
+  empty stdout is silent. `Kernel.tick`, the other jobs and the main-session hooks no longer send anything.
+- Urgent: scheduling an urgent notice that may go now wakes `muse-deliver` through the native cron wake.
+- Receipts: a notice stores `job_id` and `execution_id`; reconciliation reads that execution's delivery outcome
+  (`Deliver.receipt(job_id, execution_id)`). Nothing is ever resent.
+- Migration: `Deliver.send` and the one-shot `muse-deliver-<key>` jobs are gone. Notices 0.4.1 left `sending` are
+  read from their one-shot job by delivery key until they settle (`Deliver.legacy_receipt`); one that 0.4.1 never
+  handed to the host closes as unknown instead of being resent. Install and every deliver run remove finished or
+  disabled one-shot delivery jobs (and their launchers) that no notice still waits for; other jobs are never touched.
+- Health: new `deliver_stalled` (notices due for over 30 minutes and not claimed: high while `muse-deliver` is
+  enabled or missing, low while paused). `health_deliver` is now a second route of the `muse-health` job
+  (comma-separated targets, delivered by Hermes) instead of a one-shot job per alert; `health.json` has no `backup`.
+- HostAdapter: `Cron.job(key)`, `Cron.remove`, `Cron.add_route`, `Deliver.legacy_receipt`, `Deliver.legacy_jobs`;
+  `Deliver.send` removed, `Deliver.receipt` takes the job and execution. Cutover rollback also pauses `muse-deliver`.
+
 # 0.4.1 — Drain in batches, interest news via Feed, memory upkeep (2026-10-30)
 
 - Nightly and Feed drain their whole queue: batches `<job>:<period>[:<batch>]` with a 2h lease; when a run closes with

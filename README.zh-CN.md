@@ -58,6 +58,7 @@ hermes plugins install xiaohei-info/hermes-muse --enable
 | nightly（`nightly-review`） | 03:20 | 评估全部到期目标、判断复盘候选（每晚最多 30 条）、写 dream 和 alignment | local |
 | feed（`feed-pulse`） | 08:00 | 每个 active interest 每天研究一次，写 Feed 文章，有真正的新进展时可发一条通知 | 静默；通知走通知门控 |
 | weekly（`weekly-governance-review`） | 周日 21:15 | 根据 Health 摘要和 7 天计数写一条周报 | 你的路由 |
+| deliver（`deliver`） | 每 10 分钟 | 不调用模型。把到期的通知合成一条消息发出（urgent 会立即唤醒它） | 你的路由 |
 
 每个 job 的 launcher 先运行内核、组装有界 packet；intake、nightly 和 feed 的 packet 为空时不唤醒模型；nightly 和 feed 分批处理队列，Muse 会接着唤醒它们直到处理完；patrol 每轮都唤醒，因为只有模型能读你的来源。代码负责捕获消息、派生所有 ID 和键、对 7 天历史去重、执行静默时段和预算、投递、读投递回执、推进下次检查、询问并关闭休眠目标。模型只返回引用、枚举值和文本。行为写在 `prompts/jobs/<job>.md`，字段见生成的[接口](skills/companion/references/interface.md)。详见[设计文档](docs/DESIGN.md)和[功能覆盖](docs/FEATURE-COVERAGE.zh-CN.md)。
 
@@ -80,7 +81,7 @@ Muse 不带连接器。patrol 只通过你的 Hermes 已有的工具读邮件、
 | `plugins.enabled` 包含 `hermes-muse`（且不在 `plugins.disabled` 中） | 启用 | 每个 Muse job 的 launcher 先检查这一项。未启用或配置读取失败时，所有 job 都保持静默。 |
 | `plugins.entries.hermes-muse.settings` | Muse 插件设置都放这里 | 优先于 `.config` 和旧位置 `plugins.hermes-muse`。旧位置还有设置时，Health 报 `probe.config_location` degraded，直到迁走为止。 |
 | ↳ `deliver` | 不设（回退到本 profile 的 Bot Chat） | 偏好里没设 `deliver` 时使用：通知、patrol/weekly/watch job 和 `muse-health` 的路由。job 在创建时取路由，之后刷新保留 job 现有的路由。 |
-| ↳ `health_deliver` | 可选的第二路由 | 告警集合变化时，Health 告警也发到这里。不设时，告警只出现在主会话、Muse 页面和 cron 输出里。 |
+| ↳ `health_deliver` | 可选的第二路由 | 安装时追加到 `muse-health` job 的路由上，告警集合变化时 Health 告警也发到这里。不设时，告警只出现在主会话、Muse 页面和 cron 输出里。之后删掉这个设置不会移除路由，需要自己改 job 的投递目标。 |
 | ↳ `source_intervals` | 不设（内置：mail 30 分钟、calendar 2 小时、reminders 1 小时、web/rss 6 小时） | `{来源 id 或类型: 分钟}`，决定 patrol 多久重查一次某个来源。间隔越短，模型开销越大。 |
 | `platform_toolsets`（仅在你维护显式列表时） | 包含 `muse` | `muse_manage`/`muse_job` 注册在 toolset `muse` 下。列表里缺了它，这两个工具就不可见：job 无法 submit，会话里也无法管理目标。 |
 | `timezone`（或 `HERMES_TIMEZONE`） | 你的 IANA 时区 | 静默时段、每日预算、每日建目标上限和默认调度都按 Hermes 的 profile 时间计算。不设时使用服务器本地时间。 |
@@ -92,7 +93,7 @@ Muse 不带连接器。patrol 只通过你的 Hermes 已有的工具读邮件、
 
 ## 健康检查
 
-`muse-health` 每 30 分钟运行一次，不调用模型，写出 `muse/health.json`：宿主 probe 加上对信号、packet、通知、投递、run、目标和来源的不变量检查，每项带级别和修复方法。high 项会出现在你下一次私聊和 Muse 页面上；告警集合变化时 cron 会输出；插件设置 `health_deliver`（在 `plugins.entries.hermes-muse.settings` 下）可再发到第二条路由。Health 不经过通知管道，也不修复任何东西。可以问“Muse 健康吗？”，或用 `muse_manage read(kind=status)`。
+`muse-health` 每 30 分钟运行一次，不调用模型，写出 `muse/health.json`：宿主 probe 加上对信号、packet、通知、投递、run、目标和来源的不变量检查，每项带级别和修复方法。high 项会出现在你下一次私聊和 Muse 页面上；告警集合变化时 cron 会输出；插件设置 `health_deliver`（在 `plugins.entries.hermes-muse.settings` 下）会作为该 job 的第二条路由。Health 不经过通知管道，也不修复任何东西。可以问“Muse 健康吗？”，或用 `muse_manage read(kind=status)`。
 
 ## 使用
 
