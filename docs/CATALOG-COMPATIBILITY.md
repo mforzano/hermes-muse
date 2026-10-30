@@ -11,8 +11,9 @@
   GOAL.md, memory, dreams, people and group pages, Feed articles, TOOLS.md, AGENTS.md and preferences keep their
   formats. Callers of removed actions must be rewritten first ([CALLER-MIGRATION.md](CALLER-MIGRATION.md));
   rollback is in [CUTOVER.md](CUTOVER.md).
-- **Platforms.** Linux and macOS. Windows is not supported: content files and locks use POSIX file locks and
-  descriptor-relative opens.
+- **Platforms.** Linux and macOS. Windows (local NTFS profile) is experimental: content files refuse symlinks and
+  junctions by attribute instead of descriptor-relative opens, and locks use `msvcrt`. Rollback to 0.3.x
+  (`cutover.py rollback`) is POSIX-only.
 - **Isolation.** Everything lives in the current profile; Muse never reads or monitors another profile. Jobs set no
   `workdir`, so Docker and remote terminals work.
 

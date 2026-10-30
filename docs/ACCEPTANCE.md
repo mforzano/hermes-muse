@@ -22,7 +22,8 @@ their native parts print `SKIP`.
 | Official plugin validation | `HERMES_HOME=$(mktemp -d) hermes plugins validate . --json` |
 | External callers before a cutover | `python scripts/check_callers.py <their prompts and scripts>` |
 
-CI (`.github/workflows/test.yml`) runs the SKIP-able set on Linux and macOS without Hermes, and everything on
+CI (`.github/workflows/test.yml`) runs the SKIP-able set on Linux and macOS without Hermes, kernel and surface on
+Windows, and everything on
 Linux against Hermes `v0.22.5` (`NousResearch/hermes-agent@bf0203a794a07aac3ff764972ab9087baa4e4f4e`), the
 tested baseline. Probes judge host capabilities, not versions, so a newer Hermes is accepted when the host contract
 passes.

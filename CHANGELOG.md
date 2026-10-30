@@ -1,3 +1,9 @@
+# Unreleased
+
+- Experimental native Windows support (local NTFS profiles), ported from #4 by @mforzano: content files and locks no
+  longer need `fcntl`, `dir_fd` or `O_NOFOLLOW` on Windows; symlinks and junctions are refused by attribute, locks
+  use `msvcrt`. POSIX behavior is unchanged; no new dependencies. CI runs kernel and surface acceptance on Windows.
+
 # 0.4.0 — Muse v2: deterministic kernel, thin judgment layer, independent Health (2026-10-30)
 
 v2 rewrites the core and keeps the data. Code keeps the books (watermarks, dedupe, state machines with TTLs,
