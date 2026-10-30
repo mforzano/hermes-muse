@@ -1,7 +1,8 @@
 """Goals: GOAL.md (managed header + body) is the source of truth; Store v2 keeps an index mirror holding
 the file revision. Every write is a file CAS under mutations.lock and refreshes the mirror.
 
-Code owns the clock: any touch moves next_check to now + 1 day; dormancy (no activity for
+Code owns the clock: any touch moves next_check to now + 1 day (a nightly assessment to now + 1 day - 6h, so
+the goal is due again the next night); dormancy (no activity for
 goal_dormant_days) asks one question per episode under `goal:<id>:fade:<episode>:<attempt>`; a withdrawn,
 expired or failed question is asked again (attempt + 1, at most 3); goal_fade_days after dormancy and at
 least a day after the question was delivered, code cancels the goal. Status changes otherwise come only
@@ -20,6 +21,7 @@ from .store import machine
 
 ROOT = "workspace/goals"
 CHECK_EVERY = D
+NIGHT_SLACK = 6 * 3600
 MAX_ASKS = 3
 CRON_CREATES_PER_DAY = 5
 WATCH_RENEW = 30 * D
@@ -106,7 +108,7 @@ def sync(k, now):
     return changed
 
 
-def update(k, slug, changes, *, by="user", now):
+def update(k, slug, changes, *, by="user", now, check_in=CHECK_EVERY):
     """goal_update. Only the user changes status and settings; cron appends progress/assessment; Muse's fade
     may only cancel. next_check moves to now + 1 day unless the user sets it."""
     allowed = USER_FIELDS if by == "user" else CRON_FIELDS | ({"status"} if by == "fade" else set())
@@ -122,7 +124,7 @@ def update(k, slug, changes, *, by="user", now):
             if field in changes:
                 record[field] = changes[field]
         if "next_check_at" not in changes:
-            record["next_check_at"] = now + CHECK_EVERY
+            record["next_check_at"] = now + check_in
         if changes.get("assessment"):
             record["assessment"] = {"at": now, "value": changes["assessment"]}
         if changes.get("progress_note"):
@@ -140,7 +142,7 @@ def touch_if_open(k, slug, now):
 def assess(k, slug, assessment=None, progress_note=None, now=None):
     """Nightly result for a due goal: append-only note and assessment; moves next_check."""
     changes = {key: v for key, v in (("assessment", assessment), ("progress_note", progress_note)) if v}
-    record = update(k, slug, changes, by="cron", now=now)
+    record = update(k, slug, changes, by="cron", now=now, check_in=CHECK_EVERY - NIGHT_SLACK)
     return {"result": "assessed", "next_check_at": record["next_check_at"]}
 
 

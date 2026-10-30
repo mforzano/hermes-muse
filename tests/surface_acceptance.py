@@ -64,7 +64,7 @@ class Host(FakeHost):
         super().__init__(clock)
         self.jobs, self.ensured = {"j-intake": {"name": "muse-intake", "enabled": True}}, []
         self.cron = SimpleNamespace(pause=self.pause, outcome=lambda job_id, execution_id=None: None,
-                                    jobs=lambda: dict(self.jobs), ensure=self.ensure)
+                                    jobs=lambda: dict(self.jobs), ensure=self.ensure, wake=lambda job_id: True)
 
     def pause(self, job_id, reason):
         self.paused.append(job_id)

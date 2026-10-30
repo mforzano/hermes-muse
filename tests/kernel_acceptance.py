@@ -19,7 +19,8 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from hermes_muse.host.sessions import SECRETS, excerpt, redact  # noqa: E402
-from hermes_muse.kernel import Kernel, goals, intake, notifier, review, sources  # noqa: E402
+from hermes_muse.health import invariants  # noqa: E402
+from hermes_muse.kernel import Kernel, goals, intake, notifier, packets, records, review, sources, upkeep  # noqa: E402
 from hermes_muse.kernel.common import render  # noqa: E402
 
 UTC = timezone.utc
@@ -44,8 +45,11 @@ class FakeHost:
         self.paused, self.outcomes, self.owner, self.send_errors = [], {}, {}, 0
         self.sessions = SimpleNamespace(user_turns=self.user_turns, read=self.read)
         self.deliver = SimpleNamespace(send=self.send, receipt=self.receipt)
+        self.woken, self.stores = [], {}
         self.cron = SimpleNamespace(pause=lambda job_id, reason: self.paused.append(job_id) or True,
-                                    outcome=lambda job_id, execution_id=None: self.outcomes.get(execution_id))
+                                    outcome=lambda job_id, execution_id=None: self.outcomes.get(execution_id),
+                                    wake=lambda job_id: self.woken.append(job_id) or True)
+        self.memory = SimpleNamespace(stores=lambda: self.stores)
         self.owners = SimpleNamespace(status=lambda handle: {"state": self.owner.get(handle, "unknown")})
         self.config = SimpleNamespace(get=lambda: {})
 
@@ -409,8 +413,8 @@ def part_goals(base):
         cron_status = False
     write_goal(home, "fresh", title="Fresh goal (renamed by user)", created=T0 - D, updated=clock[0], next_check_at=clock[0] + 5 * H)
     k.tick()
-    check("G7 next_check: touch -> now+1d, cron cannot change status, mirror follows GOAL.md edits",
-          rec["next_check_at"] == clock[0] + D and before != rec["next_check_at"] and not cron_status
+    check("G7 next_check: nightly assessment -> now+1d-6h (due again next night), cron cannot change status, mirror follows GOAL.md edits",
+          rec["next_check_at"] == clock[0] + D - goals.NIGHT_SLACK and before != rec["next_check_at"] and not cron_status
           and rec["progress"][-1]["by"] == "cron" and k.store.get("goal:fresh")["payload"]["title"] == "Fresh goal (renamed by user)"
           and k.store.get("goal:fresh")["deadline"] == clock[0] + 5 * H, {"next_check_at": rec["next_check_at"]})
 
@@ -427,14 +431,15 @@ def part_goals(base):
         host.add("burst", "user", f"ship build {i}", clock[0] - 50 * 60 + i)
         host.add("burst", "assistant", f"Deployed build {i}.", clock[0] - 50 * 60 + i + 0.5)
     k.tick()
-    every_rule = {r for i in review.candidates(k, clock[0], 30) for r in i["rules"]}
+    every_rule = {r for i in review.candidates(k, clock[0]) for r in i["rules"]}
     signal = k.store.query("signal", natural_key=need)[0]
     intake.dispose(k, signal["natural_key"], "saved", ["passport renewal next month"], "new", clock[0])
     packet = seen(k.build_packet("nightly"))
     kinds = [i["kind"] for i in packet["items"]]
     reviews = [i for i in packet["items"] if i["kind"] == "review"]
-    check("R1 review pick: <=10, newest first, rules claim/tool failure/correction/need",
-          len(reviews) == 10 and reviews[0]["at"] >= reviews[-1]["at"]
+    check("R1 nightly batch: goals, then proposals, then review candidates oldest first; rules claim/tool failure/correction/need",
+          kinds == sorted(kinds, key=["goal", "signal", "review"].index) and reviews and reviews[0]["at"] <= reviews[-1]["at"]
+          and packet["context"]["remaining"] > 0
           and every_rule == {"claim_without_write", "tool_failure_unretried", "user_correction", "unrecorded_need"},
           {"kinds": kinds, "rules_all_candidates": sorted(every_rule)})
     results = [{"candidate_ref": i["ref"], "verdict": "agent_gap" if n == 0 else "fine", "reason": "claimed without evidence"}
@@ -445,7 +450,7 @@ def part_goals(base):
     out = k.submit(packet["id"], results)
     created = out[-1]
     again = k.submit(packet["id"], results[-1:])
-    older_reviews = review.candidates(k, clock[0], 30)
+    older_reviews = review.candidates(k, clock[0])
     check("R2 review/goals submit: one finding per turn, goal from a user signal once, picked turns never re-picked",
           created.get("result") == "created" and again[0]["result"] == "existing"
           and len(k.store.query("finding", state="open")) == 1
@@ -465,6 +470,229 @@ def part_goals(base):
     states = {r["natural_key"]: r["state"] for r in k.store.query("run")}
     check("R3 runs: degraded/failed from host + packet, abandoned when the host has no record, kept when the host read failed",
           states == {"e-ok": "degraded", "e-fail": "failed", "e-lost": "abandoned", "e-flaky": "running"}, states)
+    return k
+
+
+def batch_size(job, n):
+    """Force the adaptive batch size of a job (a short drain in the test)."""
+    spec = packets.JOBS[job]
+    packets.JOBS[job] = {**spec, "items": (n, n)}
+    return lambda: packets.JOBS.__setitem__(job, spec)
+
+
+def part_drain(base):
+    """Nightly drains every due goal in batches: relay wakes, failed batch re-offered, skipped goal reported;
+    only wakes after a run without progress are capped."""
+    clock = [T0 + 17 * H + 20 * 60]  # 03:20 next day
+    night = clock[0]
+    host = FakeHost(lambda: clock[0])
+    home = make_home(base)
+    k = Kernel(home, adapter=host, clock=lambda: clock[0])
+    for i in range(23):
+        write_goal(home, f"g{i:02d}", no_fade=True, next_check_at=T0 - H - i)
+    k.tick()
+    restore = batch_size("nightly", 2)
+    try:
+        names, offered, most_issued, same, n, released, between = [], [], 0, True, 0, None, None
+        while n < 40:
+            packet = k.build_packet("nightly")
+            if packet["id"] is None:
+                break
+            n += 1
+            same &= k.build_packet("nightly")["id"] == packet["id"]
+            most_issued = max(most_issued, len(k.store.query("packet", state="issued")))
+            names.append(k.store.get(packet["id"])["natural_key"])
+            refs = [i["ref"] for i in packet["items"]]
+            offered += refs
+            k.start_run("nightly", job_id="job-n", execution_id=f"e{n}", packet_id=packet["id"])
+            if n == 2:  # this run dies before submitting
+                host.outcomes["e2"] = {"status": "failed"}
+            elif n == 4:  # this run submits one goal, then dies: the other comes back
+                k.submit(packet["id"], [{"goal_id": refs[0], "assessment": "on_track"}])
+                host.outcomes["e4"], released = {"status": "failed"}, refs[1]
+            else:
+                k.submit(packet["id"], [{"goal_id": r, "assessment": "on_track"} for r in refs if r != "g03"])
+                host.outcomes[f"e{n}"] = {"status": "completed"}
+            clock[0] += 60
+            k.tick()
+            if n == 1:  # between two batches: the night is still in progress
+                between = invariants.goals(k.store, clock[0])[0]["level"]
+        drained = len(host.woken)
+        for i in range(14):  # a goal no run gets to: every wake is without progress
+            write_goal(home, "g99", no_fade=True, next_check_at=clock[0] - 1)
+            k.tick()
+            k.start_run("nightly", job_id="job-n", execution_id=f"e-stuck{i}", packet_id=k.build_packet("nightly")["id"])
+            host.outcomes[f"e-stuck{i}"] = {"status": "failed"}
+            clock[0] += 60
+            k.tick()
+    finally:
+        restore()
+    period = int(night // D)
+    checked = [i for i in range(23) if goals.read(home, f"g{i:02d}")[0]["next_check_at"] > night]
+    missed = invariants.goals(k.store, clock[0] + 3 * H)[0]
+    expired = [p for p in k.store.query("packet", state="expired")]
+    check("N1 drain: every due goal checked tonight in batches nightly:P, nightly:P:1…; one issued at a time; "
+          "a failed batch expires and its goals come back; a skipped goal is not offered again",
+          len(checked) == 22 and 3 not in checked and names[:3] == [f"nightly:{period}", f"nightly:{period}:1", f"nightly:{period}:2"]
+          and most_issued == 1 and same and offered.count("g03") == 1 and offered.count(offered[2]) == 2
+          and offered.count(released) == 2 and offered.count(offered[6]) == 1 and offered[0] == "g22",
+          {"batches": n, "checked": len(checked), "names": names[:3], "expired": len(expired)})
+    check("N2 relay: every batch with work left wakes the job; after runs without progress at most 12 a day",
+          drained == n - 1 and len(host.woken) - drained == 10 and set(host.woken) == {"job-n"},
+          {"drained": drained, "batches": n, "stuck_wakes": len(host.woken) - drained})
+    check("N3 Health goals_missed: quiet between two batches; then names only the goals left unchecked; "
+          "assessed goals are due the next night",
+          between == "ok" and missed["id"] == "goals_missed" and missed["level"] == "medium"
+          and missed["evidence"] == ["goal:g03"]
+          and len([g for g in k.store.due(night + D, kind="goal") if g["natural_key"] != "g99"]) == 23,
+          {"missed": [missed["level"], missed["evidence"]]})
+    return k
+
+
+def part_reviews(base):
+    """Review cap per night with the overflow visible; proposals are made once and look back 7 days."""
+    clock = [T0 - 2 * D]
+    host = FakeHost(lambda: clock[0])
+    home = make_home(base)
+    k = Kernel(home, adapter=host, clock=lambda: clock[0])
+    old = host.add("chat", "user", "Let us repaint the shed this weekend", clock[0])
+    k.tick()
+    intake.dispose(k, old, "saved", ["repaint the shed"], "new", clock[0])
+    clock[0] = T0
+    for i in range(40):
+        host.add(f"s{i}", "user", f"deploy service {i}", T0 - 40 * H + i * H)
+        host.add(f"s{i}", "assistant", f"Done, deployed service {i}.", T0 - 40 * H + i * H + 1)
+    judged, kinds, overflow = 0, [], None
+    for n in range(6):
+        packet = seen(k.build_packet("nightly"))
+        if packet["id"] is None:
+            break
+        kinds += [i["kind"] for i in packet["items"]]
+        overflow = packet["context"]["review_overflow"]
+        k.start_run("nightly", job_id="job-n", execution_id=f"r{n}", packet_id=packet["id"])
+        out = k.submit(packet["id"], [{"candidate_ref": i["ref"], "verdict": "fine", "reason": "verified the deploy"}
+                                      for i in packet["items"] if i["kind"] == "review"])
+        judged += sum("error" not in r for r in out)
+        host.outcomes[f"r{n}"] = {"status": "completed"}
+        k.tick()
+        clock[0] += 60
+    level = {f["id"]: f for f in invariants.findings(k.store, clock[0])}["review_overflow"]
+    proposed = k.store.query("signal", natural_key=old)[0]["payload"].get("proposed_at")
+    clock[0] = T0 + D
+    second = k.build_packet("nightly")
+    check("N4 review cap: 30 of 40 flagged turns judged tonight, overflow 10 reported low; the rest the next night; "
+          "a proposal disposed two days ago is offered once; Health's cap is the kernel's",
+          invariants.REVIEWS == review.PER_NIGHT and judged == 30 and overflow == 10 and level["level"] == "low" and kinds.count("signal") == 1 and proposed == T0
+          and [i["kind"] for i in second["items"]] == ["review"] * 10,
+          {"judged": judged, "overflow": overflow, "level": level["level"], "second": len(second["items"])})
+    return k
+
+
+def part_feed(base):
+    """Interests are researched once a day without starving; one Feed notice goes through the Notifier."""
+    clock = [T0]
+    host = FakeHost(lambda: clock[0])
+    home = make_home(base, {"blocked_topics": ["crypto"]})
+    k = Kernel(home, adapter=host, clock=lambda: clock[0])
+    ids = [records.remember(k, "interest", t, now=T0)["id"] for t in ("Rust releases", "Moon mission", "Coins", "Jazz")]
+    restore = batch_size("feed", 1)
+    try:
+        seen_refs = []
+        for _ in range(6):
+            packet = k.build_packet("feed")
+            if packet["id"] is None:
+                break
+            seen_refs += [i["ref"] for i in packet["items"]]
+            k.submit(packet["id"], [{"interest_ref": i["ref"]} for i in packet["items"]])
+        check("F1 feed: every active interest checked once today though no article was written",
+              sorted(seen_refs) == sorted(ids) and all(k.store.get(i)["payload"].get("checked_at") == T0 for i in ids)
+              and k.build_packet("feed")["id"] is None, {"seen": len(seen_refs)})
+
+        url = "https://example.org/rust/1.99"
+        notifier.draft(k, text="Rust 1.99 is out", upstream_id=url, title="Rust 1.99", now=T0)
+        k.tick()
+        deliver_all(k, host)
+        clock[0] = T0 + D + 13 * H  # 23:00 next day: quiet hours
+        out = {}
+        for _ in range(4):
+            packet = seen(k.build_packet("feed"))
+            item = packet["items"][0]
+            title = k.store.get(item["ref"])["payload"]["title"]
+            source = {"Rust releases": url, "Moon mission": "https://example.org/moon", "Coins": "https://example.org/coin",
+                      "Jazz": "https://example.org/jazz"}[title]
+            result = {"interest_ref": item["ref"], "article": {"title": title, "body": "What happened and why.", "source_refs": [source]},
+                      "notice": {"text": f"{title}: news", "source_ref": source, "topic": "crypto" if title == "Coins" else "space"}}
+            if title == "Jazz":
+                bad = [{**result, "notice": {**result["notice"], "source_ref": "https://elsewhere"}},
+                       {"interest_ref": item["ref"], "notice": result["notice"]},
+                       {**result, "notice": {**result["notice"], "priority": "urgent"}}]
+                out["errors"] = [k.submit(packet["id"], [r])[0].get("error", "") for r in bad]
+                result = {**result, "notice": {**result["notice"], "topic": "music"}}
+                out["Jazz"] = k.submit(packet["id"], [result, result])
+            else:
+                out[title] = k.submit(packet["id"], [result])[0]
+    finally:
+        restore()
+    moon = k.store.get(out["Moon mission"]["notice"]["id"])
+    coin = k.store.get(out["Coins"]["notice"]["id"])
+    morning = datetime.fromtimestamp(clock[0], UTC).replace(hour=9) .timestamp() + D
+    check("F2 feed notice: src: strong key shared with patrol (existing), blocked topic withdrawn, quiet hours wait for 09:00, "
+          "interest_id kept; one notice per packet; notice needs its article and one of its sources; urgent refused",
+          out["Rust releases"]["notice"]["result"] == "existing" and moon["natural_key"] == "src:https://example.org/moon"
+          and moon["state"] == "scheduled" and moon["payload"]["next_eligible"] == morning and moon["payload"]["interest_id"]
+          and coin["state"] == "withdrawn" and "at most 1 notice" in out["Jazz"][1].get("error", "")
+          and all(out["errors"]), {"moon": [moon["state"], moon["payload"].get("next_eligible")], "coin": coin["state"],
+                                   "errors": out["errors"], "jazz": out["Jazz"]})
+    interest = k.store.get(moon["payload"]["interest_id"])
+    records.feedback(k, interest, "stop", now=clock[0])
+    k.tick()
+    moon = k.store.get(moon["id"])
+    check("F3 a Feed notice is withdrawn by code when its interest stops",
+          moon["state"] == "withdrawn" and k.store.events(moon["id"])[-1]["reason"] == "interest_closed", moon["state"])
+    return k
+
+
+def part_upkeep(base):
+    clock = [T0]
+    host = FakeHost(lambda: clock[0])
+    home = make_home(base)
+    k = Kernel(home, adapter=host, clock=lambda: clock[0])
+    host.stores = {"user": {"entries": ["x"], "chars": 1789, "limit": 1800}, "memory": {"entries": [], "chars": 10, "limit": 3600}}
+    host.add("chat", "user", "I moved to Lisbon", T0 - 60)
+    k.tick()
+    packet = k.build_packet("intake")
+    asks = [bool(upkeep.full(k, T0)) for _ in range(3)]
+    host.stores["user"]["chars"] = 1000
+    low = upkeep.full(k, T0 + D)
+    host.stores = {"status": "host_error"}
+    failed = upkeep.full(k, T0 + D)
+    check("U1 memory_full: a store >= 90% is named while intake has items, at most 3 packets a day; not below 90% or on a host error",
+          packet["context"]["memory_full"] == [{"target": "user", "usage": "99% 1789/1800"}] and asks == [True, True, False]
+          and low == [] and failed == [], {"context": packet.get("context"), "asks": asks})
+    remove = {"action": "remove", "target": "user", "old_text": "tea"}
+    merge = {"action": "patch", "old_text": "a", "content": "b"}
+    check("U2 guard: each remove needs its own patch in the same batch (merge); empty operations is the single action; add/patch pass",
+          upkeep.guard(remove) and upkeep.guard({"operations": [remove, remove]}) and upkeep.guard({**remove, "operations": []})
+          and upkeep.guard({"operations": [merge, remove, remove]})
+          and upkeep.guard({"operations": [merge, remove]}) is None
+          and upkeep.guard({"action": "add", "content": "x"}) is None, "")
+    before = {"user": {"entries": ["Likes tea", "Likes green tea; password: hunter2xyz", "Lives in Porto"], "chars": 0, "limit": 1800}}
+    after = {"user": {"entries": ["Likes green tea", "Lives in Porto", "Moved to Lisbon"], "chars": 0, "limit": 1800}}
+    clock[0] = T0 + 2 * H
+    added = upkeep.record(k, after, {"user": {**after["user"], "entries": [*after["user"]["entries"], "Has a cat"]}}, clock[0])
+    changes = upkeep.record(k, before, after, clock[0])
+    note = (home / "muse" / "memory" / "2026-10-29.md").read_text(encoding="utf-8")
+    clock[0] = T0 + 17 * H
+    nightly = seen(k.build_packet("nightly"))
+    listed = nightly["context"]["memory_changes"]
+    k.start_run("nightly", job_id="job-n", execution_id="u3", packet_id=nightly["id"])
+    host.outcomes["u3"] = {"status": "completed"}  # the run wrote the dream without a submit (no items)
+    k.tick()
+    check("U3 every merge/shorten is recorded in the day's note (redacted) and handed to the nightly dream once; "
+          "the closed run reports it, no relay wake",
+          added == [] and changes[0]["old"] == before["user"]["entries"][:2] and "Likes tea" in note and "Moved to Lisbon" in note
+          and "hunter2xyz" not in note and nightly["items"] == [] and len(listed) == 1 and "hunter2xyz" not in json.dumps(listed)
+          and host.woken == [] and k.build_packet("nightly")["id"] is None, {"note": note[:300], "listed": listed})
     return k
 
 
@@ -538,7 +766,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix="muse-kernel-") as temporary:
         base = Path(temporary).resolve()
         kernels = []
-        for name, part in (("intake", part_intake), ("notifier", part_notifier), ("goals", part_goals)):
+        for name, part in (("intake", part_intake), ("notifier", part_notifier), ("goals", part_goals), ("drain", part_drain),
+                           ("reviews", part_reviews), ("feed", part_feed), ("upkeep", part_upkeep)):
             (base / name).mkdir()
             result = part(base / name)
             kernels.append(result[0] if isinstance(result, tuple) else result)

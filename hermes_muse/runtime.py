@@ -35,6 +35,7 @@ def register(ctx, *, plugin_root):
     surface.register(ctx, kernel)
     ctx.register_hook("pre_llm_call", hooks.pre_turn)
     ctx.register_hook("post_llm_call", hooks.post_turn)
+    ctx.register_hook("pre_tool_call", hooks.pre_tool)
     ctx.register_hook("post_tool_call", hooks.post_tool)
     ctx.on_unload(hooks.close)
     return hooks

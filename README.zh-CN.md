@@ -39,7 +39,7 @@ hermes plugins install xiaohei-info/hermes-muse --enable
 
 安装作用于所选 profile（`hermes -p <profile> plugins install …`），每个启用的 profile 有独立的状态、job 和投递。如果你维护了显式的 `platform_toolsets` 列表，请在使用的平台里加上 `muse`。
 
-需要 Hermes 0.21.5 及以上，并具备工具、Skill、提示词段和 hooks 的插件接口；已在 Hermes 0.22.5 上测试（[基线](docs/ACCEPTANCE.md)）。首次加载注册 1 个 Skill、2 个工具（`muse_manage`、`muse_job`）、3 个 hooks 和 1 段系统提示词，创建 5 个周期 job 和 `muse-health` 检查，并从 `templates/` 补齐缺失的内容文件，不覆盖已有文件。新开会话后提示词段生效；后台工作需要运行中的调度器和可用模型，按正常用量计费。
+需要 Hermes 0.21.5 及以上，并具备工具、Skill、提示词段和 hooks 的插件接口；已在 Hermes 0.22.5 上测试（[基线](docs/ACCEPTANCE.md)）。首次加载注册 1 个 Skill、2 个工具（`muse_manage`、`muse_job`）、4 个 hooks 和 1 段系统提示词，创建 5 个周期 job 和 `muse-health` 检查，并从 `templates/` 补齐缺失的内容文件，不覆盖已有文件。新开会话后提示词段生效；后台工作需要运行中的调度器和可用模型，按正常用量计费。
 
 ### 版本要求
 
@@ -55,11 +55,11 @@ hermes plugins install xiaohei-info/hermes-muse --enable
 |---|---|---|---|
 | intake（`memory-upkeep`） | 每小时 | 判断每条新私聊消息的含义和相关目标 | local |
 | patrol（`proactive-watch`） | 每 30 分钟 | 用你的工具读来源，判断什么值得通知并写出通知 | 你的路由 |
-| nightly（`nightly-review`） | 03:20 | 评估到期目标、判断复盘候选、写 dream 和 alignment | local |
-| feed（`feed-pulse`） | 08:00 | 为 active interest 写最多 3 篇 Feed 文章 | 静默 |
+| nightly（`nightly-review`） | 03:20 | 评估全部到期目标、判断复盘候选（每晚最多 30 条）、写 dream 和 alignment | local |
+| feed（`feed-pulse`） | 08:00 | 每个 active interest 每天研究一次，写 Feed 文章，有真正的新进展时可发一条通知 | 静默；通知走通知门控 |
 | weekly（`weekly-governance-review`） | 周日 21:15 | 根据 Health 摘要和 7 天计数写一条周报 | 你的路由 |
 
-每个 job 的 launcher 先运行内核、组装有界 packet；intake、nightly 和 feed 的 packet 为空时不唤醒模型，patrol 每轮都唤醒，因为只有模型能读你的来源。代码负责捕获消息、派生所有 ID 和键、对 7 天历史去重、执行静默时段和预算、投递、读投递回执、推进下次检查、询问并关闭休眠目标。模型只返回引用、枚举值和文本。行为写在 `prompts/jobs/<job>.md`，字段见生成的[接口](skills/companion/references/interface.md)。详见[设计文档](docs/DESIGN.md)和[功能覆盖](docs/FEATURE-COVERAGE.zh-CN.md)。
+每个 job 的 launcher 先运行内核、组装有界 packet；intake、nightly 和 feed 的 packet 为空时不唤醒模型；nightly 和 feed 分批处理队列，Muse 会接着唤醒它们直到处理完；patrol 每轮都唤醒，因为只有模型能读你的来源。代码负责捕获消息、派生所有 ID 和键、对 7 天历史去重、执行静默时段和预算、投递、读投递回执、推进下次检查、询问并关闭休眠目标。模型只返回引用、枚举值和文本。行为写在 `prompts/jobs/<job>.md`，字段见生成的[接口](skills/companion/references/interface.md)。详见[设计文档](docs/DESIGN.md)和[功能覆盖](docs/FEATURE-COVERAGE.zh-CN.md)。
 
 只有用户界面上的私聊（CLI、TUI、桌面、手机和 `USER_SOURCES` 列出的消息平台私信）会被读取，也只有它们能修改 Muse 状态。cron run、委派子代理、群聊和未分类来源都不能。
 
@@ -70,6 +70,25 @@ Muse 不带连接器。patrol 只通过你的 Hermes 已有的工具读邮件、
 ## 偏好
 
 在对话里说，或编辑 `muse/PROACTIVE_PREFERENCES.md`。字段：`start_hour`/`end_hour`（之外为静默时段，默认 9–22）、`ordinary_per_day`（默认不限）、`time_sensitive_per_day`（默认 3）、`urgent_per_day`（可越过静默时段的 urgent 通知数，默认 2，超出按 time_sensitive 处理）、`blocked_topics`、`deliver`（路由，默认本 profile 的 Bot Chat）、`goal_dormant_days` 与 `goal_fade_days`（默认各 7，`null` 关闭）、`fade_question`、`weather_context`（默认关闭，会用到你给过的地点）。偏好无效时停止投递并报错，不猜默认值。
+
+## Hermes 配置
+
+下表列出当前 profile 的 Hermes `config.yaml` 中 Muse 会读取或依赖的配置。静默时段、每日预算、`blocked_topics` 和通知路由在 Muse 自己的 `muse/PROACTIVE_PREFERENCES.md` 里设置（见“偏好”），不在这里。
+
+| 配置 | 建议值 | 原因 / 不这样设会怎样 |
+|---|---|---|
+| `plugins.enabled` 包含 `hermes-muse`（且不在 `plugins.disabled` 中） | 启用 | 每个 Muse job 的 launcher 先检查这一项。未启用或配置读取失败时，所有 job 都保持静默。 |
+| `plugins.entries.hermes-muse.settings` | Muse 插件设置都放这里 | 优先于 `.config` 和旧位置 `plugins.hermes-muse`。旧位置还有设置时，Health 报 `probe.config_location` degraded，直到迁走为止。 |
+| ↳ `deliver` | 不设（回退到本 profile 的 Bot Chat） | 偏好里没设 `deliver` 时使用：通知、patrol/weekly/watch job 和 `muse-health` 的路由。job 在创建时取路由，之后刷新保留 job 现有的路由。 |
+| ↳ `health_deliver` | 可选的第二路由 | 告警集合变化时，Health 告警也发到这里。不设时，告警只出现在主会话、Muse 页面和 cron 输出里。 |
+| ↳ `source_intervals` | 不设（内置：mail 30 分钟、calendar 2 小时、reminders 1 小时、web/rss 6 小时） | `{来源 id 或类型: 分钟}`，决定 patrol 多久重查一次某个来源。间隔越短，模型开销越大。 |
+| `platform_toolsets`（仅在你维护显式列表时） | 包含 `muse` | `muse_manage`/`muse_job` 注册在 toolset `muse` 下。列表里缺了它，这两个工具就不可见：job 无法 submit，会话里也无法管理目标。 |
+| `timezone`（或 `HERMES_TIMEZONE`） | 你的 IANA 时区 | 静默时段、每日预算、每日建目标上限和默认调度都按 Hermes 的 profile 时间计算。不设时使用服务器本地时间。 |
+| `memory.write_approval` | `false`（默认） | 设为 `true` 后，因为 cron 会话里没人能批准，所有记忆写入（包括新增）都会被暂存待批，intake 就永远存不下任何事实。intake 的写入由 Muse 自己把关（见下一行）。 |
+| `memory.memory_enabled` / `memory.user_profile_enabled` | `true`（默认） | intake 用原生 `memory` 工具保存事实，被关闭的 store 会拒绝写入。 |
+| `memory.memory_char_limit` / `memory.user_char_limit` | 默认或更大 | 用量 ≥90% 时，intake 可以在保存新事实的同一个原生 batch 里合并重复条目或缩短冗长条目，但不会直接删除任何条目（Muse 会拒绝这种调用）。每处改动都写进当天的 Muse 笔记，并列在 nightly 的 dream 里，方便你恢复。≥98% 时 Health 报 `memory_capacity`。不想被压缩条目就调大上限。 |
+| Bot Chat 会话的 `cwd` | 本机上存在的目录 | 该会话的 cwd 不存在时，Hermes 拒绝向 Bot Chat 投递（`invalid_params field=cwd`），Health 报 `probe.delivery_target` missing。不要靠改 `terminal.cwd` 来修。 |
+| gateway / cron 调度器 | 保持运行 | Muse 的所有 job 和 `muse-health` 都是 Hermes cron。调度器不跑就什么都不会执行，Health 会报 `jobs_late`。 |
 
 ## 健康检查
 

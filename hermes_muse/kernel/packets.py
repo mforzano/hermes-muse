@@ -1,29 +1,36 @@
-"""Packets: one bounded work packet per job and period, with code-filled refs, result schema and budget.
+"""Packets: bounded work packets per job and period, with code-filled refs, result schema and budget.
 
-build(job) -> {id, type, items, schema, budget[, context]}. Same job and period: while a packet is issued,
-every caller gets that same packet (lease = job period); an empty intake/nightly/feed packet is not stored
-(id None) and the caller stays silent. Patrol always gets a packet: only the model can read its sources.
+build(job) -> {id, type, items, schema, budget[, context]}. While a packet of the job is issued, every caller
+gets that same packet; an empty intake/nightly/feed packet is not stored (id None) and the caller stays silent.
+Patrol always gets a packet: only the model can read its sources.
 Item count adapts to the median seconds per item of the job's last 10 packets: clamp(0.6 T / median).
+Drain jobs (nightly, feed) work their whole queue within one period in batches `<job>:<period>[:<batch>]`
+(lease min(period, 2h)); a ref offered in a submitted batch is not offered again that period, the refs of an
+expired batch are, and so are the unanswered refs of a batch whose run failed (close); runs.relay wakes the job
+again while work remains.
 read/observe/submit accept only refs that belong to the packet (trust boundary).
 """
 import hashlib
 import json
 import statistics
 
-from . import goals, intake, notifier, records, review, sources
-from .common import D, H, clip, patch, preferences
-from .store import notice_key
+from . import goals, intake, notifier, records, review, sources, upkeep
+from .common import D, H, clip, one, patch, preferences
+from .store import keys, notice_key
 
 EXCERPT_TOTAL = 24000
 READ_MAX, READ_TOTAL = 12000, 24000
 OBSERVE_MAX = 50
-JOBS = {  # expected run seconds T, cron period (= packet lease), adaptive item bounds
-    "intake": {"type": "intake", "expected": 180, "period": H, "items": (3, 15)},
-    "patrol": {"type": "patrol", "expected": 360, "period": 30 * 60, "items": (2, 8)},
-    "nightly": {"type": "nightly", "expected": 600, "period": D, "items": (2, 10)},
-    "feed": {"type": "feed", "expected": 300, "period": D, "items": (1, 3)},
+JOBS = {  # expected run seconds T, cron period, packet lease, adaptive item bounds (a batch size when draining)
+    "intake": {"type": "intake", "expected": 180, "period": H, "lease": H, "items": (3, 15)},
+    "patrol": {"type": "patrol", "expected": 360, "period": 30 * 60, "lease": 30 * 60, "items": (2, 8)},
+    "nightly": {"type": "nightly", "expected": 600, "period": D, "lease": 2 * H, "items": (2, 10), "drain": True},
+    "feed": {"type": "feed", "expected": 300, "period": D, "lease": 2 * H, "items": (1, 3), "drain": True},
 }
-DUE_NOTICES, DUE_GOALS, FEED_GAP = 5, 5, 3 * D
+DUE_NOTICES = 5
+PROPOSE_WITHIN = 7 * D
+CHECK_GAP = 20 * H  # an interest is researched at most once a day
+FEED_NOTICES, FEED_PRIORITIES = 1, ("ordinary", "time_sensitive")
 
 
 def obj(required, **properties):
@@ -48,7 +55,10 @@ SCHEMAS = {  # design 2.6: one result shape per item kind group
     "review": obj(["candidate_ref", "verdict", "reason"], candidate_ref=REF, verdict=enum(*review.VERDICTS),
                   reason={"type": "string", "maxLength": 500}),
     "feed": obj(["interest_ref"], interest_ref=REF,
-                article=obj(["title", "body", "source_refs"], title=S, body=S, source_refs={"type": "array", "items": S, "minItems": 1})),
+                article=obj(["title", "body", "source_refs"], title=S, body=S, source_refs={"type": "array", "items": S, "minItems": 1}),
+                notice=obj(["text", "source_ref"], text={"type": "string", "maxLength": notifier.TEXT_MAX},
+                           source_ref={"type": "string", "description": "one of this result's article.source_refs"},
+                           priority=enum(*FEED_PRIORITIES), topic={"type": "string", "maxLength": 100})),
 }
 KIND_SCHEMA = {"intake": "intake", "observed": "patrol", "notice": "patrol", "goal": "goals", "signal": "goals",
                "review": "review", "interest": "feed"}
@@ -66,7 +76,7 @@ def size(k, job):
 
 
 # -- builders: (items, context) ----------------------------------------------------------------------
-def intake_items(k, n, now):
+def intake_items(k, n, now, offered):
     items, chars = [], 0
     for e in sorted(k.store.query("signal", state="new"), key=lambda e: (e["payload"].get("created") or 0, e["id"])):
         item = intake.item(e)
@@ -74,10 +84,11 @@ def intake_items(k, n, now):
             break
         items.append(item)
         chars += len(item["excerpt"])
-    return items, None
+    full = upkeep.full(k, now) if items else []
+    return items, {"memory_full": full} if full else None
 
 
-def patrol_items(k, n, now):
+def patrol_items(k, n, now, offered):
     recent = [{"at": t["at"], "text": clip(t["text"], 500)} for t in k.adapter.sessions.user_turns(now - 6 * H)][-5:]
     return notifier.due_items(k, now, DUE_NOTICES), {
         "sources_due": sources.due(k.store, now, k.settings().get("source_intervals")),
@@ -91,23 +102,34 @@ def blocked_topics(k):
         return []
 
 
-def nightly_items(k, n, now):
-    due = [goals.item(k, e) for e in k.store.due(now, kind="goal", limit=min(n, DUE_GOALS))]
-    proposals = []
-    for e in k.store.query("signal", state="disposed", since=now - D):
-        if e["payload"].get("goal_hint") == "new" and not goals.read(k.home, goals.slug_for(e["natural_key"])):
-            proposals.append({**intake.item(e), "kind": "signal", "facts": e["payload"].get("facts", [])})
-    return due + review.candidates(k, now, n) + proposals[:n], None
+def nightly_items(k, n, now, offered):
+    """The whole queue, obligations first: due goals (earliest first), goal proposals, then review candidates
+    within the per-night cap; the overflow is counted for Health."""
+    due = [goals.item(k, e) for e in k.store.due(now, kind="goal") if e["natural_key"] not in offered]
+    proposals = [{**intake.item(e), "kind": "signal", "facts": e["payload"].get("facts", [])}
+                 for e in reversed(k.store.query("signal", state="disposed", since=now - PROPOSE_WITHIN))
+                 if e["payload"].get("goal_hint") == "new" and not e["payload"].get("proposed_at")
+                 and not goals.read(k.home, goals.slug_for(e["natural_key"]))]
+    found = review.candidates(k, now, skip=offered)
+    room = max(0, review.PER_NIGHT - sum(ref.startswith("review:") for ref in offered))
+    return due + proposals + found[:room], {"review_overflow": max(0, len(found) - room),
+                                            "memory_changes": upkeep.unreported(k, now)}
 
 
-def feed_items(k, n, now):
-    fed = {e["payload"].get("interest_id") for e in k.store.query("feed", since=now - FEED_GAP)}
-    items = [{"kind": "interest", "ref": e["id"], "title": e["payload"].get("title"), "rationale": e["payload"].get("rationale")}
-             for e in reversed(k.store.query("interest", state="active")) if e["id"] not in fed]
-    return items[:n], None
+def feed_items(k, n, now, offered):
+    """Active interests not researched for CHECK_GAP, longest unchecked first."""
+    rows = sorted((e for e in k.store.query("interest", state="active")
+                   if e["id"] not in offered and (e["payload"].get("checked_at") or 0) <= now - CHECK_GAP),
+                  key=lambda e: (e["payload"].get("checked_at") or 0, e["state_since"]))
+    return [{"kind": "interest", "ref": e["id"], "title": e["payload"].get("title"), "rationale": e["payload"].get("rationale")}
+            for e in rows], {"blocked_topics": blocked_topics(k), "notice_limit": FEED_NOTICES}
 
 
 BUILDERS = {"intake": intake_items, "patrol": patrol_items, "nightly": nightly_items, "feed": feed_items}
+
+
+def empty(items, context):
+    return not items and not (context or {}).get("memory_changes")
 
 
 def view(e, spec):
@@ -117,24 +139,76 @@ def view(e, spec):
     return {**out, "context": p["context"]} if p.get("context") else out
 
 
+def batches(k, job, now):
+    """(base key, this period's packets of a drain job)."""
+    spec = JOBS[job]
+    period = int(now // spec["period"])
+    return f"{job}:{period}", [p for p in k.store.query("packet", since=period * spec["period"])
+                               if p["natural_key"].split(":")[:2] == [job, str(period)]]
+
+
+def plan(k, job, now):
+    """(issued packet or None, key, batch size, items, context) of the job's next packet."""
+    spec = JOBS[job]
+    if not spec.get("drain"):
+        key = f"{job}:{int(now // spec['period'])}"
+        issued = k.store.query("packet", state="issued", natural_key=key, limit=1)
+        if issued:
+            return issued[0], key, None, None, None
+        n = size(k, job)
+        return None, key, n, *BUILDERS[job](k, n, now, frozenset())
+    key, batch = batches(k, job, now)
+    issued = next((p for p in batch if p["state"] == "issued"), None)
+    if issued:
+        return issued, key, None, None, None
+    offered = frozenset(ref for p in batch if p["state"] == "submitted" for ref in (
+        p["payload"]["handled"] if p["payload"].get("released") else [i["ref"] for i in p["payload"]["items"]]))
+    n = size(k, job)
+    queue, context = BUILDERS[job](k, n, now, offered)
+    return None, f"{key}:{len(batch)}" if batch else key, n, queue[:n], {**context, "remaining": max(0, len(queue) - n)}
+
+
+def pending(k, job, now):
+    """True when a drain job has work left this period and no batch is out."""
+    issued, _, _, items, context = plan(k, job, now)
+    return not issued and not empty(items, context)
+
+
+def close(k, packet_id, outcome, now):
+    """The run of a drain batch closed. ok/degraded consumes the batch: its proposals count as made and, on the
+    last batch, its memory changes as reported. failed/abandoned releases its unanswered refs. A batch still issued
+    expires. True when the run made progress (closed ok/degraded having handled an item)."""
+    e = k.store.get(packet_id)
+    p, done = e["payload"], outcome in ("ok", "degraded")
+    context = p.get("context") or {}  # a packet issued by 0.4.0 may have none
+    if done and (e["state"] == "submitted" or not p["items"]):
+        for i in p["items"]:  # a proposal is made once, whether or not the model created the goal
+            if i["kind"] == "signal":
+                patch(k.store, one(k.store, "signal", i["ref"])["id"], reason="nightly:proposed",
+                      payload=lambda s: {"proposed_at": s["payload"].get("proposed_at") or now}, now=now)
+        if not context.get("remaining"):
+            upkeep.reported(k, context.get("memory_changes"))
+    elif e["state"] == "submitted":
+        patch(k.store, packet_id, expect=("submitted",), reason=f"run:{outcome}", payload={"released": True}, now=now)
+    patch(k.store, packet_id, "expired", expect=("issued",), reason=f"run:{outcome}", now=now)
+    return done and bool(p.get("handled"))
+
+
 def build(k, job, now):
     if job not in JOBS:
         raise ValueError(f"job must be one of {', '.join(JOBS)}")
     spec, store = JOBS[job], k.store
-    key = f"{job}:{int(now // spec['period'])}"
-    issued = store.query("packet", state="issued", natural_key=key, limit=1)
+    issued, key, n, items, context = plan(k, job, now)
     if issued:
-        return view(issued[0], spec)
-    n = size(k, job)
-    items, context = BUILDERS[job](k, n, now)
+        return view(issued, spec)
     budget = {"seconds": int(0.6 * spec["expected"]), "items": n, "excerpt_chars": EXCERPT_TOTAL,
-              "read_chars": READ_MAX, "read_total_per_item": READ_TOTAL, "lease_until": now + spec["period"]}
-    if not items and job != "patrol":
+              "read_chars": READ_MAX, "read_total_per_item": READ_TOTAL, "lease_until": now + spec["lease"]}
+    if empty(items, context) and job != "patrol":
         return {"id": None, "type": spec["type"], "items": [], "schema": {}, "budget": budget}
     with store.atomic():
         e = store.create("packet", key, {"job": job, "type": spec["type"], "items": items, "context": context,
                                          "budget": budget, "observed": [], "reads": {}, "handled": [], "issued_at": now},
-                         deadline=now + spec["period"], now=now, dedupe=(frozenset({"issued"}), None))
+                         deadline=now + spec["lease"], now=now, dedupe=(frozenset({"issued"}), None))
         if not e["existing"]:
             store.attempt([store.query("signal", natural_key=i["ref"], limit=1)[0]["id"] for i in items if i["kind"] == "intake"], now)
     return view(e, spec)
@@ -198,17 +272,39 @@ def observe(k, packet_id, source_id, items, limitation_code=None, error=None, no
 
 # -- submit ------------------------------------------------------------------------------------------
 def feed_result(k, item, r, now):
-    article = r.get("article")
+    """Every answered interest counts as checked; an article becomes a FeedItem, and its one optional notice
+    goes through the Notifier with the article as evidence."""
+    article, notice = r.get("article"), r.get("notice")
     if not article:
+        if notice:
+            raise ValueError("a notice needs the article it comes from")
+        patch(k.store, item["ref"], reason="feed:checked", payload={"checked_at": now}, now=now)
         return {"result": "no_article"}
     title, body = str(article.get("title") or "").strip()[:200], str(article.get("body") or "").strip()
     refs = sorted({str(s)[:1000] for s in article.get("source_refs") or [] if s})
     if not title or not body or not refs:
         raise ValueError("article needs title, body and source_refs")
+    if notice and notice.get("source_ref") not in refs:
+        raise ValueError("notice.source_ref must be one of article.source_refs")
+    if notice and (notice.get("priority") or "ordinary") not in FEED_PRIORITIES:
+        raise ValueError(f"notice.priority must be one of {', '.join(FEED_PRIORITIES)}")
+    if notice and notice.get("topic") == notifier.FADE_TOPIC:
+        raise ValueError(f"topic {notifier.FADE_TOPIC!r} is reserved for Muse's dormancy questions")
+    patch(k.store, item["ref"], reason="feed:checked", payload={"checked_at": now}, now=now)
     key = hashlib.sha256(json.dumps(refs, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()[:24]
     e = k.store.create("feed", key, {"title": title, "interest_id": item["ref"], "sources": refs, "created": now}, now=now)
     path = records.feed_path(e) if e["existing"] else records.write_feed(k, e, {"title": title, "body": body, "source_refs": refs})
-    return {"result": "existing" if e["existing"] else "recorded", "feed": e["id"], "path": path}
+    out = {"result": "existing" if e["existing"] else "recorded", "feed": e["id"], "path": path}
+    if notice:
+        # patrol may have notified about the same page already: any source of the article counts
+        known = next((n for s in refs for n in k.store.query("notice", natural_key=keys.notice_key(s)[0], since=now - 7 * D)
+                      if n["state"] in notifier.LIVE), None)
+        n = known and {**known, "existing": True} or notifier.draft(
+            k, text=notice.get("text"), priority=notice.get("priority") or "ordinary", title=title,
+            upstream_id=notice["source_ref"], sources=refs, topic=str(notice.get("topic") or "").strip()[:100],
+            evidence=[e["id"]], interest_id=item["ref"], now=now)
+        out["notice"] = {"result": "existing" if n["existing"] else "drafted", "id": n["id"], "state": n["state"]}
+    return out
 
 
 HANDLERS = {
@@ -232,7 +328,7 @@ def submit(k, packet_id, results, now):
         raise ValueError("results must be a list of at most 100")
     p = packet["payload"]
     items = {i["ref"]: i for i in [*p["items"], *k.store.get(packet["id"])["payload"]["observed"]]}
-    out, handled, sends = [], [], 0
+    out, handled, sends, notices = [], [], 0, 0
     for r in results:
         r = r if isinstance(r, dict) else {}
         ref = next((r[f] for f in REF_FIELDS if r.get(f)), None) or (r.get("create") or {}).get("signal_ref")
@@ -244,6 +340,10 @@ def submit(k, packet_id, results, now):
                 sends += 1
                 if sends > p["budget"]["items"]:
                     raise ValueError(f"at most {p['budget']['items']} notices per patrol packet")
+            if item["kind"] == "interest" and r.get("notice"):
+                notices += 1
+                if notices > FEED_NOTICES:
+                    raise ValueError(f"at most {FEED_NOTICES} notice per feed packet")
             out.append({"ref": ref, **HANDLERS[item["kind"]](k, item, r, now)})
             handled.append(ref)
         except (ValueError, KeyError, PermissionError) as exc:
@@ -251,8 +351,8 @@ def submit(k, packet_id, results, now):
 
     def done(e):
         total = sorted(set(e["payload"]["handled"]) | set(handled))
-        first = "submitted_at" not in e["payload"]
-        return {"handled": total, **({"submitted_at": now, "per_item": (now - e["payload"]["issued_at"]) / max(1, len(total))} if first else {})}
+        return {"handled": total, "submitted_at": e["payload"].get("submitted_at", now),
+                "per_item": (now - e["payload"]["issued_at"]) / max(1, len(total))}
     if not patch(k.store, packet["id"], "submitted", expect=("issued",), reason="submit", payload=done, now=now):
         patch(k.store, packet["id"], reason="submit", payload=done, now=now)  # a late or repeated submit on an expired/submitted packet
     return out

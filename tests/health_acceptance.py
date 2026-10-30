@@ -111,8 +111,9 @@ def main():
         expected = {
             "store": "ok", "deadlines": "ok", "tick_stalled": "high", "signal_watermark": "high", "signal_parked": "ok",
             "packet_expiry": "medium", "packets_idle": "high", "notice_duplicates": "high", "notice_hanging": "medium",
-            "notice_unknown": "ok", "runs_ok": "medium", "runs_unclosed": "low", "goals_overdue": "medium",
-            "goal_fade": "medium", "sources_failing": "medium", "review_findings": "low",
+            "notice_unknown": "ok", "runs_ok": "medium", "runs_unclosed": "low", "goals_missed": "high",
+            "goal_fade": "medium", "sources_failing": "medium", "review_findings": "low", "review_overflow": "ok",
+            "interests_unchecked": "ok", "memory_capacity": "ok",
             "probe.symbols": "ok", "probe.cron_sessions": "ok", "probe.delivery_semantics": "medium",
             "probe.delivery_target": "high", "probe.signal_purity": "high", "probe.config_location": "ok",
             "probe.home": "ok", "delivery": "high", "executions": "ok", "tool_errors": "medium",

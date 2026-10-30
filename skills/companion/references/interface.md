@@ -251,6 +251,7 @@ One result per packet item. The packet's `schema` names the shapes its items tak
 |---|---|---|
 | `interest_ref` | required | string — a ref from this packet |
 | `article` |  | object |
+| `notice` |  | object |
 
 ## Content kinds
 

@@ -39,7 +39,7 @@ hermes plugins install xiaohei-info/hermes-muse --enable
 
 Installation uses the selected profile (`hermes -p <profile> plugins install …`); each enabled profile has its own state, jobs and delivery. If you maintain explicit `platform_toolsets` lists, include `muse` where you use the plugin.
 
-Requires Hermes 0.21.5 or later with the plugin APIs for tools, Skills, prompt sections and hooks; tested on Hermes 0.22.5 ([baseline](docs/ACCEPTANCE.md)). First load registers one Skill, two tools (`muse_manage`, `muse_job`), three hooks and one system prompt section, creates five recurring jobs and the `muse-health` check, and adds missing content files from `templates/` without overwriting anything. Start a new conversation to load the prompt section; background work needs a running scheduler and an available model, at their normal cost.
+Requires Hermes 0.21.5 or later with the plugin APIs for tools, Skills, prompt sections and hooks; tested on Hermes 0.22.5 ([baseline](docs/ACCEPTANCE.md)). First load registers one Skill, two tools (`muse_manage`, `muse_job`), four hooks and one system prompt section, creates five recurring jobs and the `muse-health` check, and adds missing content files from `templates/` without overwriting anything. Start a new conversation to load the prompt section; background work needs a running scheduler and an available model, at their normal cost.
 
 ### Requirements
 
@@ -55,11 +55,11 @@ Requires Hermes 0.21.5 or later with the plugin APIs for tools, Skills, prompt s
 |---|---|---|---|
 | intake (`memory-upkeep`) | hourly | decides what each new private message means and which goal it touches | local |
 | patrol (`proactive-watch`) | every 30 min | reads your sources with your tools, judges what is worth a notice and writes it | your route |
-| nightly (`nightly-review`) | 03:20 | assesses due goals, judges review candidates, writes dream and alignment | local |
-| feed (`feed-pulse`) | 08:00 | writes up to 3 Feed articles for active interests | silent |
+| nightly (`nightly-review`) | 03:20 | assesses every due goal, judges review candidates (up to 30 a night), writes dream and alignment | local |
+| feed (`feed-pulse`) | 08:00 | researches each active interest once a day, writes Feed articles, may raise one notice for real news | silent; a notice goes through the notice gates |
 | weekly (`weekly-governance-review`) | Sunday 21:15 | one digest from the Health summary and 7-day counts | your route |
 
-Each job's launcher first runs the kernel and builds a bounded packet; intake, nightly and feed leave the model asleep when their packet is empty, while patrol wakes every period because only the model can read your sources. Code captures messages, derives every id and key, dedupes notices against 7 days of history, applies quiet hours and budgets, delivers, reads delivery receipts, moves next checks, and asks about and closes dormant goals. The model returns only references, enum values and text. Behavior lives in `prompts/jobs/<job>.md`; fields in the generated [interface](skills/companion/references/interface.md). See the [design](docs/DESIGN.md) and [feature coverage](docs/FEATURE-COVERAGE.md).
+Each job's launcher first runs the kernel and builds a bounded packet; intake, nightly and feed leave the model asleep when their packet is empty, nightly and feed work through their queue in batches and Muse wakes them again until it is done, while patrol wakes every period because only the model can read your sources. Code captures messages, derives every id and key, dedupes notices against 7 days of history, applies quiet hours and budgets, delivers, reads delivery receipts, moves next checks, and asks about and closes dormant goals. The model returns only references, enum values and text. Behavior lives in `prompts/jobs/<job>.md`; fields in the generated [interface](skills/companion/references/interface.md). See the [design](docs/DESIGN.md) and [feature coverage](docs/FEATURE-COVERAGE.md).
 
 Only private conversations on user surfaces (CLI, TUI, desktop, phone and messaging DMs listed in `USER_SOURCES`) are read and can change Muse state. Cron runs, delegated children, group chats and unclassified sources cannot.
 
@@ -70,6 +70,25 @@ Muse has no connectors. The patrol reads mail, calendars, reminders and the web 
 ## Preferences
 
 Ask in chat, or edit `muse/PROACTIVE_PREFERENCES.md`. Fields: `start_hour`/`end_hour` (quiet hours outside them, default 9–22), `ordinary_per_day` (default unlimited), `time_sensitive_per_day` (default 3), `urgent_per_day` (urgent notices that may skip quiet hours, default 2; more are gated as time-sensitive), `blocked_topics`, `deliver` (route, default this profile's Bot Chat), `goal_dormant_days` and `goal_fade_days` (default 7 each; `null` turns them off), `fade_question` and `weather_context` (off by default; it uses a location you gave). Invalid preferences stop delivery with an error instead of guessing.
+
+## Hermes configuration
+
+Settings in the profile's Hermes `config.yaml` that Muse reads or depends on. Quiet hours, budgets, `blocked_topics` and the notice route live in Muse's own `muse/PROACTIVE_PREFERENCES.md` (see Preferences), not here.
+
+| Setting | Recommended value | Why / what breaks otherwise |
+|---|---|---|
+| `plugins.enabled` contains `hermes-muse` (and not in `plugins.disabled`) | enabled | Every Muse job launcher checks this first; when disabled, or when the config cannot be read, all jobs stay silent. |
+| `plugins.entries.hermes-muse.settings` | the place for Muse plugin settings | Read first, over `.config` and the legacy `plugins.hermes-muse`. If the legacy block exists, Health reports `probe.config_location` degraded until you move it. |
+| ↳ `deliver` | unset (falls back to this profile's Bot Chat) | Route for notices, patrol/weekly/watch jobs and `muse-health`, used when `deliver` is not set in preferences. Jobs take the route when they are created; later refreshes keep the job's existing route. |
+| ↳ `health_deliver` | optional second route | Health alerts are also sent here when the alert set changes. Without it they appear only in the main session, on the Muse page and in the cron output. |
+| ↳ `source_intervals` | unset (built-in: mail 30 min, calendar 2 h, reminders 1 h, web/rss 6 h) | `{source id or kind: minutes}`; how often the patrol re-checks a source. Shorter intervals cost more model time. |
+| `platform_toolsets` (only if you maintain explicit lists) | include `muse` | The `muse_manage`/`muse_job` tools are registered in toolset `muse`. A list that omits it hides them, so jobs cannot submit and chat cannot manage goals. |
+| `timezone` (or `HERMES_TIMEZONE`) | your IANA zone | Quiet hours, daily budgets, the daily goal-creation cap and the default job schedules use Hermes' profile time. Without it Muse uses server-local time. |
+| `memory.write_approval` | `false` (default) | With `true`, every memory write in a cron session, adds included, is staged for approval because nobody can answer. The intake job could then never save a fact. Muse guards the intake job's writes itself (below). |
+| `memory.memory_enabled` / `memory.user_profile_enabled` | `true` (default) | Intake saves facts with the native `memory` tool; a disabled store refuses those writes. |
+| `memory.memory_char_limit` / `memory.user_char_limit` | default or larger | At ≥90 % full, intake may merge duplicate entries or shorten verbose ones in the same native batch that saves a new fact; it never deletes an entry outright (Muse refuses that call), and every change is written to the day's Muse note and listed in the nightly dream so you can restore it. At ≥98 %, Health reports `memory_capacity`. Raise the limit if you'd rather not have entries compacted. |
+| Bot Chat session `cwd` | an existing directory on this host | Hermes refuses Bot Chat delivery when that session's cwd does not exist (`invalid_params field=cwd`); Health shows `probe.delivery_target` missing. Do not change `terminal.cwd` to fix it. |
+| Gateway / cron scheduler | running | All Muse jobs and `muse-health` are Hermes cron jobs. Without a ticking scheduler nothing runs, and Health shows `jobs_late`. |
 
 ## Health
 

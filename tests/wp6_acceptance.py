@@ -147,8 +147,8 @@ def part_hooks(home, ids):
     ctx = Ctx()
     hooks = runtime.register(ctx, plugin_root=ROOT)
     names = [c[0] for c in ctx.calls]
-    check("register: Skill, prompt section, muse_manage + muse_job, three hooks and unload",
-          sorted(a[0] for n, a, _ in ctx.calls if n == "register_hook") == ["post_llm_call", "post_tool_call", "pre_llm_call"]
+    check("register: Skill, prompt section, muse_manage + muse_job, four hooks and unload",
+          sorted(a[0] for n, a, _ in ctx.calls if n == "register_hook") == ["post_llm_call", "post_tool_call", "pre_llm_call", "pre_tool_call"]
           and "register_skill" in names and "register_system_prompt_section" in names and "on_unload" in names
           and [k["name"] for n, _, k in ctx.calls if n == "register_tool"] == ["muse_manage", "muse_job"], names)
 
@@ -192,6 +192,32 @@ def part_hooks(home, ids):
           receipts == ["c-fail", "c-stage"] and "write failed" in once and "staged" in once and again is None
           and "staged" in reminder and "failed" not in reminder and later.pre_turn(session_id="s1", platform="cli") is None,
           {"receipts": receipts, "once": once[:200], "reminder": reminder[:200]})
+
+    # Muse's intake run may compact native memory but never delete an entry outright; every change is recorded.
+    # Intake and patrol start together on the hour in `local-<hash>` sessions: only the hook's task_id tells them apart.
+    started = time.time()
+    with sqlite3.connect(home / "state.db") as db:
+        db.executemany("INSERT INTO sessions (id, source, chat_type, title, started_at) VALUES (?,?,?,?,?)",
+                       [(sid, "cron", "dm", None, started) for sid in ("local-1a2b3c", "local-4d5e6f", "local-7a8b9c")])
+    intake_run = {"session_id": "local-1a2b3c", "task_id": f"cron:{ids['memory-upkeep']}:x1", "platform": "cron"}
+    patrol_run = {"session_id": "local-4d5e6f", "task_id": f"cron:{ids['proactive-watch']}:x2", "platform": "cron"}
+    user_cron = {"session_id": "local-7a8b9c", "task_id": "cron:a1b2c3d4e5f6:x3", "platform": "cron"}
+    (home / "memories").mkdir(exist_ok=True)
+    user_md = home / "memories" / "USER.md"
+    user_md.write_text("Likes tea\n§\nLikes green tea\n§\nLives in Porto", encoding="utf-8")
+    remove = {"action": "remove", "target": "user", "old_text": "Likes tea"}
+    refused = hooks.pre_tool(tool_name="memory", args=remove, tool_call_id="m1", **intake_run)
+    merge = {"target": "user", "operations": [{"action": "patch", "old_text": "Likes green tea", "content": "Likes tea, green best"}, remove]}
+    allowed = hooks.pre_tool(tool_name="memory", args=merge, tool_call_id="m2", **intake_run)
+    user_md.write_text("Likes tea, green best\n§\nLives in Porto", encoding="utf-8")  # what Hermes' batch wrote
+    hooks.post_tool(tool_name="memory", args=merge, result={"success": True}, tool_call_id="m2", **intake_run)
+    others = [hooks.pre_tool(tool_name="memory", args=remove, tool_call_id=f"m{i}", **kw)
+              for i, kw in enumerate((patrol_run, user_cron, {"session_id": "s1", "task_id": "", "platform": "cli"}), 3)]
+    notes = "".join(f.read_text(encoding="utf-8") for f in (home / "muse" / "memory").glob("20*.md"))
+    check("intake memory upkeep: a bare remove is refused, a merge passes and its before/after lands in the day's note; "
+          "a concurrent patrol run, a user cron and user turns are untouched",
+          (refused or {}).get("action") == "block" and allowed is None and others == [None, None, None]
+          and "Likes green tea" in notes and "Likes tea, green best" in notes, {"refused": refused, "others": others, "notes": notes[-300:]})
 
     clock = [time.time()]
     quiet = Hooks(hooks.k, quiet_seconds=0.5, clock=lambda: clock[0])

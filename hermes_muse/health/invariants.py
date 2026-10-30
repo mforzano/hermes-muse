@@ -3,7 +3,9 @@
 Each check returns one or more health items `item(id, level, value, threshold, detail, evidence)`; level is
 ok | low | medium | high. Checks only read; they never repair, so a kernel bug stays visible.
 Payload fields read here are the kernel's contract: signal.source, notice.next_eligible/priority/strong_key,
-goal.fade_at/fade_blocked (goals.fade), finding.evidence (review.record), source.health (sources.record).
+goal.fade_at/fade_blocked (goals.fade), finding.evidence (review.record), source.health (sources.record),
+packet.job/issued_at/context.review_overflow (packets.build), run.job (runs.start), interest.checked_at
+(packets.feed_result).
 Tests seed these through the kernel writers, never with hand-written payloads.
 """
 from __future__ import annotations
@@ -17,6 +19,9 @@ LEVELS = ("ok", "low", "medium", "high")
 PROBE_LEVEL = {"ok": "ok", "degraded": "medium", "missing": "high"}
 MINOR_PROBES = {"config_location", "home"}  # degraded here never stops a feature
 EVIDENCE = 10
+REVIEWS = 30  # kernel.review.PER_NIGHT (kernel_acceptance N4 asserts they match)
+DRAIN_GRACE = 3 * H  # a nightly drain between two batches is still in progress
+MEMORY_NEAR_FULL = 0.98
 
 
 def item(id, level, value, threshold, detail="", evidence=(), fix=""):
@@ -154,16 +159,36 @@ def runs(store, now):
                     "Run closing reads the host execution; check host_faults")]
 
 
+def last_night(store, now):
+    """(start, packets) of the latest finished nightly period: no batch issued, no nightly run running, and not
+    between two batches (the latest left work and was issued within DRAIN_GRACE)."""
+    nightly = [p for p in store.query("packet", since=now - 3 * D) if p["payload"].get("job") == "nightly"]
+    if any(p["state"] == "issued" for p in nightly) or any(r["payload"].get("job") == "nightly" for r in store.query("run", state="running")):
+        return None, []
+    if not nightly:
+        return now - 3 * D, []  # no nightly packet for 3 days: every goal due since then was missed
+    latest = max(nightly, key=lambda p: p["payload"]["issued_at"])
+    if (latest["payload"].get("context") or {}).get("remaining") and latest["payload"]["issued_at"] > now - DRAIN_GRACE:
+        return None, []
+    period = latest["natural_key"].split(":")[:2]
+    night = [p for p in nightly if p["natural_key"].split(":")[:2] == period]
+    return min(p["payload"]["issued_at"] for p in night), night
+
+
 def goals(store, now):
-    """No active goal overdue more than 3 days; fade executed within 2 days of fade_at."""
+    """Every active goal due before last night's first batch was checked (two nights missed: high); fade executed
+    within 2 days of fade_at."""
     live = store.query("goal", state=("active", "waiting"))
-    overdue = [g for g in live if g["state"] == "active" and g["deadline"] is not None and g["deadline"] < now - 3 * D]
     active = [g for g in live if g["state"] == "active"]
+    start, _ = last_night(store, now)
+    missed = [] if start is None else [g for g in active if g["deadline"] is not None and g["deadline"] < start]
+    twice = [g for g in missed if g["deadline"] < start - D]
     faded = [g for g in active if (g["payload"].get("fade_at") or now) < now - 2 * D]
     stuck = [g for g in active if g["payload"].get("fade_blocked")]
-    return [item("goals_overdue", "medium" if overdue else "ok", len(overdue), 0,
-                    f"{len(overdue)} active goals with next_check over 3 days old", ids(overdue),
-                    "Nightly goals packets are not touching due goals"),
+    return [item("goals_missed", "high" if twice else "medium" if missed else "ok", len(missed), 0,
+                    f"{len(missed)} active goals due before the last nightly run and still unchecked; {len(twice)} missed two nights",
+                    ids(twice + [g for g in missed if g not in twice]),
+                    "Read the nightly runs and packets: a result error, a failed batch or spent drain wakes leave goals unchecked"),
             item("goal_fade", "medium" if faded or stuck else "ok", len(faded) + len(stuck), 0,
                     f"{len(faded)} goals over 2 days past fade_at and still open; "
                     f"{len(stuck)} whose dormancy question was withdrawn every time", ids(faded + stuck),
@@ -180,12 +205,26 @@ def sources(store, now):
 def findings(store, now):
     recent = store.query("finding", since=now - D)
     bare = [f for f in store.query("finding", state="open") if not f["payload"].get("evidence")]
-    return item("review_findings", "low" if bare or len(recent) > 10 else "ok", len(recent), "<=10/day, all with evidence",
-                   f"{len(recent)} findings in 24h; {len(bare)} open without evidence", ids(bare),
-                   "Review candidates must stay within 10/day and cite evidence")
+    _, night = last_night(store, now)
+    latest = max(night, key=lambda p: p["payload"]["issued_at"], default=None)
+    overflow = ((latest or {}).get("payload", {}).get("context") or {}).get("review_overflow") or 0
+    return [item("review_findings", "low" if bare or len(recent) > REVIEWS else "ok", len(recent), f"<={REVIEWS}/day, all with evidence",
+                 f"{len(recent)} findings in 24h; {len(bare)} open without evidence", ids(bare),
+                 f"Review candidates must stay within {REVIEWS}/day and cite evidence"),
+            item("review_overflow", "low" if overflow else "ok", overflow, 0,
+                 f"{overflow} flagged turns over last night's review cap of {REVIEWS}; they wait for the next night (72h window)",
+                 ids([latest]) if overflow else [], "Many flagged turns in a day; read the open findings")]
 
 
-STORE_CHECKS = (deadlines, signals, packets, notices, runs, goals, sources, findings)
+def interests(store, now):
+    unchecked = [i for i in store.query("interest", state="active")
+                 if (i["payload"].get("checked_at") or i["state_since"]) < now - 2 * D]
+    return item("interests_unchecked", "medium" if unchecked else "ok", len(unchecked), 0,
+                f"{len(unchecked)} active interests not researched by the Feed for 2 days", ids(unchecked),
+                "Check the feed-pulse job and its runs")
+
+
+STORE_CHECKS = (deadlines, signals, packets, notices, runs, goals, sources, findings, interests)
 
 
 # -- Host --------------------------------------------------------------------------------------------
@@ -204,6 +243,17 @@ def tools(results):
                     f"oversized (>20k) {sum(s['oversized'] for s in results)}, credential patterns "
                     f"{sum(s['secrets'] for s in results)} in Muse cron tool results", exposed,
                     "A read path skipped redaction or the excerpt limit")]
+
+
+def memory(stores):
+    """Native memory stores near their limit: intake can save new facts only by compacting entries."""
+    if "status" in stores:
+        return item("memory_capacity", "ok", None, f"<{MEMORY_NEAR_FULL:.0%}", "memory usage unreadable; see host_faults")
+    near = {t: s for t, s in stores.items() if s["chars"] >= MEMORY_NEAR_FULL * s["limit"]}
+    return item("memory_capacity", "medium" if near else "ok", len(near), f"<{MEMORY_NEAR_FULL:.0%}",
+                "; ".join(f"{t} {s['chars']}/{s['limit']}" for t, s in stores.items()), list(near),
+                "Intake merges or shortens entries when it has new facts; ask the assistant to tidy memory in the "
+                "main session, or raise memory.memory_char_limit / memory.user_char_limit")
 
 
 def jobs(owned, now):

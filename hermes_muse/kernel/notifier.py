@@ -80,7 +80,7 @@ def stale(p, now):
 
 
 def draft(k, *, text, priority="ordinary", title="", upstream_id=None, sources=(), source_id=None, topic="",
-          goal_id=None, evidence=(), expires=None, observed_at=None, notice_key=None, now):
+          goal_id=None, interest_id=None, evidence=(), expires=None, observed_at=None, notice_key=None, now):
     """Create (or return the live) notice for this notice key and schedule it."""
     if priority not in PRIORITIES:
         raise ValueError(f"priority must be one of {', '.join(PRIORITIES)}")
@@ -90,16 +90,24 @@ def draft(k, *, text, priority="ordinary", title="", upstream_id=None, sources=(
         key, strong = keys.notice_key(upstream_id, sources, title, now if observed_at is None else observed_at)
     payload = {"text": check_text(text), "priority": priority, "title": str(title or "")[:200], "upstream_id": upstream_id,
                "sources": [str(s)[:500] for s in sources or ()][:20], "source_id": source_id, "topic": topic or "",
-               "goal_id": goal_id, "evidence": list(evidence)[:20], "strong_key": strong, "generation": 0, "verified_at": now}
+               "goal_id": goal_id, "interest_id": interest_id, "evidence": list(evidence)[:20], "strong_key": strong, "generation": 0, "verified_at": now}
     e = k.store.create("notice", key, payload, deadline=expires or now + 3 * D, now=now,
                        dedupe=(LIVE, 7 * D) if strong else (UNSENT, None))
     return e if e["existing"] else {**schedule(k, e, now), "existing": False}
 
 
+def interest_closed(k, p):
+    """A Feed notice lives only while its interest is active (expired, stopped or forgotten withdraws it)."""
+    return bool(p.get("interest_id")) and (k.store.get(p["interest_id"]) or {}).get("state") != "active"
+
+
 def schedule(k, e, now, prefs=None):
-    """drafted/scheduled -> scheduled with next_eligible; withdrawn when its topic or priority is turned off."""
+    """drafted/scheduled -> scheduled with next_eligible; withdrawn when its topic or priority is turned off
+    or its interest closed."""
     prefs = prefs or preferences(k.home)
     p, tz = e["payload"], k.tz()
+    if interest_closed(k, p):
+        return patch(k.store, e["id"], "withdrawn", expect=UNSENT, reason="interest_closed", now=now) or k.store.get(e["id"])
     requested = p.get("priority", "ordinary")
     priority = effective(k.store, requested, prefs, now, tz)
     eligible = gate(priority, prefs, now, tz, spent_today(k.store, priority, now, tz))
@@ -197,6 +205,9 @@ def dispatch(k, now):
     queue = sorted(store.query("notice", state="scheduled"),
                    key=lambda e: (rank.get(e["payload"].get("priority"), 2), e["payload"].get("next_eligible") or 0))
     for e in queue:
+        if interest_closed(k, e["payload"]):
+            schedule(k, e, now, prefs)
+            continue
         if (e["payload"].get("next_eligible") or 0) > now or stale(e["payload"], now):
             continue
         with store.atomic():  # budget check and claim in one write transaction: two dispatchers cannot both spend it

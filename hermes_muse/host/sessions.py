@@ -76,6 +76,11 @@ def caller(platform="", task_id="", parent_session_id="", stored_source=None, **
     return "user" if classify(stored) == "user" and classify(named or stored) == "user" else "other"
 
 
+def run_of(task_id, job_id) -> bool:
+    """True when a hook's task_id belongs to a run of cron job `job_id` (Hermes: `cron:<job_id>:<execution_id>`)."""
+    return bool(job_id) and str(task_id or "").startswith(f"cron:{job_id}:")
+
+
 def failed_result(text: str) -> bool:
     """A native tool result whose JSON root reports failure (never words quoted in its body)."""
     try:
