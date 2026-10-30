@@ -4,7 +4,7 @@ Each check returns one or more health items `item(id, level, value, threshold, d
 ok | low | medium | high. Checks only read; they never repair, so a kernel bug stays visible.
 Payload fields read here are the kernel's contract: signal.source, notice.next_eligible/priority/strong_key,
 goal.fade_at/fade_blocked (goals.fade), finding.evidence (review.record), source.health (sources.record),
-packet.job/issued_at/context.review_overflow (packets.build), run.job (runs.start), interest.checked_at
+packet.job/issued_at/context.remaining/handled (packets.build/submit), run.job (runs.start), interest.checked_at
 (packets.feed_result), notice.verified_at/topic (notifier.draft).
 Tests seed these through the kernel writers, never with hand-written payloads.
 """
@@ -19,8 +19,8 @@ LEVELS = ("ok", "low", "medium", "high")
 PROBE_LEVEL = {"ok": "ok", "degraded": "medium", "missing": "high"}
 MINOR_PROBES = {"config_location", "home"}  # degraded here never stops a feature
 EVIDENCE = 10
-REVIEWS = 30  # kernel.review.PER_NIGHT (kernel_acceptance N4 asserts they match)
-DRAIN_GRACE = 3 * H  # a nightly drain between two batches is still in progress
+DRAINS = ("intake", "nightly", "feed")  # kernel.packets drain jobs (kernel_acceptance N4 asserts they match)
+DRAIN_GRACE = 3 * H  # a drain between two batches is still in progress
 MEMORY_NEAR_FULL = 0.98
 
 
@@ -188,7 +188,7 @@ def goals(store, now):
     return [item("goals_missed", "high" if twice else "medium" if missed else "ok", len(missed), 0,
                     f"{len(missed)} active goals due before the last nightly run and still unchecked; {len(twice)} missed two nights",
                     ids(twice + [g for g in missed if g not in twice]),
-                    "Read the nightly runs and packets: a result error, a failed batch or spent drain wakes leave goals unchecked"),
+                    "Read the nightly runs and packets: a result error, a failed batch or a stopped relay leave goals unchecked"),
             item("goal_fade", "medium" if faded or stuck else "ok", len(faded) + len(stuck), 0,
                     f"{len(faded)} goals over 2 days past fade_at and still open; "
                     f"{len(stuck)} whose dormancy question was withdrawn every time", ids(faded + stuck),
@@ -205,15 +205,26 @@ def sources(store, now):
 def findings(store, now):
     recent = store.query("finding", since=now - D)
     bare = [f for f in store.query("finding", state="open") if not f["payload"].get("evidence")]
-    _, night = last_night(store, now)
-    latest = max(night, key=lambda p: p["payload"]["issued_at"], default=None)
-    overflow = ((latest or {}).get("payload", {}).get("context") or {}).get("review_overflow") or 0
-    return [item("review_findings", "low" if bare or len(recent) > REVIEWS else "ok", len(recent), f"<={REVIEWS}/day, all with evidence",
-                 f"{len(recent)} findings in 24h; {len(bare)} open without evidence", ids(bare),
-                 f"Review candidates must stay within {REVIEWS}/day and cite evidence"),
-            item("review_overflow", "low" if overflow else "ok", overflow, 0,
-                 f"{overflow} flagged turns over last night's review cap of {REVIEWS}; they wait for the next night (72h window)",
-                 ids([latest]) if overflow else [], "Many flagged turns in a day; read the open findings")]
+    return item("review_findings", "low" if bare else "ok", len(recent), "all with evidence",
+                f"{len(recent)} findings in 24h; {len(bare)} open without evidence", ids(bare),
+                "Review findings must cite evidence")
+
+
+def drains(store, now):
+    """A drain job whose latest batch left work, with no batch issued or run running for DRAIN_GRACE: its relay
+    stopped (batches in a row that handled nothing, or a lost wake) and the rest waits for the next period."""
+    recent = store.query("packet", since=now - 3 * D)
+    running = {r["payload"].get("job") for r in store.query("run", state="running")}
+    stopped = []
+    for job in DRAINS:
+        latest = max((p for p in recent if p["payload"].get("job") == job), key=lambda p: p["payload"]["issued_at"], default=None)
+        if (latest and latest["state"] != "issued" and job not in running and latest["payload"]["issued_at"] < now - DRAIN_GRACE
+                and (latest["payload"].get("context") or {}).get("remaining")):
+            stopped.append(latest)
+    return item("drain_stopped", "medium" if stopped else "ok", len(stopped), 0,
+                "; ".join(f"{p['payload']['job']}: {p['payload']['context']['remaining']} left after the last batch"
+                          for p in stopped) or "no drain stopped with work left", ids(stopped),
+                "Read the job's last runs: three batches in a row that handled nothing stop the relay until the next period")
 
 
 def interests(store, now):
@@ -224,7 +235,7 @@ def interests(store, now):
                 "Check the feed-pulse job and its runs")
 
 
-STORE_CHECKS = (deadlines, signals, packets, notices, runs, goals, sources, findings, interests)
+STORE_CHECKS = (deadlines, signals, packets, notices, runs, goals, sources, findings, drains, interests)
 
 
 # -- Host --------------------------------------------------------------------------------------------
