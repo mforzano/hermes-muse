@@ -1,6 +1,5 @@
-"""Conversation review: code picks turns of the last 72h of private user sessions by fixed rules, oldest
-first, at most PER_NIGHT a night (packets.nightly_items counts the overflow for Health); the model only judges
-each (agent_gap / latent_need / fine). One entity per turn, ever.
+"""Conversation review: code picks every turn of the last 72h of private user sessions that fixed rules flag,
+oldest first; the model only judges each (agent_gap / latent_need / fine). One entity per turn, ever.
 
 Rules: a completion claim with no successful write-type tool result in the same turn; a failed tool not
 retried successfully; a user correction or near-repeat of the previous request; a stated need that matches
@@ -11,7 +10,7 @@ from difflib import SequenceMatcher
 
 from .common import D, clip, one
 
-PER_NIGHT = 30
+PAGE = 2000  # host rows per read; the window is read page by page
 WINDOW = 3 * D
 VERDICTS = ("agent_gap", "latent_need", "fine")
 CLAIM = re.compile(r"已完成|已发送|已修复|已部署|已提交|搞定|\b(?:done|fixed|completed|sent|deployed|resolved)\b", re.I)
@@ -56,9 +55,22 @@ def rules(turn, titles):
     return found
 
 
+def window(k, since):
+    """Every user/assistant/tool row after `since`; a page restarts at its last timestamp, refs dedupe the overlap."""
+    rows, refs = [], set()
+    while True:
+        page = [r for r in k.adapter.sessions.user_turns(since, roles=("user", "assistant", "tool"), limit=PAGE)
+                if r["ref"] not in refs]
+        if not page:
+            return rows
+        rows += page
+        refs.update(r["ref"] for r in page)
+        since = page[-1]["at"] - 1e-6
+
+
 def candidates(k, now, skip=()):
     """Every matching turn, oldest first; turns already judged or in `skip` (offered tonight) are left out."""
-    rows = k.adapter.sessions.user_turns(now - WINDOW, roles=("user", "assistant", "tool"), limit=2000)
+    rows = window(k, now - WINDOW)
     titles = [str(e["payload"].get("title") or "").lower() for kind in ("goal", "interest", "idea") for e in k.store.query(kind)]
     picked = []
     for turn in turns(rows):

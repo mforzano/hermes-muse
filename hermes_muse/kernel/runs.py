@@ -1,12 +1,12 @@
 """Run: one woken job execution. Its outcome comes from the host execution status and the packet's
 dispositions, never from a model self-report. A closed run of a drain job relays: its batch is closed
-(packets.close) and the job is woken again while work remains. A wake after a run that made progress is free
-(the queue shrinks every time); at most WAKES a day follow a run that did not, so the relay always ends."""
+(packets.close) and the job is woken again while work remains, however many batches that takes. Only STALLS
+batches in a row that handled nothing (a run that keeps failing) end the relay until the next period."""
 from . import packets
-from .common import H, count_today, patch
+from .common import H, patch
 
 LEASE = 2 * H
-WAKES = 12
+STALLS = 3
 
 
 def start(k, job, *, job_id, execution_id, packet_id=None, now):
@@ -51,6 +51,7 @@ def relay(k, run, now):
     p = run["payload"]
     if not packets.JOBS.get(p.get("job"), {}).get("drain"):
         return
-    progress = bool(p.get("packet_id")) and packets.close(k, p["packet_id"], run["state"], now)
-    if packets.pending(k, p["job"], now) and (progress or count_today(k.store, f"drain_wakes:{p['job']}", now, k.tz(), WAKES)):
+    if p.get("packet_id"):
+        packets.close(k, p["packet_id"], run["state"], now)
+    if packets.pending(k, p["job"], now) and packets.stalls(k, p["job"], now) < STALLS:
         k.adapter.cron.wake(p["job_id"])

@@ -194,14 +194,14 @@ def decide(k, item, verdict, *, text=None, priority=None, topic=None, now):
     return {"result": "withdrawn" if e else "not_pending", "notice": item["ref"]}
 
 
-def due_items(k, now, limit=5):
+def due_items(k, now):
     """Scheduled notices that need the model again: stale evidence, or eligible for 6h and still unsent."""
     rows = [e for e in reversed(k.store.query("notice", state="scheduled"))
             if e["payload"].get("topic") != FADE_TOPIC and (e["payload"].get("next_eligible") or 0) <= now
             and (stale(e["payload"], now) or (e["payload"].get("next_eligible") or 0) <= now - STUCK_AFTER)]
     return [{"kind": "notice", "ref": e["id"], "text": text_of(e["payload"])[:TEXT_MAX], "title": e["payload"].get("title"),
              "priority": e["payload"].get("priority", "ordinary"), "verified_at": e["payload"].get("verified_at"),
-             "why": "stale" if stale(e["payload"], now) else "stuck"} for e in rows[:limit]]
+             "why": "stale" if stale(e["payload"], now) else "stuck"} for e in rows]
 
 
 def claim(k, job, execution_id, now):

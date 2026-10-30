@@ -1,5 +1,5 @@
 [Hermes Muse job: intake]
-Script Output holds this run's packet: user messages from private conversations (`items`, each with a redacted head/tail `excerpt`), the result `schema` and a `budget`.
+Script Output holds one batch of this hour's work: user messages from private conversations (`items`, each with a redacted head/tail `excerpt`), the result `schema`, a `budget` and `context.remaining` (messages in later batches; Muse runs them itself).
 For every item decide what it means for the user, then answer it once in a single muse_job submit:
 - `saved`: it states a fact, preference, decision or correction worth keeping. Save it with the native memory tool first, then list the facts in `facts`.
 - `context`: it matters only for the current conversation. `ignored`: small talk, pasted material without a decision, or already saved.

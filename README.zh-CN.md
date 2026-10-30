@@ -1,4 +1,4 @@
-# Hermes Muse 0.4.2
+# Hermes Muse 0.4.3
 
 [English](README.md) · [设计文档](docs/DESIGN.md) · [接口](skills/companion/references/interface.md) · [验收清单](docs/ACCEPTANCE.md) · [更新日志](CHANGELOG.md)
 
@@ -53,9 +53,9 @@ hermes plugins install xiaohei-info/hermes-muse --enable
 
 | job（cron key） | 默认调度 | 模型做什么 | 投递 |
 |---|---|---|---|
-| intake（`memory-upkeep`） | 每小时 | 判断每条新私聊消息的含义和相关目标 | local |
+| intake（`memory-upkeep`） | 每小时，分批处理完为止 | 判断每条新私聊消息的含义和相关目标 | local |
 | patrol（`proactive-watch`） | 每 30 分钟 | 用你的工具读来源，判断什么值得通知并写出通知 | 你的路由 |
-| nightly（`nightly-review`） | 03:20 | 评估全部到期目标、判断复盘候选（每晚最多 30 条）、写 dream 和 alignment | local |
+| nightly（`nightly-review`） | 03:20 | 评估全部到期目标、判断全部复盘候选、写 dream 和 alignment | local |
 | feed（`feed-pulse`） | 08:00 | 每个 active interest 每天研究一次，写 Feed 文章，有真正的新进展时可发一条通知 | 静默；通知走通知门控 |
 | weekly（`weekly-governance-review`） | 周日 21:15 | 根据 Health 摘要和 7 天计数写一条周报 | 你的路由 |
 | deliver（`deliver`） | 每 10 分钟 | 不调用模型。把到期的通知合成一条消息发出（urgent 会立即唤醒它） | 你的路由 |

@@ -146,7 +146,7 @@ def part_intake(base):
     same = k.build_packet("intake")
     sizes = [len(i["excerpt"]) for i in packet["items"]]
     long_item = next(i for i in packet["items"] if i["ref"] == long_ref)
-    check("K2 intake packet: one per period, head/tail excerpts, <=15 items and <=24k chars, schema+budget",
+    check("K2 intake packet: one issued at a time, head/tail excerpts, <=15 items and <=24k chars, schema+budget",
           same["id"] == packet["id"] and len(packet["items"]) <= 15 and sum(sizes) <= 24000 and max(sizes) <= 8200
           and long_item["attachment"] and set(packet) >= {"id", "type", "items", "schema", "budget"},
           {"items": len(packet["items"]), "excerpt_chars": sizes, "budget": packet["budget"]})
@@ -516,7 +516,7 @@ def batch_size(job, n):
 
 def part_drain(base):
     """Nightly drains every due goal in batches: relay wakes, failed batch re-offered, skipped goal reported;
-    only wakes after a run without progress are capped."""
+    only batches in a row that handle nothing end the relay."""
     clock = [T0 + 17 * H + 20 * 60]  # 03:20 next day
     night = clock[0]
     host = FakeHost(lambda: clock[0])
@@ -552,13 +552,16 @@ def part_drain(base):
             if n == 1:  # between two batches: the night is still in progress
                 between = invariants.goals(k.store, clock[0])[0]["level"]
         drained = len(host.woken)
-        for i in range(14):  # a goal no run gets to: every wake is without progress
+        stuck = []
+        for i in range(5):  # a goal no run gets to: every batch handles nothing
             write_goal(home, "g99", no_fade=True, next_check_at=clock[0] - 1)
             k.tick()
             k.start_run("nightly", job_id="job-n", execution_id=f"e-stuck{i}", packet_id=k.build_packet("nightly")["id"])
             host.outcomes[f"e-stuck{i}"] = {"status": "failed"}
             clock[0] += 60
+            woken = len(host.woken)
             k.tick()
+            stuck.append(len(host.woken) - woken)
     finally:
         restore()
     period = int(night // D)
@@ -571,9 +574,9 @@ def part_drain(base):
           and most_issued == 1 and same and offered.count("g03") == 1 and offered.count(offered[2]) == 2
           and offered.count(released) == 2 and offered.count(offered[6]) == 1 and offered[0] == "g22",
           {"batches": n, "checked": len(checked), "names": names[:3], "expired": len(expired)})
-    check("N2 relay: every batch with work left wakes the job; after runs without progress at most 12 a day",
-          drained == n - 1 and len(host.woken) - drained == 10 and set(host.woken) == {"job-n"},
-          {"drained": drained, "batches": n, "stuck_wakes": len(host.woken) - drained})
+    check("N2 relay: every batch with work left wakes the job; three batches in a row that handle nothing end it",
+          drained == n - 1 and stuck == [1, 1, 0, 0, 0] and set(host.woken) == {"job-n"},
+          {"drained": drained, "batches": n, "stuck_wakes": stuck})
     check("N3 Health goals_missed: quiet between two batches; then names only the goals left unchecked; "
           "assessed goals are due the next night",
           between == "ok" and missed["id"] == "goals_missed" and missed["level"] == "medium"
@@ -583,8 +586,71 @@ def part_drain(base):
     return k
 
 
+def part_intake_drain(base):
+    """Intake drains a backlog larger than one batch within one period, a message arriving meanwhile included;
+    failed batches between progressing ones never end the relay (more than the 12 wakes 0.4.2 allowed); three
+    batches in a row that handle nothing do, Health reports it, and the next period goes on."""
+    clock = [T0]  # the start of an hourly period
+    period = int(T0 // H)
+    host = FakeHost(lambda: clock[0])
+    k = Kernel(make_home(base), adapter=host, clock=lambda: clock[0])
+    for i in range(30):
+        host.add("chat", "user", f"note {i}", T0 - 300 + i)
+    k.tick()
+    restore = batch_size("intake", 2)
+    try:
+        names, n, failed, late = [], 0, 0, None
+        while n < 80:
+            packet = k.build_packet("intake")
+            if packet["id"] is None:
+                break
+            n += 1
+            names.append(k.store.get(packet["id"])["natural_key"])
+            k.start_run("intake", job_id="job-i", execution_id=f"i{n}", packet_id=packet["id"])
+            if n % 2 == 0:  # every other run dies before submitting: its signals come back in the next batch
+                host.outcomes[f"i{n}"], failed = {"status": "failed"}, failed + 1
+            else:
+                k.submit(packet["id"], [{"ref": i["ref"], "disposition": "context"} for i in packet["items"]])
+                host.outcomes[f"i{n}"] = {"status": "completed"}
+            if n == 5:
+                late = host.add("chat", "user", "a message during the drain", clock[0])
+            clock[0] += 60
+            k.tick()
+        drained, signals = len(host.woken), k.store.query("signal")
+        stuck = [host.add("chat", "user", f"stuck {i}", clock[0] - 10 + i) for i in range(3)]
+        k.tick()
+        wakes = []
+        for i in range(3):  # runs that die before submitting
+            k.start_run("intake", job_id="job-i", execution_id=f"s{i}", packet_id=k.build_packet("intake")["id"])
+            host.outcomes[f"s{i}"] = {"status": "failed"}
+            clock[0] += 60
+            woken = len(host.woken)
+            k.tick()
+            wakes.append(len(host.woken) - woken)
+        quiet = invariants.drains(k.store, clock[0])["level"]
+        stopped = invariants.drains(k.store, clock[0] + invariants.DRAIN_GRACE + 60)
+        clock[0] = (period + 1) * H + 60
+        k.tick()
+        following = k.build_packet("intake")
+    finally:
+        restore()
+    check("K7 intake drain: 31 signals in batches intake:P, intake:P:1… within one period, the late message included; "
+          f"{failed} failed batches between progressing ones still relay (> 12)",
+          all(s["state"] == "disposed" for s in signals) and len(signals) == 31 and late in {s["natural_key"] for s in signals}
+          and names[:2] == [f"intake:{period}", f"intake:{period}:1"] and all(x.startswith(f"intake:{period}") for x in names)
+          and drained == n - 1 and failed > 12 and max(s["attempts"] for s in signals) == 2,
+          {"batches": n, "failed": failed, "wakes": drained})
+    check("K8 intake relay: three batches in a row that handle nothing stop it; Health drain_stopped after the grace; "
+          "the next period offers what is left",
+          wakes == [1, 1, 0] and quiet == "ok" and stopped["level"] == "medium" and "intake: 1 left" in stopped["detail"]
+          and [i["ref"] for i in following["items"]] == stuck[2:]
+          and k.store.get(following["id"])["natural_key"] == f"intake:{period + 1}",
+          {"wakes": wakes, "stopped": stopped["detail"], "following": [i["ref"] for i in following["items"]]})
+    return k
+
+
 def part_reviews(base):
-    """Review cap per night with the overflow visible; proposals are made once and look back 7 days."""
+    """Every flagged turn is judged the same night in batches; proposals are made once and look back 7 days."""
     clock = [T0 - 2 * D]
     host = FakeHost(lambda: clock[0])
     home = make_home(base)
@@ -596,13 +662,12 @@ def part_reviews(base):
     for i in range(40):
         host.add(f"s{i}", "user", f"deploy service {i}", T0 - 40 * H + i * H)
         host.add(f"s{i}", "assistant", f"Done, deployed service {i}.", T0 - 40 * H + i * H + 1)
-    judged, kinds, overflow = 0, [], None
-    for n in range(6):
+    judged, kinds = 0, []
+    for n in range(30):
         packet = seen(k.build_packet("nightly"))
         if packet["id"] is None:
             break
         kinds += [i["kind"] for i in packet["items"]]
-        overflow = packet["context"]["review_overflow"]
         k.start_run("nightly", job_id="job-n", execution_id=f"r{n}", packet_id=packet["id"])
         out = k.submit(packet["id"], [{"candidate_ref": i["ref"], "verdict": "fine", "reason": "verified the deploy"}
                                       for i in packet["items"] if i["kind"] == "review"])
@@ -610,15 +675,14 @@ def part_reviews(base):
         host.outcomes[f"r{n}"] = {"status": "completed"}
         k.tick()
         clock[0] += 60
-    level = {f["id"]: f for f in invariants.findings(k.store, clock[0])}["review_overflow"]
     proposed = k.store.query("signal", natural_key=old)[0]["payload"].get("proposed_at")
     clock[0] = T0 + D
     second = k.build_packet("nightly")
-    check("N4 review cap: 30 of 40 flagged turns judged tonight, overflow 10 reported low; the rest the next night; "
-          "a proposal disposed two days ago is offered once; Health's cap is the kernel's",
-          invariants.REVIEWS == review.PER_NIGHT and judged == 30 and overflow == 10 and level["level"] == "low" and kinds.count("signal") == 1 and proposed == T0
-          and [i["kind"] for i in second["items"]] == ["review"] * 10,
-          {"judged": judged, "overflow": overflow, "level": level["level"], "second": len(second["items"])})
+    check("N4 no review cap: all 40 flagged turns judged tonight in batches, none left for the next night; "
+          "a proposal disposed two days ago is offered once; Health's drain jobs are the kernel's",
+          invariants.DRAINS == tuple(j for j, spec in packets.JOBS.items() if spec.get("drain"))
+          and judged == 40 and kinds.count("review") == 40 and kinds.count("signal") == 1 and proposed == T0 and second["id"] is None,
+          {"judged": judged, "kinds": len(kinds), "second": second["id"]})
     return k
 
 
@@ -800,7 +864,7 @@ def main():
         base = Path(temporary).resolve()
         kernels = []
         for name, part in (("intake", part_intake), ("notifier", part_notifier), ("goals", part_goals), ("drain", part_drain),
-                           ("reviews", part_reviews), ("feed", part_feed), ("upkeep", part_upkeep)):
+                           ("intake_drain", part_intake_drain), ("reviews", part_reviews), ("feed", part_feed), ("upkeep", part_upkeep)):
             (base / name).mkdir()
             result = part(base / name)
             kernels.append(result[0] if isinstance(result, tuple) else result)

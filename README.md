@@ -1,4 +1,4 @@
-# Hermes Muse 0.4.2
+# Hermes Muse 0.4.3
 
 [简体中文](README.zh-CN.md) · [Design](docs/DESIGN.md) · [Interface](skills/companion/references/interface.md) · [Acceptance](docs/ACCEPTANCE.md) · [Changelog](CHANGELOG.md)
 
@@ -53,9 +53,9 @@ Requires Hermes 0.21.5 or later with the plugin APIs for tools, Skills, prompt s
 
 | Job (cron key) | Default schedule | What the model does | Delivery |
 |---|---|---|---|
-| intake (`memory-upkeep`) | hourly | decides what each new private message means and which goal it touches | local |
+| intake (`memory-upkeep`) | hourly, in batches until done | decides what each new private message means and which goal it touches | local |
 | patrol (`proactive-watch`) | every 30 min | reads your sources with your tools, judges what is worth a notice and writes it | your route |
-| nightly (`nightly-review`) | 03:20 | assesses every due goal, judges review candidates (up to 30 a night), writes dream and alignment | local |
+| nightly (`nightly-review`) | 03:20 | assesses every due goal, judges every review candidate, writes dream and alignment | local |
 | feed (`feed-pulse`) | 08:00 | researches each active interest once a day, writes Feed articles, may raise one notice for real news | silent; a notice goes through the notice gates |
 | weekly (`weekly-governance-review`) | Sunday 21:15 | one digest from the Health summary and 7-day counts | your route |
 | deliver (`deliver`) | every 10 min | nothing: no model. Sends the notices that are due as one message (urgent ones wake it at once) | your route |

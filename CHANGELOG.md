@@ -1,3 +1,18 @@
+# 0.4.3 — Intake drains its queue; no volume caps on the normal path (2026-10-30)
+
+- Intake is a drain job like nightly and feed: the hourly cron opens a period and every waiting Signal is worked in
+  batches `intake:<period>[:<batch>]` (lease 1h, adaptive 3–15 items within 24k excerpt characters), relayed by
+  `runs.relay` until none is left. A message that arrives after the last batch waits for the next wake or period.
+- Relay: the per-day limit of 12 wakes after a run without progress is gone. A drain relays however many batches it
+  needs; only `runs.STALLS` (3) batches in a row that handled nothing (a run that keeps failing) stop it until the
+  next period.
+- Nightly: no per-night review cap (`review.PER_NIGHT` and `context.review_overflow` are gone); every flagged turn of
+  the 72h window is judged the same night, and the window is read page by page (`review.window`) instead of its
+  first 2000 rows.
+- Patrol: every due notice is offered again, not the first 5.
+- Health: `drain_stopped` (medium) replaces `review_overflow`: a drain job whose latest batch left work and has no
+  batch or run for 3h. `review_findings` no longer flags more than 30 findings a day.
+
 # 0.4.2 — One fixed `muse-deliver` job instead of a one-shot cron per notice (2026-10-30)
 
 - Delivery: one owned no-agent job `muse-deliver` (cron key `deliver`, every 10 minutes, on the user's route, no
