@@ -40,11 +40,16 @@ def seed_store(home, now, host):
     k = Kernel(home, adapter=host, store=s, clock=lambda: now)
     s.create("signal", "chat:long", {"source": "cli"}, now=now - 80 * H)          # watermark stuck, tick not run
     s.create("signal", "once:1", {"source": "oneshot"}, now=now - H)               # E16 oneshot captured
-    for i in range(2):                                                             # urgent sent twice (0.3.x)
-        s.create("notice", "src:msgaaa", {"priority": "urgent", "strong_key": True}, state="sent",
+    for i in range(2):                                                             # urgent sent twice by v2
+        s.create("notice", "src:msgaaa", {"priority": "urgent", "strong_key": True,
+                 "delivery_key": notifier.delivery_key("src:msgaaa", i)}, state="sent", now=now - (2 - i) * D, dedupe=False)
+    for i in range(2):                                                             # migrated 0.3.x history: not counted
+        s.create("notice", "src:msgold", {"priority": "urgent", "strong_key": True, "v1_id": f"old{i}"}, state="sent",
                  now=now - (2 - i) * D, dedupe=False)
     notifier.draft(k, text="Thread bbb", priority="urgent", upstream_id="thr-bbb", now=now - 10 * H)  # eligible, unsent
-    s.create("notice", "src:ccc", {}, state="unknown", now=now - 3 * H)            # a send went unknown
+    s.create("notice", "src:ccc", {"delivery_key": notifier.delivery_key("src:ccc")}, state="unknown",
+             now=now - 3 * H)                                                      # a v2 send went unknown
+    s.create("notice", "src:oldq", {"v1_id": "oldq"}, state="unknown", now=now - 3 * H)  # migrated 0.3.x: not counted
     s.create("goal", "stale-goal", {}, deadline=now - 12 * D, now=now - 20 * D)  # next_check 12 days old
     goals.create(k, title="Learn piano", criteria="Play one piece", by="user", session_id="chat", now=now - 20 * D)
     goals.fade(k, now)                                                             # dormant: fade_at 6 days ago
@@ -112,13 +117,16 @@ def main():
             "probe.delivery_target": "high", "probe.signal_purity": "high", "probe.config_location": "ok",
             "probe.home": "ok", "delivery": "high", "executions": "ok", "tool_errors": "medium",
             "model_input": "medium", "jobs_late": "ok", "jobs_paused": "ok", "host_faults": "ok"}
+        by = {f["id"]: f for f in report["invariants"]}
         check("H1 delivery failure is high within one run", levels["delivery"] == "high"
-              and "invalid_params field=cwd" in next(f["detail"] for f in report["invariants"] if f["id"] == "delivery"),
+              and "invalid_params field=cwd" in by["delivery"]["detail"],
               {"delivery": levels["delivery"]})
+        check("only v2 deliveries count: migrated 0.3.x duplicate sends and unknowns are not reported",
+              by["notice_duplicates"]["value"] == 1 and "1 failed/unknown notices" in by["delivery"]["detail"],
+              {k: [by[k]["value"], by[k]["detail"]] for k in ("notice_duplicates", "delivery")})
         check("A4 probe->level mapping (missing=high, degraded=medium)",
               all(levels[k] == expected[k] for k in expected if k.startswith("probe.")),
               {k: levels[k] for k in levels if k.startswith("probe.")})
-        by = {f["id"]: f for f in report["invariants"]}
         check("kernel-written fields: fade_at from goals.fade, fail_streak/health from sources.record (3 in a row only), "
               "evidence from review.record (only the migrated finding is bare)",
               by["goal_fade"]["value"] == 1 and by["goal_fade"]["evidence"][0].startswith("goal:g")
@@ -203,8 +211,8 @@ def main():
         sample(old, "0.3.16")
         migrate(old, now=NOW)
         found = {f["id"]: f for f in health.check(HostAdapter(old), now=NOW)}
-        check("migrated 0.3.16 store: stuck watermark and 7-day duplicate sends found",
-              found["signal_watermark"]["level"] == "high" and found["notice_duplicates"]["value"] == 2,
+        check("migrated 0.3.16 store: stuck watermark found; its 0.3.x duplicate sends are history, not a v2 failure",
+              found["signal_watermark"]["level"] == "high" and found["notice_duplicates"]["level"] == "ok",
               {k: [found[k]["level"], found[k]["value"]] for k in ("signal_watermark", "notice_duplicates")})
 
     print("FAIL " + ", ".join(FAILED) if FAILED else "PASS health_acceptance")
