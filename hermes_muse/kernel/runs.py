@@ -1,8 +1,11 @@
 """Run: one woken job execution. Its outcome comes from the host execution status and the packet's
-dispositions, never from a model self-report."""
-from .common import H, patch
+dispositions, never from a model self-report. A closed run of a drain job relays: its unsubmitted packet
+expires (the items come back) and the job is woken again while work remains, at most WAKES a day."""
+from . import packets
+from .common import H, count_today, patch
 
 LEASE = 2 * H
+WAKES = 12
 
 
 def start(k, job, *, job_id, execution_id, packet_id=None, now):
@@ -23,18 +26,31 @@ def outcome(k, host, packet_id):
 def check(k, now):
     """Close runs whose host execution ended; extend a still-running one; abandon one the host has no record of
     (a host read error is neither)."""
-    closed = 0
+    closed = []
     for run in k.store.query("run", state="running"):
         p = run["payload"]
         host = k.adapter.cron.outcome(p["job_id"], p["execution_id"]) if p.get("job_id") else None
         if host and host["status"] == "host_error":
             continue  # the host could not be read: not "no record"; the next tick asks again
         if host and host["status"] not in ("claimed", "running"):
-            closed += bool(patch(k.store, run["id"], outcome(k, host, p.get("packet_id")), expect=("running",),
-                                 reason=f"host:{host['status']}", now=now))
+            closed.append(patch(k.store, run["id"], outcome(k, host, p.get("packet_id")), expect=("running",),
+                                reason=f"host:{host['status']}", now=now))
         elif run["deadline"] <= now:
             if host:
                 patch(k.store, run["id"], reason="host_still_running", deadline=now + LEASE, now=now)
             else:
-                closed += bool(patch(k.store, run["id"], "abandoned", expect=("running",), reason="host_execution_unknown", now=now))
-    return closed
+                closed.append(patch(k.store, run["id"], "abandoned", expect=("running",), reason="host_execution_unknown", now=now))
+    closed = [run for run in closed if run]
+    for run in closed:
+        relay(k, run, now)
+    return len(closed)
+
+
+def relay(k, run, now):
+    p = run["payload"]
+    if not packets.JOBS.get(p.get("job"), {}).get("drain"):
+        return
+    if p.get("packet_id"):
+        patch(k.store, p["packet_id"], "expired", expect=("issued",), reason=f"run:{run['state']}", now=now)
+    if packets.pending(k, p["job"], now) and count_today(k.store, f"drain_wakes:{p['job']}", now, k.tz(), WAKES):
+        k.adapter.cron.wake(p["job_id"])
