@@ -6,7 +6,6 @@ and launchers use absolute paths, so the process cwd is never needed.
 """
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import os
@@ -16,7 +15,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import HOST_ERROR, Part, tolerant
+from . import HOST_ERROR, Part, exclusive, tolerant
 
 KEY = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 PREFIX = "hermes-muse-"
@@ -44,8 +43,7 @@ class Cron(Part):
     def lock(self):
         path = self.home / "muse" / "host.lock"
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a") as handle:
-            fcntl.flock(handle, fcntl.LOCK_EX)
+        with open(path, "a") as handle, exclusive(handle.fileno()):
             yield
 
     def write_script(self, name, body):

@@ -3,7 +3,8 @@
 from contextlib import contextmanager
 import os
 import threading
-import fcntl
+
+from .host import exclusive
 
 _guard = threading.Lock()
 _locks = {}
@@ -34,21 +35,18 @@ def _file_lock(path):
             yield
             return
         path.parent.mkdir(parents=True, exist_ok=True)
-        from .content_io import Files
+        from .content_io import Files, open_at
 
         if path.parent.name != "muse":
             raise ValueError("Lock must belong to the profile Muse root")
         with Files(path.parent.parent).directory() as parent:
-            fd = os.open(
-                path.name, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600, dir_fd=parent
-            )
+            fd = open_at(parent, path.name, os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            held[key] = fd
-            try:
-                yield
-            finally:
-                held.pop(key, None)
+            with exclusive(fd):
+                held[key] = fd
+                try:
+                    yield
+                finally:
+                    held.pop(key, None)
         finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
             os.close(fd)

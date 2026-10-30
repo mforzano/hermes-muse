@@ -46,6 +46,34 @@ def interrupted():
     return is_interrupted()
 
 
+@contextmanager
+def exclusive(fd):
+    """Block until this process holds the exclusive lock on fd (flock; msvcrt on Windows)."""
+    if os.name != "nt":
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        return
+    import errno
+    import msvcrt
+    os.lseek(fd, 0, os.SEEK_SET)
+    while True:
+        try:
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+            break
+        except OSError as exc:
+            if exc.errno != errno.EDEADLOCK:  # LK_LOCK gives up after ~10 s; keep waiting like flock
+                raise
+    try:
+        yield
+    finally:
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+
+
 HOST_ERROR = "host_error"
 
 
