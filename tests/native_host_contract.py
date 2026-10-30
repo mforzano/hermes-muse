@@ -100,6 +100,16 @@ def main():
         intake = host.cron.ensure("intake", schedule="every 1h", entry=entry, prompt="Intake.")
         assert host.cron.wake(intake["id"]) and host.cron.pause(intake["id"], "test")
         assert not host.cron.jobs()[intake["id"]]["enabled"] and host.cron.wake(intake["id"]) is False
+        # Drain relay: every wake fires once, then the job is back on its own schedule.
+        from cron.jobs import claim_job_for_fire, compute_next_run, get_due_jobs, get_job, mark_job_run
+        nightly = host.cron.ensure("nightly-review", schedule="20 3 * * *", entry=entry, prompt="Nightly.")
+        for _ in range(3):
+            assert host.cron.wake(nightly["id"])
+            with profile_scope(home):
+                assert nightly["id"] in [j["id"] for j in get_due_jobs()]
+                assert claim_job_for_fire(nightly["id"]) and mark_job_run(nightly["id"], True)
+                after = get_job(nightly["id"])
+                assert "manual_run_at" not in after and after["next_run_at"] == compute_next_run(after["schedule"]), after
 
         # sessions: user surfaces only, redacted, bounded; cron session attribution.
         seed_state(home, job["id"])
@@ -187,7 +197,7 @@ def main():
             assert host.sessions.user_turns(0) == [] and host.sessions.job_of("local-run") is None
         assert host.fault_count > faults
         with profile_scope(home):
-            assert len(list_jobs(include_disabled=True)) == 7  # patrol, intake, k1..k5: no duplicates
+            assert len(list_jobs(include_disabled=True)) == 8  # patrol, intake, nightly, k1..k5: no duplicates
     print("PASS native_host_contract")
 
 
