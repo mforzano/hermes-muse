@@ -146,6 +146,20 @@ class Owners(Part):
         return {"state": mapped, "host_state": state, "completed_at": row.get("completed_at")}
 
 
+class Memory(Part):
+    @tolerant(lambda: {"status": HOST_ERROR})
+    def stores(self):
+        """Enabled built-in memory stores as {target: {entries, chars, limit}}, read with Hermes' own loader,
+        limits and delimiter; status host_error when they could not be read."""
+        from tools.memory_tool import ENTRY_DELIMITER, load_on_disk_store
+        with self.scope():
+            store = load_on_disk_store()
+        return {target: {"entries": list(entries), "chars": len(ENTRY_DELIMITER.join(entries)), "limit": limit}
+                for target, entries, limit, enabled in (
+                    ("memory", store.memory_entries, store.memory_char_limit, store.memory_enabled),
+                    ("user", store.user_entries, store.user_char_limit, store.user_profile_enabled)) if enabled}
+
+
 class HostAdapter:
     def __init__(self, home=None):
         from .cron import Cron, Deliver
@@ -153,7 +167,7 @@ class HostAdapter:
         self.home = resolve_home(home)
         self.faults, self.fault_count = deque(maxlen=50), 0
         self.sessions, self.cron, self.deliver = Sessions(self), Cron(self), Deliver(self)
-        self.owners, self.config = Owners(self), Config(self)
+        self.owners, self.config, self.memory = Owners(self), Config(self), Memory(self)
 
     def cwd(self) -> Path:
         """Host directory for any host API that takes a cwd: `<home>/workspace` when it exists, else `<home>`."""
