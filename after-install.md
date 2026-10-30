@@ -2,7 +2,7 @@
 
 Recommended: use the current profile's **Bot Chat** for your goals, interests and follow-up.
 
-First plugin load sets up one Skill, the Muse tool, three conversation hooks, five recurring Cron jobs (intake, patrol, nightly review, Feed, weekly digest) and a `muse-health` check that runs every 30 minutes without a model. An existing 0.3.x installation is migrated in place; its jobs keep their ids, schedules and routes. Start a new conversation to load the system prompt section; keep the Hermes scheduler running for background work.
+First plugin load sets up one Skill, the Muse tools (`muse_manage`, `muse_job`), three conversation hooks, five recurring Cron jobs (intake, patrol, nightly review, Feed, weekly digest) and a `muse-health` check that runs every 30 minutes without a model. An existing 0.3.x installation is migrated in place; its jobs keep their ids, schedules and routes. Start a new conversation to load the system prompt section; keep the Hermes scheduler running for background work.
 
 Patrols deliver selected reminders themselves. Health problems show up in the main conversation, on the Dashboard's Muse page and in `muse/health.json`; set `health_deliver` to also send them to a second route.
 
