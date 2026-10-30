@@ -1,7 +1,7 @@
 manifest_version: 2
 name: hermes-muse
-version: "0.3.16"
-description: A provider-neutral companion assembly with goals, memory upkeep, proactive reminders and a silent Feed.
+version: "0.4.0"
+description: A provider-neutral companion with goals, deduplicated proactive notices, nightly review, a silent Feed and an independent health check, on a deterministic kernel.
 author: xiaohei-info
 license: MIT
 homepage: https://github.com/xiaohei-info/hermes-muse
