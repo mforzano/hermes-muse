@@ -60,6 +60,9 @@ When a known plan makes it useful, check a relevant opening, ticket window, trav
 `weather_context`, see [weather](weather.md)) the forecast. Prepare a short usable option; never book or operate
 anything. Longer explanations belong in the silent Feed. None of this creates jobs, goals or subscriptions.
 
+Interest news is the Feed's job, not the patrol's: the Feed researches the user's current interests once a day and
+may raise one notice for a real development. When such a notice comes back as due, re-confirm it like any other.
+
 ## User feedback
 
 - "Already handled" updates the related goal.

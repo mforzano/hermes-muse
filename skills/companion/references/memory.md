@@ -8,6 +8,10 @@ and corrections with the native memory tool, and record them as `saved` with `fa
 conversation as `context`, and small talk or material with no decision as `ignored`. Decide pasted attachments and
 data dumps from their head and tail. Never save secrets: excerpts are redacted, so keep them that way.
 Do not save guesses or summaries Muse produced itself as if the user said them.
+When a store is nearly full, make room in the same batch that saves the fact: merge duplicates or shorten verbose
+entries, keeping what the user still holds true. Never delete an entry outright; Muse refuses that write and records
+every change in the day's note and the nightly dream, so the user can restore it. A fact that still does not fit
+waits for the next hour.
 
 Memory receipts: when a native memory write fails or waits for approval, Muse shows it once in the next turn.
 Tell the user only when it matters to them. A write the provider accepted without confirmation is not reported.
