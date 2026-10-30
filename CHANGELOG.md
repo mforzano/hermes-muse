@@ -1,16 +1,17 @@
 # Unreleased
 
 - Nightly and Feed drain their whole queue: batches `<job>:<period>[:<batch>]` with a 2h lease; when a run closes with
-  work left, the kernel wakes the job again (at most 12 a day). No cap on due goals; an assessment moves the next
+  work left, the kernel wakes the job again (at most 12 a day after runs that made no progress); a failed run
+  releases the unanswered items of its batch. No cap on due goals; an assessment moves the next
   check to 1 day − 6h, so the goal is due again the next night. Review candidates come from the last 72h, oldest
   first, at most 30 a night (was 10 a day), with the overflow reported. Goal proposals look back 7 days and are made
-  once.
+  once (when the batch's run closes ok or degraded).
 - Interest news is back: the Feed researches each active interest once a day (no more starving), and an article may
   carry one notice through the Notifier (strong `src:` key shared with patrol, full gates, no urgent), withdrawn
   when its interest closes. `packets.SCHEMAS["feed"]` gains the optional `notice`.
 - Native memory upkeep: `HostAdapter.memory.stores()`; when a store is at least 90% full, intake may merge or shorten
-  entries in the batch that saves a fact. A new `pre_tool_call` hook refuses a native memory remove without a patch
-  in Muse's intake run; every change goes to the day's note and the nightly dream. Keep `memory.write_approval` off.
+  entries in the batch that saves a fact. A new `pre_tool_call` hook refuses more removes than patches in one native
+  memory call of Muse's intake run (told by the hook's task_id); every change goes to the day's note and the nightly dream. Keep `memory.write_approval` off.
 - Health: `goals_missed` replaces `goals_overdue`; new `review_overflow`, `interests_unchecked`, `memory_capacity`.
 - README: a table of the Hermes settings Muse reads or depends on.
 - Experimental native Windows support (local NTFS profiles), ported from #4 by @mforzano: content files and locks no

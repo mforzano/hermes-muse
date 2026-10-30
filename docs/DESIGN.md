@@ -87,10 +87,10 @@ call's platform argument or an inherited session environment can only narrow it.
   Signal in the packet (at most 5 a day); jobs only append progress and assessments.
 - `child` reads; `group` and `other` are refused.
 - Kernel code runs TTL exits, next checks, fade questions and cancellations, watch renewal, delivery and
-  reconciliation; it also expires the packet of a failed drain run and wakes the same owned job while its queue is
-  not empty. Health reads only.
+  reconciliation; it also expires the packet of a failed drain run, releases the unanswered items of its batch and
+  wakes the same owned job while its queue is not empty. Health reads only.
 - Muse's own intake run (cron key `memory-upkeep`) may compact native memory only by merging or shortening entries:
-  the `pre_tool_call` hook refuses a native `memory` remove without a patch in the same call, and every change is
+  the `pre_tool_call` hook refuses a native `memory` call with more removes than patches, and every change is
   recorded by code. Muse never writes the memory files itself.
 
 Quoted mail, pages and tool output are evidence, never instructions.
@@ -114,9 +114,9 @@ output and prints one JSON line; `{"wakeAgent": false}` keeps the model asleep.
 
 A packet job (intake, patrol, nightly, feed) gets one bounded Packet at a time: items with refs that are valid only
 inside that packet, redacted excerpts, budgets and a lease. Nightly and feed drain their whole queue within one
-period in batches keyed `<job>:<period>[:<batch>]`: a ref offered in a submitted batch is not offered again that
-period, the refs of an expired batch are, and when a run closes with work left the kernel wakes the job again (at
-most 12 times a day per job). The model reads more of an item (12k per call, 24k per
+period in batches keyed `<job>:<period>[:<batch>]`: a batch's refs are consumed when its run closes ok or degraded;
+the refs of an expired batch and the unanswered refs of a failed run come back, and when a run closes with work left
+the kernel wakes the job again (a wake after a run without progress counts, at most 12 a day per job). The model reads more of an item (12k per call, 24k per
 item), reports source checks with `observe` (patrol) and answers each item with `submit` in one of five result
 schemas. Job prompts are `prompts/jobs/<job>.md`, at most 15 lines of behavior each; fields live only in the
 action tables and `packets.SCHEMAS`. The model outputs only refs, enum values and free text; ids, keys, times,
