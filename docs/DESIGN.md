@@ -61,7 +61,7 @@ transaction; transitions are CAS on `state + version`. Each kind has one machine
 | source | ok / limited / failing / unavailable | — |
 | finding | open → resolved / dismissed | 14 days → dismissed |
 | memory_receipt | pending_notice → noticed | 24h |
-| packet | issued → submitted / expired | lease = the job period; nightly and feed batches min(period, 2h) |
+| packet | issued → submitted / expired | lease = the job period; intake, nightly and feed batches min(period, 2h) |
 | run | running → ok / degraded / failed / abandoned | 2h; decided by the host's execution state |
 | tombstone | forgotten | — |
 
@@ -115,10 +115,11 @@ output and prints one JSON line; `{"wakeAgent": false}` keeps the model asleep. 
 model: it prints the message itself (plain text, empty when nothing is due) and Hermes delivers that stdout.
 
 A packet job (intake, patrol, nightly, feed) gets one bounded Packet at a time: items with refs that are valid only
-inside that packet, redacted excerpts, budgets and a lease. Nightly and feed drain their whole queue within one
+inside that packet, redacted excerpts, budgets and a lease. Intake, nightly and feed drain their whole queue within one
 period in batches keyed `<job>:<period>[:<batch>]`: a batch's refs are consumed when its run closes ok or degraded;
 the refs of an expired batch and the unanswered refs of a failed run come back, and when a run closes with work left
-the kernel wakes the job again (a wake after a run without progress counts, at most 12 a day per job). The model reads more of an item (12k per call, 24k per
+the kernel wakes the job again, however many batches that takes; only three batches in a row that handle nothing (a run
+that keeps failing) stop the relay until the next period, and Health reports it (`drain_stopped`). The model reads more of an item (12k per call, 24k per
 item), reports source checks with `observe` (patrol) and answers each item with `submit` in one of five result
 schemas. Job prompts are `prompts/jobs/<job>.md`, at most 15 lines of behavior each; fields live only in the
 action tables and `packets.SCHEMAS`. The model outputs only refs, enum values and free text; ids, keys, times,
@@ -127,8 +128,8 @@ counts and state names come from code.
 ## Flows
 
 1. **Intake.** Private user turns from `USER_SOURCES` are read through the host, redacted and cut to head/tail
-   excerpts past 8k, and recorded as Signals while the watermark advances. A packet holds at most 15 signals and 24k
-   characters; each gets a disposition. A goal hint touches an open goal or proposes a new one for nightly. Signals
+   excerpts past 8k, and recorded as Signals while the watermark advances. Each hourly period drains every waiting
+   Signal in batches (3–15 adaptive, at most 24k excerpt characters each); each gets a disposition. A goal hint touches an open goal or proposes a new one for nightly. Signals
    left after 3 packets or 72h are parked, counted by Health, and never block the watermark. When a native memory
    store is at least 90% full (read through `HostAdapter.memory`), the packet names it (`memory_full`, at most 3
    packets a day) and the model may merge or shorten entries in the batch that saves the new fact; each change goes
@@ -149,7 +150,7 @@ counts and state names come from code.
    that no notice waits for are removed by install and by each deliver run.
 3. **Nightly.** Every due goal gets an assessment and progress note (`done_suggested` never closes a goal); the
    next check moves to 1 day − 6h so the goal is due again the next night. Code picks review candidates from the last
-   72h by rules, oldest first, at most 30 a night; the overflow waits and Health reports it. The model's `agent_gap`
+   72h by rules, oldest first, all of them the same night (no per-night cap). The model's `agent_gap`
    becomes a Finding with evidence and `latent_need` an Idea. Goal proposals (disposed in the last 7 days) are
    offered once and may become goals. In the last batch, dream and alignment are written when the day changed
    something, listing every native memory change.

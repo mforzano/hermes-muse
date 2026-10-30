@@ -52,7 +52,7 @@ Hermes Muse 是一个独立的 Hermes 插件（standalone plugin，MIT）。它�
 | `source` | `ok / limited / failing / unavailable` 任意互转 | `source_id`（`<kind>:<account>`） | 无 | 只有 `sources.record`（经 `observe`）：同一 limitation_code 连续 5 次 → `limited`；error → `failing`，连续 3 次置 `health` |
 | `finding` | `open → resolved / dismissed` | `review:<session>:<message>` | `open`：14 天 → `dismissed` | `review.record`（payload 带 `evidence`）；`records.feedback` |
 | `memory_receipt` | `pending_notice → noticed`；`noticed → pending_notice` | `tool_call_id` | `pending_notice`：24h → `noticed` | `receipts.record/due`；只记 failed/staged，staged 一天后再提示一次 |
-| `packet` | `issued → submitted / expired` | `<job>:<周期序号>`；drain job（nightly、feed）第 1 批起加 `:<批次>` | `issued`：租约（intake/patrol 等于 job 周期；drain job 为 min(周期, 2h)）→ `expired` | `packets.build/submit/close`（run 结束时：issued → `expired`；失败 run 的 submitted 批次标记 `released`） |
+| `packet` | `issued → submitted / expired` | `<job>:<周期序号>`；drain job（intake、nightly、feed）第 1 批起加 `:<批次>` | `issued`：租约（patrol 等于 job 周期；drain job 为 min(周期, 2h)，intake 即 1h）→ `expired` | `packets.build/submit/close`（run 结束时：issued → `expired`；失败 run 的 submitted 批次标记 `released`） |
 | `run` | `running → ok / degraded / failed / abandoned` | 宿主 execution ID | `running`：2h，exit —（由 `runs.check` 依据宿主终态决定） | `runs.start/check`；结果来自宿主执行状态和 packet 处置情况，**不来自模型自评** |
 | `tombstone` | `forgotten`（终态） | 被遗忘对象的 natural_key | 无 | `records.forget`；之后的旧证据不得重建该对象 |
 
@@ -82,7 +82,7 @@ Hermes Muse 是一个独立的 Hermes 插件（standalone plugin，MIT）。它�
    - GOAL.md 被删除时，把镜像置为 `cancelled`；
    - 停止和续期 watch；
    - 投递与对账（只在 muse-deliver run 里认领和打印）；清理已结清的 0.4.1 one-shot 投递 job；
-   - drain job 的 run 结束后：把仍 issued 的 packet 置为 `expired`；run 失败或被放弃时释放其 submitted 批次中未作答的条目；本周期还有剩余时唤醒同一个 owned job（`cron.wake`）。有进展的 run（ok/degraded 且处理过条目）之后的唤醒不计数；其余唤醒每 job 每天最多 12 次；
+   - drain job 的 run 结束后：把仍 issued 的 packet 置为 `expired`；run 失败或被放弃时释放其 submitted 批次中未作答的条目；本周期还有剩余时唤醒同一个 owned job（`cron.wake`），批数不设上限；只有本周期最近连续 `runs.STALLS`（3）批都没有处理任何条目时（run 反复失败）才停止接力，剩余留到下个周期，由 Health `drain_stopped` 报告；
    - 在 Muse 自己的 intake run（cron key `memory-upkeep`）里拒绝“直接删除条目”的原生 memory 写入（`pre_tool_call` 否决：同一次调用里 remove 数不得超过 patch 数，即合并；`operations` 按 Hermes 的真值判断，空列表视为单条动作），并记录每次改动的前后文本。
 6. **Health** 只读，不修复任何东西。
 
@@ -118,10 +118,10 @@ owned job 由 `install.JOBS` 定义，cron key 沿用 0.3.x 的名字，这样 j
 1. **信号 → Intake**：
    - 用户在私聊发出消息后，`host.sessions.user_turns()` 读取它：只收白名单来源，先脱敏，超过 8k 的只取头尾摘录；
    - `intake.capture()`（在 tick 中）把它记成 `signal(new)`，并推进水位 `meta.intake_since`；
-   - intake packet 最多 15 条，摘录合计不超过 24k。模型对每条 submit 一个 disposition，`intake.dispose()` 把 signal 置为 `disposed`；
+   - intake 是 drain job（分批排空）：每小时的 cron 开启一个周期，本周期的全部 `new` signal 分批 `intake:<周期>[:<批次>]` 处理，`runs.relay` 接力唤醒；每批大小由 `size()` 决定（3–15 条，按耗时自适应），摘录合计不超过 24k，`context.remaining` 是本批之后的剩余数；最后一批之后到达的消息等下次唤醒或下个周期。模型对每条 submit 一个 disposition，`intake.dispose()` 把 signal 置为 `disposed`；
    - `goal_hint` 指向某个开放目标时，触碰该目标；为 `new` 时，进入 nightly 的建目标提案；
    - 3 次 packet 或 72h 后仍未处置的 signal 转为 `parked`，计入 Health，**不阻塞水位**；
-   - 记忆整理：有条目时 `upkeep.full` 经 `host.memory.stores()` 读用量，任一 store ≥90% 时 packet 带 `context.memory_full`（每天最多 3 次）。模型只能在保存新事实的同一个原生 memory batch 里**合并重复或缩短冗长条目**，不得直接删除；`hooks.pre_tool` 否决违规写入，`hooks.post_tool` 用前后快照由 `upkeep.record` 把改动写进 `meta.memory_changes` 和当天的 `memory/<日期>.md`。仍放不下的事实不作答，下小时重试。Muse 从不写记忆文件，`memory.write_approval` 保持关闭（它会把 cron 的每次写入都暂存待批）。
+   - 记忆整理：有条目时 `upkeep.full` 经 `host.memory.stores()` 读用量，任一 store ≥90% 时 packet 带 `context.memory_full`（每天最多 3 次）。模型只能在保存新事实的同一个原生 memory batch 里**合并重复或缩短冗长条目**，不得直接删除；`hooks.pre_tool` 否决违规写入，`hooks.post_tool` 用前后快照由 `upkeep.record` 把改动写进 `meta.memory_changes` 和当天的 `memory/<日期>.md`。仍放不下的事实不作答，下个周期重试。Muse 从不写记忆文件，`memory.write_approval` 保持关闭（它会把 cron 的每次写入都暂存待批）。
 2. **Patrol → Notice → 投递**：
    - patrol 每轮都唤醒，因为外部来源只有模型能读。packet 包含 `context.sources_due`（已过最小检查间隔的来源）和到期的 Notice（证据超过 1 天，或可发送已超过 6h）；
    - 模型先 `observe`，得到 `o1, o2…` 这些 ref，再 `submit` verdict、text、priority 和 topic；
@@ -138,7 +138,7 @@ owned job 由 `install.JOBS` 定义，cron key 沿用 0.3.x 的名字，这样 j
    - 队列按顺序为：全部到期目标（不封顶，deadline 早的在前）、7 天内 `goal_hint=new` 且未提过的提案、复盘候选；每批大小由 `size()` 决定，`context.remaining` 是本批之后的剩余数；
    - 批次的条目在其 run 以 ok/degraded 结束时算作已消费，当晚不再提供；expired 批次的条目、以及 run 失败或被放弃的批次中未作答的条目会重新提供；run 结束后由 `runs.relay` 接力唤醒；
    - 对到期目标给出 assessment 和 progress_note；`done_suggested` 只是提示，不关闭目标；
-   - 复盘候选由代码按规则在 72h 窗口内挑选，从最老的开始，每晚最多 `review.PER_NIGHT`（30）条，溢出数写入 `context.review_overflow`，由 Health 报告。模型的判断中，`agent_gap` 生成 Finding，`latent_need` 生成 Idea；
+   - 复盘候选由代码按规则在 72h 窗口内挑选（`review.window` 分页读完整个窗口），从最老的开始，全部进入当晚队列，不设每晚上限。模型的判断中，`agent_gap` 生成 Finding，`latent_need` 生成 Idea；
    - signal 提案由模型决定是否 `create` 目标；批次的 run 以 ok/degraded 结束时，代码给其中每个提案写 `proposed_at`（`packets.close`），之后不再提出；
    - 只在 `remaining` 为 0 的批次里、当天有实质变化或 `context.memory_changes` 不为空时，用 `content_write` 写 dream 和 alignment，并列出每条记忆改动；该批的 run 以 ok/degraded 结束时 `meta.memory_reported_until` 前移（没有条目的批次也一样，所以不会空唤醒）。
 4. **Feed**（分批排空）：每个 active interest 最多每 20h 研究一次，最久未查的在前；每个作答的兴趣都由 `packets.feed_result` 写 `checked_at`。模型写文章并附 `source_refs`，生成 `feed` 实体，`records.write_feed` 把正文写入 `feed/<key>.md`，静默发布。一篇文章可附一条 `notice`（每个 packet 最多 1 条，priority 只能 ordinary/time_sensitive，`source_ref` 必须是文章来源之一）：经 `notifier.draft` 用 `src:` 强键去重（任一来源 7 天内已有 LIVE notice 时返回 existing），之后走完整门控、与 patrol 共享预算；兴趣不再 active 时由代码撤回。
@@ -282,7 +282,7 @@ Hermes 宿主
 | cron key / job | owned job 的脚本键（沿用 0.3.x 名，如 `memory-upkeep`）/ 它运行的逻辑 job（如 `intake`） | `install.JOBS` |
 | packet job | 签发 Packet 的 job：intake、patrol、nightly、feed | `packets.JOBS` |
 | job prompt | 一个 job 的行为说明，唯一位置是 `prompts/jobs/<job>.md` | `install.jobs` |
-| drain job / batch / relay | 同一周期内分批排空队列的 packet job（nightly、feed）/ 其中一个 packet / run 结束后过期未交批次并唤醒 job 接着跑 | `packets.JOBS[...]["drain"]`、`packets.plan`、`runs.relay` |
+| drain job / batch / relay | 同一周期内分批排空队列的 packet job（intake、nightly、feed）/ 其中一个 packet / run 结束后过期未交批次并唤醒 job 接着跑，连续 3 批无进展才停 | `packets.JOBS[...]["drain"]`、`packets.plan`、`runs.relay` |
 | memory upkeep | intake 在原生记忆接近满额时合并或缩短条目；Muse 只测量、守卫、记录 | `kernel/upkeep.py`、`host.memory.stores`、`hooks.pre_tool/post_tool` |
 | Packet / item / ref / budget / lease | 一个 packet job 每个时刻唯一 issued 的有界工作包 / 其中的一条工作 / 条目的引用（只在本 packet 内有效）/ 上限 / 租约 | kind `packet`、`kernel/packets.py` |
 | result schema | 每种 item 的 submit 结果形状（共 5 种） | `packets.SCHEMAS` |
@@ -528,7 +528,7 @@ Hermes 宿主
 - **宿主读失败时不登记 run**：`entry.output` 调用 `cron.outcome` 得到 `host_error` 时，不调 `start_run`。这一轮的 run 不会被记录，它的结果也就不会计入 Health 的 `runs_ok`。
 - **没有会话行的会话不能用 Muse 工具**：`caller()` 在没有会话行时只认宿主的 `platform` kwarg，而工具 handler（`surface.register`）不传 platform，所以这种会话会被判为 `other` 而拒绝。目前按“工具调用总在 Hermes 写入会话行之后发生”处理，属于 fail closed。
 - **cron 调用方没有核对 job 归属**：`caller()` 返回 `cron` 只说明是某个 cron 会话，不一定是 Muse 的 job run。用户自己的 cron 也能用 cron 允许的 `muse_manage` 动作（read、calendar_view、写 note/dream/alignment）；`muse_job` 还需要猜中 packet ID。
-- **drain 接力依赖登记的 run**：上一条缺口导致没有 run 时，这一批不会触发接力；packet 2h 后过期，剩余条目由 Health `goals_missed` 报告，下一晚优先处理；这一批的提案不写 `proposed_at`、记忆改动不算已报告，下一晚再出现。
+- **drain 接力依赖登记的 run**：上一条缺口导致没有 run 时，这一批不会触发接力；packet 在租约（intake 1h，nightly/feed 2h）后过期，剩余条目由 Health `drain_stopped`（以及 nightly 的 `goals_missed`）报告，下个周期优先处理；这一批的提案不写 `proposed_at`、记忆改动不算已报告，下一晚再出现。
 - **记忆快照只在同一进程内配对**：`pre_tool_call` 的快照存在 hooks 的进程内存里；若别的插件否决了该调用、`post_tool_call` 不来，快照留到进程结束。
 - **Feed 记录与正文之间崩溃会丢正文**：`feed` 实体写入后、`records.write_feed` 落盘前如果崩溃，正文会丢失，而且无法恢复：重新提交会返回 `existing`，不再写正文。
 

@@ -1,6 +1,6 @@
 # Conversation review
 
-Each night Muse code picks turns from the last three days of private conversations, oldest first and at most 30 a night, using fixed rules:
+Each night Muse code picks turns from the last three days of private conversations, oldest first and all of them the same night, using fixed rules:
 - a completion claim with no successful write in that turn;
 - a failed tool call that was never retried successfully;
 - a user correction or repeated request;
