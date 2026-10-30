@@ -1,3 +1,18 @@
+# 0.4.4 — Fixed batch sizes; declined and capped goal proposals no longer stall nightly (2026-10-30)
+
+- Packets: each job takes a fixed item count from `packets.JOBS` (intake 15, patrol 8, nightly 10, feed 3), fewer
+  only when excerpts pass 24k characters. The adaptive size (median seconds per item of recent batches) is gone with
+  the packet's `per_item` and `budget.seconds`: one long failed batch, or the fixed overhead of small batches, kept
+  nightly at 2 items a batch. Leases are unchanged (a 10-item nightly batch runs minutes against a 2h lease).
+- Nightly proposals: a `goals` result may `decline` a proposal (`signal_ref`, `reason`); it counts as handled, so a
+  batch of declines is progress and the relay goes on. Before, the only way to say no was to leave the item out,
+  which counted as no progress, and three such batches ended the relay.
+- Nightly proposals are offered no more per day than cron may still create (5); the rest wait for the next period
+  instead of being refused. Only created or declined proposals are marked proposed when a batch closes; an
+  unanswered or refused one comes back the next period instead of being dropped.
+- Runs: a host execution in `unknown` (the host lost the process) closes as `failed`, so its batch's unanswered refs
+  come back; it closed as `degraded` and consumed them.
+
 # 0.4.3 — Intake drains its queue; no volume caps on the normal path (2026-10-30)
 
 - Intake is a drain job like nightly and feed: the hourly cron opens a period and every waiting Signal is worked in
