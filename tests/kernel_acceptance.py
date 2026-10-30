@@ -481,7 +481,8 @@ def batch_size(job, n):
 
 
 def part_drain(base):
-    """Nightly drains every due goal in batches: relay wakes, failed batch re-offered, skipped goal reported."""
+    """Nightly drains every due goal in batches: relay wakes, failed batch re-offered, skipped goal reported;
+    only wakes after a run without progress are capped."""
     clock = [T0 + 17 * H + 20 * 60]  # 03:20 next day
     night = clock[0]
     host = FakeHost(lambda: clock[0])
@@ -492,7 +493,7 @@ def part_drain(base):
     k.tick()
     restore = batch_size("nightly", 2)
     try:
-        names, offered, most_issued, same, n = [], [], 0, True, 0
+        names, offered, most_issued, same, n, released, between = [], [], 0, True, 0, None, None
         while n < 40:
             packet = k.build_packet("nightly")
             if packet["id"] is None:
@@ -506,31 +507,43 @@ def part_drain(base):
             k.start_run("nightly", job_id="job-n", execution_id=f"e{n}", packet_id=packet["id"])
             if n == 2:  # this run dies before submitting
                 host.outcomes["e2"] = {"status": "failed"}
+            elif n == 4:  # this run submits one goal, then dies: the other comes back
+                k.submit(packet["id"], [{"goal_id": refs[0], "assessment": "on_track"}])
+                host.outcomes["e4"], released = {"status": "failed"}, refs[1]
             else:
                 k.submit(packet["id"], [{"goal_id": r, "assessment": "on_track"} for r in refs if r != "g03"])
                 host.outcomes[f"e{n}"] = {"status": "completed"}
             clock[0] += 60
             k.tick()
-        write_goal(home, "g99", no_fade=True, next_check_at=clock[0] - 1)
-        k.tick()
-        k.start_run("nightly", job_id="job-n", execution_id="e-extra")
-        host.outcomes["e-extra"] = {"status": "completed"}
-        k.tick()
+            if n == 1:  # between two batches: the night is still in progress
+                between = invariants.goals(k.store, clock[0])[0]["level"]
+        drained = len(host.woken)
+        for i in range(14):  # a goal no run gets to: every wake is without progress
+            write_goal(home, "g99", no_fade=True, next_check_at=clock[0] - 1)
+            k.tick()
+            k.start_run("nightly", job_id="job-n", execution_id=f"e-stuck{i}", packet_id=k.build_packet("nightly")["id"])
+            host.outcomes[f"e-stuck{i}"] = {"status": "failed"}
+            clock[0] += 60
+            k.tick()
     finally:
         restore()
     period = int(night // D)
     checked = [i for i in range(23) if goals.read(home, f"g{i:02d}")[0]["next_check_at"] > night]
-    missed = invariants.goals(k.store, clock[0])[0]
+    missed = invariants.goals(k.store, clock[0] + 3 * H)[0]
     expired = [p for p in k.store.query("packet", state="expired")]
     check("N1 drain: every due goal checked tonight in batches nightly:P, nightly:P:1…; one issued at a time; "
           "a failed batch expires and its goals come back; a skipped goal is not offered again",
           len(checked) == 22 and 3 not in checked and names[:3] == [f"nightly:{period}", f"nightly:{period}:1", f"nightly:{period}:2"]
-          and most_issued == 1 and same and len(expired) == 1 and offered.count("g03") == 1 and offered.count(offered[2]) == 2
-          and offered[0] == "g22", {"batches": n, "checked": len(checked), "names": names[:3], "expired": len(expired)})
-    check("N2 relay: a closed drain run wakes the job while work remains, at most 12 a day",
-          len(host.woken) == 12 and set(host.woken) == {"job-n"}, {"woken": len(host.woken)})
-    check("N3 Health goals_missed names only the goal left unchecked last night; assessed goals are due the next night",
-          missed["id"] == "goals_missed" and missed["level"] == "medium" and missed["evidence"] == ["goal:g03"]
+          and most_issued == 1 and same and offered.count("g03") == 1 and offered.count(offered[2]) == 2
+          and offered.count(released) == 2 and offered.count(offered[6]) == 1 and offered[0] == "g22",
+          {"batches": n, "checked": len(checked), "names": names[:3], "expired": len(expired)})
+    check("N2 relay: every batch with work left wakes the job; after runs without progress at most 12 a day",
+          drained == n - 1 and len(host.woken) - drained == 10 and set(host.woken) == {"job-n"},
+          {"drained": drained, "batches": n, "stuck_wakes": len(host.woken) - drained})
+    check("N3 Health goals_missed: quiet between two batches; then names only the goals left unchecked; "
+          "assessed goals are due the next night",
+          between == "ok" and missed["id"] == "goals_missed" and missed["level"] == "medium"
+          and missed["evidence"] == ["goal:g03"]
           and len([g for g in k.store.due(night + D, kind="goal") if g["natural_key"] != "g99"]) == 23,
           {"missed": [missed["level"], missed["evidence"]]})
     return k
@@ -550,22 +563,26 @@ def part_reviews(base):
         host.add(f"s{i}", "user", f"deploy service {i}", T0 - 40 * H + i * H)
         host.add(f"s{i}", "assistant", f"Done, deployed service {i}.", T0 - 40 * H + i * H + 1)
     judged, kinds, overflow = 0, [], None
-    for _ in range(6):
+    for n in range(6):
         packet = seen(k.build_packet("nightly"))
         if packet["id"] is None:
             break
         kinds += [i["kind"] for i in packet["items"]]
         overflow = packet["context"]["review_overflow"]
+        k.start_run("nightly", job_id="job-n", execution_id=f"r{n}", packet_id=packet["id"])
         out = k.submit(packet["id"], [{"candidate_ref": i["ref"], "verdict": "fine", "reason": "verified the deploy"}
                                       for i in packet["items"] if i["kind"] == "review"])
         judged += sum("error" not in r for r in out)
+        host.outcomes[f"r{n}"] = {"status": "completed"}
+        k.tick()
+        clock[0] += 60
     level = {f["id"]: f for f in invariants.findings(k.store, clock[0])}["review_overflow"]
     proposed = k.store.query("signal", natural_key=old)[0]["payload"].get("proposed_at")
     clock[0] = T0 + D
     second = k.build_packet("nightly")
     check("N4 review cap: 30 of 40 flagged turns judged tonight, overflow 10 reported low; the rest the next night; "
-          "a proposal disposed two days ago is offered once",
-          judged == 30 and overflow == 10 and level["level"] == "low" and kinds.count("signal") == 1 and proposed == T0
+          "a proposal disposed two days ago is offered once; Health's cap is the kernel's",
+          invariants.REVIEWS == review.PER_NIGHT and judged == 30 and overflow == 10 and level["level"] == "low" and kinds.count("signal") == 1 and proposed == T0
           and [i["kind"] for i in second["items"]] == ["review"] * 10,
           {"judged": judged, "overflow": overflow, "level": level["level"], "second": len(second["items"])})
     return k
@@ -653,9 +670,11 @@ def part_upkeep(base):
           packet["context"]["memory_full"] == [{"target": "user", "usage": "99% 1789/1800"}] and asks == [True, True, False]
           and low == [] and failed == [], {"context": packet.get("context"), "asks": asks})
     remove = {"action": "remove", "target": "user", "old_text": "tea"}
-    check("U2 guard: a remove needs a patch in the same batch (merge); add/patch pass",
-          upkeep.guard(remove) and upkeep.guard({"operations": [remove, remove]})
-          and upkeep.guard({"operations": [{"action": "patch", "old_text": "a", "content": "b"}, remove]}) is None
+    merge = {"action": "patch", "old_text": "a", "content": "b"}
+    check("U2 guard: each remove needs its own patch in the same batch (merge); empty operations is the single action; add/patch pass",
+          upkeep.guard(remove) and upkeep.guard({"operations": [remove, remove]}) and upkeep.guard({**remove, "operations": []})
+          and upkeep.guard({"operations": [merge, remove, remove]})
+          and upkeep.guard({"operations": [merge, remove]}) is None
           and upkeep.guard({"action": "add", "content": "x"}) is None, "")
     before = {"user": {"entries": ["Likes tea", "Likes green tea; password: hunter2xyz", "Lives in Porto"], "chars": 0, "limit": 1800}}
     after = {"user": {"entries": ["Likes green tea", "Lives in Porto", "Moved to Lisbon"], "chars": 0, "limit": 1800}}
@@ -666,11 +685,14 @@ def part_upkeep(base):
     clock[0] = T0 + 17 * H
     nightly = seen(k.build_packet("nightly"))
     listed = nightly["context"]["memory_changes"]
-    k.submit(nightly["id"], [])
-    check("U3 every merge/shorten is recorded in the day's note and handed to the nightly dream once (redacted)",
+    k.start_run("nightly", job_id="job-n", execution_id="u3", packet_id=nightly["id"])
+    host.outcomes["u3"] = {"status": "completed"}  # the run wrote the dream without a submit (no items)
+    k.tick()
+    check("U3 every merge/shorten is recorded in the day's note (redacted) and handed to the nightly dream once; "
+          "the closed run reports it, no relay wake",
           added == [] and changes[0]["old"] == before["user"]["entries"][:2] and "Likes tea" in note and "Moved to Lisbon" in note
-          and nightly["items"] == [] and len(listed) == 1 and "hunter2xyz" not in json.dumps(listed)
-          and k.build_packet("nightly")["id"] is None, {"note": note[:300], "listed": listed})
+          and "hunter2xyz" not in note and nightly["items"] == [] and len(listed) == 1 and "hunter2xyz" not in json.dumps(listed)
+          and host.woken == [] and k.build_packet("nightly")["id"] is None, {"note": note[:300], "listed": listed})
     return k
 
 
