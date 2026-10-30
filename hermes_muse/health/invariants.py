@@ -105,13 +105,14 @@ def notices(store, now):
     for n in store.query("notice", state="sent", since=now - 7 * D):
         if n["payload"].get("strong_key", n["natural_key"].startswith("src:")):
             groups[n["natural_key"]].append(n)
-    dups = {k: g for k, g in groups.items() if len(g) > 1}
-    urgent = any(n["payload"].get("priority") == "urgent" for g in dups.values() for n in g)
+    # only v2 deliveries (delivery_key) make a duplicate: migrated 0.3.x sends alone are history, not a dedupe failure
+    dups = {k: g for k, g in groups.items() if len(g) > 1 and any(n["payload"].get("delivery_key") for n in g)}
+    urgent = any(n["payload"].get("priority") == "urgent" and n["payload"].get("delivery_key") for g in dups.values() for n in g)
     hanging = [n for n in store.query("notice", state=("drafted", "scheduled"))
                if n["payload"].get("next_eligible", n["state_since"]) < now - 6 * H]
     closed = store.query("notice", state="closed_unknown", since=now - 7 * D)
     return [item("notice_duplicates", ("high" if urgent else "medium") if dups else "ok", len(dups), 0,
-                    f"{len(dups)} source keys sent more than once in 7 days",
+                    f"{len(dups)} source keys sent again by v2 within 7 days",
                     [n["id"] for g in dups.values() for n in g], "Notifier dedupe against sent history failed (A5)"),
             item("notice_hanging", "medium" if hanging else "ok", len(hanging), 0,
                     f"{len(hanging)} notices eligible for over 6h but not decided", ids(hanging),
@@ -125,7 +126,8 @@ def deliveries(store, executions, jobs, now):
     """Delivery failure within one cycle: host executions of Muse jobs, and v2 notices that failed or went unknown."""
     failed = [e for e in executions if e["delivery_outcome"] in ("failed", "not_configured")]
     broken = [e for e in executions if e["status"] in ("failed", "unknown")]
-    lost = store.query("notice", state=("failed", "unknown"), since=now - D) if store else []
+    lost = [n for n in store.query("notice", state=("failed", "unknown"), since=now - D)
+            if n["payload"].get("delivery_key")] if store else []  # migrated 0.3.x deliveries have no delivery_key
     errors = sorted({str(e["error"] or jobs.get(e["job_id"], {}).get("last_delivery_error") or e["delivery_outcome"])[:160]
                      for e in failed})
     return [item("delivery", "high" if failed or lost else "ok", len(failed) + len(lost), 0,
