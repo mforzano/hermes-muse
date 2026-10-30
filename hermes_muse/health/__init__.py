@@ -3,7 +3,7 @@
 Runs as a no_agent cron (`health_entry.py`, every 30 minutes). It opens Store v2 read-only, runs the
 HostAdapter probes and the invariants, and writes `<home>/muse/health.json`. Alert exits, none of them
 through the Muse Notifier:
-  1. main-session injection: `injection(home)` returns one line while any high finding is open;
+  1. main-session injection: `injection(home)` returns one line while any high health item is open;
   2. Dashboard: `load(home)` behind the plugin's `/health` route;
   3. cron stdout: `run()` returns a message only when the alert set changes (empty stdout is silent);
   4. optional `health_deliver` setting: the same message sent to a second Hermes route.
@@ -52,20 +52,20 @@ def iso(ts):
 
 
 def check(adapter, now=None):
-    """All findings for one profile; never writes the Store and never raises on host errors."""
+    """All health items for one profile; never writes the Store and never raises on host errors."""
     from ..kernel.store import Store
     now = time.time() if now is None else now
-    findings, store = [], None
+    items, store = [], None
     db = adapter.home / "muse" / "state-v2.db"
     try:
         if not db.is_file():
             raise FileNotFoundError(db)
         store = Store(db, readonly=True)
         store.meta("migration")  # opens the file once so an unreadable db fails here
-        findings.append(inv.finding("store", "ok", "readable", "readable", str(db)))
+        items.append(inv.item("store", "ok", "readable", "readable", str(db)))
     except Exception as exc:
         store = None
-        findings.append(inv.finding("store", "high", "unreadable", "readable", f"{type(exc).__name__}: {exc}",
+        items.append(inv.item("store", "high", "unreadable", "readable", f"{type(exc).__name__}: {exc}",
                                     fix="Run the v2 migration, or restore muse/state-v2.db from backup"))
     captured = None
     if store:
@@ -73,27 +73,27 @@ def check(adapter, now=None):
             try:
                 found = checker(store, now)
             except Exception as exc:  # one broken invariant must not hide the others
-                found = inv.finding(checker.__name__, "medium", "error", "computable", f"{type(exc).__name__}: {exc}")
-            findings += found if isinstance(found, list) else [found]
+                found = inv.item(checker.__name__, "medium", "error", "computable", f"{type(exc).__name__}: {exc}")
+            items += found if isinstance(found, list) else [found]
         captured = {s["payload"].get("source") for s in store.query("signal", since=now - inv.D)} - {None}
-    findings += inv.probes(adapter.probe(captured_sources=captured, now=now))
+    items += inv.probes(adapter.probe(captured_sources=captured, now=now))
     owned = adapter.cron.jobs()
-    findings += inv.deliveries(store, adapter.cron.executions(now - inv.D), owned, now)
-    findings += inv.tools(adapter.sessions.tool_results(now - inv.D))
-    findings += inv.jobs(owned, now)
-    findings.append(inv.host_faults(list(adapter.faults)))
-    return findings
+    items += inv.deliveries(store, adapter.cron.executions(now - inv.D), owned, now)
+    items += inv.tools(adapter.sessions.tool_results(now - inv.D))
+    items += inv.jobs(owned, now)
+    items.append(inv.host_faults(list(adapter.faults)))
+    return items
 
 
-def fingerprint(findings):
-    return hashlib.sha256(json.dumps(sorted((f["id"], f["level"]) for f in findings if f["level"] in ALERT))
+def fingerprint(items):
+    return hashlib.sha256(json.dumps(sorted((f["id"], f["level"]) for f in items if f["level"] in ALERT))
                           .encode()).hexdigest()[:16]
 
 
 def message(report):
     alerts = [f for f in report["invariants"] if f["level"] in ALERT]
     if not alerts:
-        return f"Muse health ({report['profile']}) recovered: no medium or high findings."
+        return f"Muse health ({report['profile']}) recovered: no medium or high health items."
     lines = [f"Muse health ({report['profile']}): {report['level']}"]
     lines += [f"- {f['level']} {f['id']}: {f['detail'][:240]}" + (f" Fix: {f['fix'][:200]}" if f["fix"] else "")
               for f in sorted(alerts, key=lambda f: -inv.LEVELS.index(f["level"]))]
@@ -115,12 +115,12 @@ def run(home=None, *, now=None, adapter=None):
     now = time.time() if now is None else now
     old = load(adapter.home) or {}
     first = {f["id"]: f.get("first_seen") for f in old.get("invariants", []) if f["level"] != "ok"}
-    findings = check(adapter, now)
-    for f in findings:
+    items = check(adapter, now)
+    for f in items:
         f["first_seen"] = (first.get(f["id"]) or iso(now)) if f["level"] != "ok" else None
     report = {"schema": SCHEMA, "profile": adapter.home.name, "generated_at": iso(now), "generated_ts": now,
-              "level": inv.worst(*(f["level"] for f in findings)), "alert_fingerprint": fingerprint(findings),
-              "invariants": findings, "faults": list(adapter.faults)}
+              "level": inv.worst(*(f["level"] for f in items)), "alert_fingerprint": fingerprint(items),
+              "invariants": items, "faults": list(adapter.faults)}
     changed = report["alert_fingerprint"] != old.get("alert_fingerprint", fingerprint([]))
     text = message(report) if changed else ""
     target = adapter.config.get().get("health_deliver")
@@ -132,7 +132,7 @@ def run(home=None, *, now=None, adapter=None):
 
 
 def injection(home, now=None):
-    """One main-session line while a high finding is open or Health itself stopped; None otherwise."""
+    """One main-session line while a high health item is open or Health itself stopped; None otherwise."""
     report, now = load(home), time.time() if now is None else now
     if not report:
         return None
