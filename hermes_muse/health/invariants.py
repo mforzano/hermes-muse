@@ -19,7 +19,8 @@ LEVELS = ("ok", "low", "medium", "high")
 PROBE_LEVEL = {"ok": "ok", "degraded": "medium", "missing": "high"}
 MINOR_PROBES = {"config_location", "home"}  # degraded here never stops a feature
 EVIDENCE = 10
-REVIEWS = 30  # kernel.review.PER_NIGHT
+REVIEWS = 30  # kernel.review.PER_NIGHT (kernel_acceptance N4 asserts they match)
+DRAIN_GRACE = 3 * H  # a nightly drain between two batches is still in progress
 MEMORY_NEAR_FULL = 0.98
 
 
@@ -159,13 +160,17 @@ def runs(store, now):
 
 
 def last_night(store, now):
-    """(start, packets) of the latest finished nightly period: no batch issued, no nightly run running."""
+    """(start, packets) of the latest finished nightly period: no batch issued, no nightly run running, and not
+    between two batches (the latest left work and was issued within DRAIN_GRACE)."""
     nightly = [p for p in store.query("packet", since=now - 3 * D) if p["payload"].get("job") == "nightly"]
     if any(p["state"] == "issued" for p in nightly) or any(r["payload"].get("job") == "nightly" for r in store.query("run", state="running")):
         return None, []
     if not nightly:
         return now - 3 * D, []  # no nightly packet for 3 days: every goal due since then was missed
-    period = max(nightly, key=lambda p: p["payload"]["issued_at"])["natural_key"].split(":")[:2]
+    latest = max(nightly, key=lambda p: p["payload"]["issued_at"])
+    if (latest["payload"].get("context") or {}).get("remaining") and latest["payload"]["issued_at"] > now - DRAIN_GRACE:
+        return None, []
+    period = latest["natural_key"].split(":")[:2]
     night = [p for p in nightly if p["natural_key"].split(":")[:2] == period]
     return min(p["payload"]["issued_at"] for p in night), night
 
