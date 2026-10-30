@@ -7,7 +7,8 @@
 4. Refresh the Muse cron jobs in place. Keys keep their 0.3.x names, so job ids, user schedules, routes
    and pauses survive and external callers keep their job references; each gets `prompts/jobs/<job>.md`
    and runs cron_entry.py. The monthly audit is paused (merged into the weekly digest). Watch jobs get
-   the current watch prompt (ensure_watch is also how muse_manage watch_create makes them).
+   the current watch prompt (ensure_watch is also how muse_manage watch_create makes them). The no-agent
+   `deliver` job has no prompt; the finished 0.4.1 one-shot delivery jobs whose notice settled are removed.
 5. Create or refresh the Health no_agent cron. 6. Remove the marker.
 """
 import json
@@ -18,6 +19,7 @@ from pathlib import Path
 from . import health
 from .content_io import Files
 from .host import PLUGIN
+from .kernel import Kernel, notifier
 from .kernel.common import preferences
 from .kernel.store import Store
 from .locks import file_lock
@@ -31,7 +33,9 @@ JOBS = {
     "nightly-review": ("nightly", "20 3 * * *", False),
     "feed-pulse": ("feed", "0 8 * * *", False),
     "weekly-governance-review": ("weekly", "15 21 * * 0", True),
+    "deliver": ("deliver", "*/10 * * * *", True),
 }
+NO_AGENT = {"deliver"}  # jobs whose stdout is the delivery itself: no prompt, no model
 RETIRED = {"monthly-system-audit": "merged into the weekly digest"}
 SKILLS = [f"{PLUGIN}:companion"]
 WATCH_PROMPT = """You run one Hermes Muse watch for the user's goal (its state is in Script Output).
@@ -79,7 +83,7 @@ def templates(home, root):
 
 
 def owned(adapter, key):
-    return next((j for j in adapter.cron.jobs().values() if j.get("script") == f"hermes-muse-{key}.py"), None)
+    return adapter.cron.job(key)
 
 
 def backup_prompts(adapter):
@@ -118,8 +122,9 @@ def ensure_watch(adapter, root, key, *, schedule, check, stop_condition, deliver
 def jobs(adapter, root, store):
     entry, out = root / "cron_entry.py", {}
     for key, (job, schedule, delivered) in JOBS.items():
-        found = adapter.cron.ensure(key, schedule=schedule, entry=entry, skills=SKILLS,
-                                    prompt=(root / "prompts" / "jobs" / f"{job}.md").read_text(encoding="utf-8"),
+        quiet = job in NO_AGENT
+        found = adapter.cron.ensure(key, schedule=schedule, entry=entry, skills=None if quiet else SKILLS, no_agent=quiet,
+                                    prompt=None if quiet else (root / "prompts" / "jobs" / f"{job}.md").read_text(encoding="utf-8"),
                                     deliver=route(adapter) if delivered else "local")
         out[key] = found["id"] if found else None
     for key, reason in RETIRED.items():
@@ -151,6 +156,7 @@ def install(adapter, root, now=None):
             report["templates"] = templates(home, root)
             report["prompts_backed_up"] = backup_prompts(adapter)
             report["jobs"] = jobs(adapter, root, store)
+            report["one_shots_removed"] = notifier.sweep(Kernel(home, adapter=adapter, store=store))
             report["health_cron"] = (health.ensure_cron(adapter, route(adapter)) or {}).get("id")
         except Exception as exc:
             marker.write_text(json.dumps({**mark, "error": f"{type(exc).__name__}: {exc}"[:500]}), encoding="utf-8")

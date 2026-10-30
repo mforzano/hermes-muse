@@ -5,11 +5,12 @@ stdout): plugin disabled, migration marker present, empty packet, unknown key or
 longer open. Otherwise the line carries the job's packet from build_packet (ids, refs, schema and budget
 filled in by code), which Hermes hands to the model as Script Output, and the run is registered with
 start_run so its outcome is computed later.
+The no-agent `deliver` key prints plain text instead: the notices it claimed, or nothing (silent).
 """
 from . import health
 from .host import HostAdapter
 from .install import JOBS, migrating, owned
-from .kernel import Kernel, goals
+from .kernel import Kernel, goals, notifier
 from .kernel.common import D
 
 WEEK = 7 * D
@@ -41,6 +42,17 @@ def watch(k, key):
             "watch": {"id": w["id"], "stop_condition": w["payload"].get("stop_condition"), "expires": w["deadline"]}}
 
 
+def deliver(k, now):
+    """The muse-deliver run (no model): settled 0.4.1 one-shots removed, then the notices due now are claimed for
+    this execution and returned as one message, which Hermes delivers to the job's route."""
+    notifier.sweep(k)
+    job = owned(k.adapter, notifier.DELIVER)
+    execution = k.adapter.cron.outcome(job["id"]) if job else None
+    if not execution or execution["status"] not in ("claimed", "running"):
+        return ""  # a claim must name this run's execution, or its receipt could never be read
+    return notifier.message(notifier.claim(k, job, execution["execution_id"], now))
+
+
 def run(home, key, now=None):
     adapter = HostAdapter(home)
     if not adapter.config.enabled():
@@ -56,6 +68,8 @@ def output(k, key, now=None):
     if key not in JOBS:
         return watch(k, key) if key.startswith("watch-") else silent(f"no Muse job {key!r}")
     job = JOBS[key][0]
+    if job == "deliver":
+        return deliver(k, now)
     if job == "weekly":
         return {"wakeAgent": True, "job": job, **weekly(k, now)}
     packet = k.build_packet(job, now)
