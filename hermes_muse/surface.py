@@ -74,7 +74,7 @@ MAIN = {  # action: (kind, summary, data schema)
                         time_sensitive_per_day=nullable(count(0, 50)),
                         urgent_per_day={**count(0, 50), "description": "urgent notices that may skip quiet hours per day; more are sent as time_sensitive"},
                         blocked_topics={"type": "array", "items": text(100), "maxItems": 50},
-                        deliver=nullable(text(200, "Hermes delivery route, e.g. bot-chat or telegram")),
+                        deliver=nullable(text(200, "route of the muse-deliver job (notices), e.g. bot-chat or telegram; applied from its next run, null keeps the job's route")),
                         goal_dormant_days=nullable(count(1, 365)), goal_fade_days=nullable(count(1, 365)),
                         fade_question=nullable(text(500, "dormancy question in the user's language with {title}, {days}, {date}")),
                         weather_context={**BOOL, "description": "allow weather checks for known plans (uses the user's location)"},

@@ -11,7 +11,7 @@ from . import health
 from .host import HostAdapter
 from .install import JOBS, migrating, owned
 from .kernel import Kernel, goals, notifier
-from .kernel.common import D
+from .kernel.common import D, preferences
 
 WEEK = 7 * D
 WEEKLY_KINDS = ("signal", "notice", "goal", "feed", "finding", "interest", "idea", "run")
@@ -44,9 +44,13 @@ def watch(k, key):
 
 def deliver(k, now):
     """The muse-deliver run (no model): settled 0.4.1 one-shots removed, then the notices due now are claimed for
-    this execution and returned as one message, which Hermes delivers to the job's route."""
+    this execution and returned as one message, which Hermes delivers to the job's route. A `deliver` preference
+    becomes that route first; this run then stays silent, since Hermes delivers it on the route it started with."""
     notifier.sweep(k)
     job = owned(k.adapter, notifier.DELIVER)
+    want = job and preferences(k.home).get("deliver")
+    if want and want != job.get("deliver") and k.adapter.cron.set_route(job["id"], want):
+        return ""
     execution = k.adapter.cron.outcome(job["id"]) if job else None
     if not execution or execution["status"] not in ("claimed", "running"):
         return ""  # a claim must name this run's execution, or its receipt could never be read
