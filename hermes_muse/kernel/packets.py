@@ -3,8 +3,7 @@
 build(job) -> {id, type, items, schema, budget[, context]}. While a packet of the job is issued, every caller
 gets that same packet; an empty intake/nightly/feed packet is not stored (id None) and the caller stays silent.
 Patrol always gets a packet: only the model can read its sources.
-Item count adapts to the median seconds per item of the job's last 10 packets: clamp(0.6 T / median); a batch
-also stays within EXCERPT_TOTAL chars of excerpts.
+A batch holds the job's fixed item count, fewer when its excerpts would pass EXCERPT_TOTAL chars.
 Drain jobs (intake, nightly, feed) work their whole queue within one period in batches `<job>:<period>[:<batch>]`
 (lease min(period, 2h)); a ref offered in a submitted batch is not offered again that period, the refs of an
 expired batch are, and so are the unanswered refs of a batch whose run failed (close); runs.relay wakes the job
@@ -13,7 +12,6 @@ read/observe/submit accept only refs that belong to the packet (trust boundary).
 """
 import hashlib
 import json
-import statistics
 
 from . import goals, intake, notifier, records, review, sources, upkeep
 from .common import D, H, clip, one, patch, preferences
@@ -22,11 +20,11 @@ from .store import keys, notice_key
 EXCERPT_TOTAL = 24000
 READ_MAX, READ_TOTAL = 12000, 24000
 OBSERVE_MAX = 50
-JOBS = {  # expected run seconds T, cron period, packet lease, adaptive item bounds (a batch size when draining)
-    "intake": {"type": "intake", "expected": 180, "period": H, "lease": H, "items": (3, 15), "drain": True},
-    "patrol": {"type": "patrol", "expected": 360, "period": 30 * 60, "lease": 30 * 60, "items": (2, 8)},
-    "nightly": {"type": "nightly", "expected": 600, "period": D, "lease": 2 * H, "items": (2, 10), "drain": True},
-    "feed": {"type": "feed", "expected": 300, "period": D, "lease": 2 * H, "items": (1, 3), "drain": True},
+JOBS = {  # cron period, packet lease, fixed items per packet (a batch when draining)
+    "intake": {"type": "intake", "period": H, "lease": H, "items": 15, "drain": True},
+    "patrol": {"type": "patrol", "period": 30 * 60, "lease": 30 * 60, "items": 8},
+    "nightly": {"type": "nightly", "period": D, "lease": 2 * H, "items": 10, "drain": True},
+    "feed": {"type": "feed", "period": D, "lease": 2 * H, "items": 3, "drain": True},
 }
 PROPOSE_WITHIN = 7 * D
 CHECK_GAP = 20 * H  # an interest is researched at most once a day
@@ -63,16 +61,6 @@ SCHEMAS = {  # design 2.6: one result shape per item kind group
 KIND_SCHEMA = {"intake": "intake", "observed": "patrol", "notice": "patrol", "goal": "goals", "signal": "goals",
                "review": "review", "interest": "feed"}
 TYPE_SCHEMAS = {"intake": ("intake",), "patrol": ("patrol",), "nightly": ("goals", "review"), "feed": ("feed",)}
-
-
-def size(k, job):
-    spec = JOBS[job]
-    low, high = spec["items"]
-    rates = [p["payload"]["per_item"] for p in k.store.query("packet", state="submitted", limit=200)
-             if p["payload"].get("job") == job and p["payload"].get("per_item")][:10]
-    if not rates:
-        return high
-    return max(low, min(high, int(0.6 * spec["expected"] / statistics.median(rates))))
 
 
 # -- builders: (items, context) ----------------------------------------------------------------------
@@ -157,7 +145,7 @@ def plan(k, job, now):
         issued = k.store.query("packet", state="issued", natural_key=key, limit=1)
         if issued:
             return issued[0], key, None, None, None
-        n = size(k, job)
+        n = spec["items"]
         return None, key, n, *BUILDERS[job](k, n, now, frozenset())
     key, batch = batches(k, job, now)
     issued = next((p for p in batch if p["state"] == "issued"), None)
@@ -165,7 +153,7 @@ def plan(k, job, now):
         return issued, key, None, None, None
     offered = frozenset(ref for p in batch if p["state"] == "submitted" for ref in (
         p["payload"]["handled"] if p["payload"].get("released") else [i["ref"] for i in p["payload"]["items"]]))
-    n = size(k, job)
+    n = spec["items"]
     queue, context = BUILDERS[job](k, n, now, offered)
     items = take(queue, n)
     return None, f"{key}:{len(batch)}" if batch else key, n, items, {**context, "remaining": len(queue) - len(items)}
@@ -214,7 +202,7 @@ def build(k, job, now):
     issued, key, n, items, context = plan(k, job, now)
     if issued:
         return view(issued, spec)
-    budget = {"seconds": int(0.6 * spec["expected"]), "items": n, "excerpt_chars": EXCERPT_TOTAL,
+    budget = {"items": n, "excerpt_chars": EXCERPT_TOTAL,
               "read_chars": READ_MAX, "read_total_per_item": READ_TOTAL, "lease_until": now + spec["lease"]}
     if empty(items, context) and job != "patrol":
         return {"id": None, "type": spec["type"], "items": [], "schema": {}, "budget": budget}
@@ -366,8 +354,7 @@ def submit(k, packet_id, results, now):
 
     def done(e):
         total = sorted(set(e["payload"]["handled"]) | set(handled))
-        return {"handled": total, "submitted_at": e["payload"].get("submitted_at", now),
-                "per_item": (now - e["payload"]["issued_at"]) / max(1, len(total))}
+        return {"handled": total, "submitted_at": e["payload"].get("submitted_at", now)}
     if not patch(k.store, packet["id"], "submitted", expect=("issued",), reason="submit", payload=done, now=now):
         patch(k.store, packet["id"], reason="submit", payload=done, now=now)  # a late or repeated submit on an expired/submitted packet
     return out
