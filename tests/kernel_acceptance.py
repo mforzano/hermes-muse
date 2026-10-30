@@ -496,21 +496,23 @@ def part_goals(base):
     k.start_run("nightly", job_id="job-n", execution_id="e-fail")
     k.start_run("nightly", job_id="job-n", execution_id="e-lost")
     k.start_run("nightly", job_id="job-n", execution_id="e-flaky")
-    host.outcomes.update({"e-ok": {"status": "completed"}, "e-fail": {"status": "failed"},
+    k.start_run("nightly", job_id="job-n", execution_id="e-lostproc")
+    host.outcomes.update({"e-ok": {"status": "completed"}, "e-fail": {"status": "failed"}, "e-lostproc": {"status": "unknown"},
                           "e-flaky": {"execution_id": None, "status": "host_error"}})  # what Cron.outcome gives on a fault
     k.tick()
     clock[0] += 3 * H
     k.tick()
     states = {r["natural_key"]: r["state"] for r in k.store.query("run")}
-    check("R3 runs: degraded/failed from host + packet, abandoned when the host has no record, kept when the host read failed",
-          states == {"e-ok": "degraded", "e-fail": "failed", "e-lost": "abandoned", "e-flaky": "running"}, states)
+    check("R3 runs: degraded/failed from host + packet (a process the host lost is failed), abandoned when the host has "
+          "no record, kept when the host read failed",
+          states == {"e-ok": "degraded", "e-fail": "failed", "e-lostproc": "failed", "e-lost": "abandoned", "e-flaky": "running"}, states)
     return k
 
 
 def batch_size(job, n):
-    """Force the adaptive batch size of a job (a short drain in the test)."""
+    """Shrink the fixed batch size of a job (a short drain in the test)."""
     spec = packets.JOBS[job]
-    packets.JOBS[job] = {**spec, "items": (n, n)}
+    packets.JOBS[job] = {**spec, "items": n}
     return lambda: packets.JOBS.__setitem__(job, spec)
 
 
@@ -662,27 +664,77 @@ def part_reviews(base):
     for i in range(40):
         host.add(f"s{i}", "user", f"deploy service {i}", T0 - 40 * H + i * H)
         host.add(f"s{i}", "assistant", f"Done, deployed service {i}.", T0 - 40 * H + i * H + 1)
-    judged, kinds = 0, []
+    judged, kinds, sizes = 0, [], []
     for n in range(30):
         packet = seen(k.build_packet("nightly"))
         if packet["id"] is None:
             break
         kinds += [i["kind"] for i in packet["items"]]
+        sizes.append(len(packet["items"]))
         k.start_run("nightly", job_id="job-n", execution_id=f"r{n}", packet_id=packet["id"])
         out = k.submit(packet["id"], [{"candidate_ref": i["ref"], "verdict": "fine", "reason": "verified the deploy"}
-                                      for i in packet["items"] if i["kind"] == "review"])
-        judged += sum("error" not in r for r in out)
+                                      if i["kind"] == "review" else {"decline": {"signal_ref": i["ref"], "reason": "a chore"}}
+                                      for i in packet["items"]])
+        judged += sum("error" not in r and r.get("result") != "declined" for r in out)
         host.outcomes[f"r{n}"] = {"status": "completed"}
         k.tick()
         clock[0] += 60
     proposed = k.store.query("signal", natural_key=old)[0]["payload"].get("proposed_at")
     clock[0] = T0 + D
     second = k.build_packet("nightly")
-    check("N4 no review cap: all 40 flagged turns judged tonight in batches, none left for the next night; "
-          "a proposal disposed two days ago is offered once; Health's drain jobs are the kernel's",
+    check("N4 no review cap: all 40 flagged turns judged tonight in fixed batches of JOBS.nightly.items, none left for the "
+          "next night; a proposal disposed two days ago is offered once; Health's drain jobs are the kernel's",
+          sizes[:4] == [packets.JOBS["nightly"]["items"]] * 4 and
           invariants.DRAINS == tuple(j for j, spec in packets.JOBS.items() if spec.get("drain"))
           and judged == 40 and kinds.count("review") == 40 and kinds.count("signal") == 1 and proposed == T0 and second["id"] is None,
-          {"judged": judged, "kinds": len(kinds), "second": second["id"]})
+          {"judged": judged, "kinds": len(kinds), "second": second["id"], "sizes": sizes})
+    return k
+
+
+def part_proposals(base):
+    """A declined proposal is progress; proposals past the cron daily goal cap wait, unproposed, for the next period."""
+    clock = [T0]
+    host = FakeHost(lambda: clock[0])
+    k = Kernel(make_home(base), adapter=host, clock=lambda: clock[0])
+    refs = [host.add(f"p{i}", "user", f"please plan errand {i}", T0 - H + i) for i in range(11)]
+    k.tick()
+    for ref in refs:
+        intake.dispose(k, ref, "saved", ["an errand"], "new", T0)
+    restore = batch_size("nightly", 1)
+    try:
+        wakes = []
+        for i in range(4):  # one proposal per batch, each declined
+            packet = k.build_packet("nightly")
+            k.start_run("nightly", job_id="job-n", execution_id=f"d{i}", packet_id=packet["id"])
+            k.submit(packet["id"], [{"decline": {"signal_ref": packet["items"][0]["ref"], "reason": "not concrete work"}}])
+            host.outcomes[f"d{i}"] = {"status": "completed"}
+            woken = len(host.woken)
+            k.tick()
+            wakes.append(len(host.woken) - woken)
+    finally:
+        restore()
+    declined = [r for r in refs if k.store.query("signal", natural_key=r)[0]["payload"].get("proposed_at")]
+    check("N5 a declined proposal is handled: batches of declines keep the relay going and are not offered again",
+          wakes == [1, 1, 1, 1] and len(declined) == 4, {"wakes": wakes, "declined": len(declined)})
+
+    offered = []
+    for day in (0, 1):
+        clock[0] = T0 + day * D + 60
+        for i in range(3):
+            packet = k.build_packet("nightly")
+            if packet["id"] is None:
+                break
+            k.start_run("nightly", job_id="job-n", execution_id=f"c{day}{i}", packet_id=packet["id"])
+            props = [p["ref"] for p in packet["items"] if p["kind"] == "signal"]
+            k.submit(packet["id"], [{"create": {"signal_ref": r, "title": f"Errand {r}", "criteria": "done"}} for r in props])
+            offered += [props] if props else []
+            host.outcomes[f"c{day}{i}"] = {"status": "completed"}
+            k.tick()
+    left = [r for r in refs if r not in declined and not k.store.query("signal", natural_key=r)[0]["payload"].get("proposed_at")]
+    check("N6 the cron goal cap: 5 proposals offered and created today, the other 2 not marked proposed and offered "
+          "the next period",
+          [len(o) for o in offered] == [5, 2] and not left and goals.cron_creates_left(k, clock[0]) == 3,
+          {"offered": [len(o) for o in offered], "left": len(left)})
     return k
 
 
@@ -864,7 +916,7 @@ def main():
         base = Path(temporary).resolve()
         kernels = []
         for name, part in (("intake", part_intake), ("notifier", part_notifier), ("goals", part_goals), ("drain", part_drain),
-                           ("intake_drain", part_intake_drain), ("reviews", part_reviews), ("feed", part_feed), ("upkeep", part_upkeep)):
+                           ("intake_drain", part_intake_drain), ("reviews", part_reviews), ("proposals", part_proposals), ("feed", part_feed), ("upkeep", part_upkeep)):
             (base / name).mkdir()
             result = part(base / name)
             kernels.append(result[0] if isinstance(result, tuple) else result)
