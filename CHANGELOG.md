@@ -1,3 +1,9 @@
+# 0.4.5 — Notice gate returns the requested time inside the allowed window; deliver_stalled no longer double-counts (2026-10-30)
+
+- Notice gate: when the requested time is already inside the allowed window, the gate returns that time instead of a
+  later one, so ordinary notices are no longer occasionally delayed by one deliver cycle.
+- Health: `deliver_stalled` no longer double-counts a notice that was just scheduled.
+
 # 0.4.4 — Fixed batch sizes; declined and capped goal proposals no longer stall nightly (2026-10-30)
 
 - Packets: each job takes a fixed item count from `packets.JOBS` (intake 15, patrol 8, nightly 10, feed 3), fewer
