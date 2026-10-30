@@ -6,6 +6,8 @@ again a day later). post_llm_call runs one kernel tick in the background (captur
 dispatches due notices) and arms the quiet wake: 5 minutes of silence may wake the intake job early.
 post_tool_call records failed/staged results of native memory writes. Saved and unconfirmed writes stay
 silent. Only `user` callers count; cron runs, delegated children and group chats are ignored.
+The one exception is Muse's own intake run (cron key memory-upkeep): pre_tool_call refuses a native memory
+write that deletes an entry outright and snapshots the stores, post_tool_call records what changed (upkeep).
 """
 import json
 import logging
@@ -15,7 +17,7 @@ import time
 from . import health
 from .host.sessions import failed_result
 from .install import migrating, owned
-from .kernel import intake, receipts
+from .kernel import intake, receipts, upkeep
 from .kernel.common import clip
 
 log = logging.getLogger(__name__)
@@ -46,6 +48,7 @@ class Hooks:
         self.k, self.quiet, self.clock = kernel, quiet_seconds, clock
         self.lock, self.ticking = threading.Lock(), threading.Lock()
         self.timers, self.shown = {}, {}  # shortcut: per-process memory; a restart re-injects the summary once
+        self.snapshots = {}  # tool_call_id -> memory stores before an intake write (pre and post run in one process)
         self.closed = False
 
     # -- pre_llm_call ---------------------------------------------------------------------------------
@@ -96,8 +99,29 @@ class Hooks:
             staged and "write staged, it waits for the user's approval: " + ", ".join(staged))))
             + ". Tell the user once if it matters; never repeat the write.")
 
-    # -- post_tool_call -------------------------------------------------------------------------------
+    # -- pre_tool_call / post_tool_call ---------------------------------------------------------------
+    def intake_run(self, session_id, **kwargs):
+        if self.k.adapter.caller(session_id=session_id, **kwargs) != "cron":
+            return False
+        job = owned(self.k.adapter, "memory-upkeep")
+        return bool(job) and self.k.adapter.sessions.job_of(session_id) == job["id"]
+
+    def pre_tool(self, tool_name="", args=None, session_id="", tool_call_id="", **kwargs):
+        if self.closed or tool_name != "memory" or not session_id or not tool_call_id or not self.intake_run(session_id, **kwargs):
+            return None
+        refused = upkeep.guard(args or {})
+        if refused:
+            return {"action": "block", "message": refused}
+        with self.lock:
+            self.snapshots[tool_call_id] = self.k.adapter.memory.stores()
+        return None
+
     def post_tool(self, tool_name="", args=None, result=None, session_id="", tool_call_id="", **kwargs):
+        with self.lock:
+            before = self.snapshots.pop(tool_call_id, None)
+        if before is not None:
+            upkeep.record(self.k, before, self.k.adapter.memory.stores(), self.clock())
+            return None
         if (self.closed or tool_name not in MEMORY_TOOLS or not session_id or not tool_call_id
                 or (args or {}).get("action") in READ_ACTIONS or self.k.adapter.caller(session_id=session_id, **kwargs) != "user"):
             return None
