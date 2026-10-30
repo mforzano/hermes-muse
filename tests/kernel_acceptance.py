@@ -1,8 +1,8 @@
 """WP4 acceptance: kernel business on synthetic homes (design 2.1, 2.4, 2.5, 2.7, 2.9; 7.3 A3, A5, A10).
 
-Part 1 drives the kernel through a recording fake host (no Hermes needed). Part 2, when Hermes is
-importable, runs Intake and Notifier through the real HostAdapter on a temporary Hermes home; it creates a
-delivery job in that home only and never runs it. No real user data, no live channel.
+Part 1 drives the kernel through a recording fake host (no Hermes needed); `run_deliver` stands in for one
+muse-deliver run. Part 2, when Hermes is importable, runs Intake and Notifier through the real HostAdapter on a
+temporary Hermes home; it creates jobs in that home only and never runs them. No real user data, no live channel.
 Usage: PYTHONPATH=<hermes-agent> <hermes venv python> tests/kernel_acceptance.py
 """
 import json
@@ -41,14 +41,17 @@ class FakeHost:
     """The HostAdapter surface the kernel uses, over in-memory rows; filters like hermes_muse/host does."""
 
     def __init__(self, clock):
-        self.clock, self.rows, self.delivered, self.receipts = clock, [], {}, {}
-        self.paused, self.outcomes, self.owner, self.send_errors = [], {}, {}, 0
+        self.clock, self.rows, self.delivered, self.receipts = clock, [], {}, {}  # by execution id
+        self.paused, self.outcomes, self.owner, self.removed = [], {}, {}, []
+        self.legacy, self.legacy_receipts = {}, {}  # 0.4.1 one-shot delivery jobs by key, their receipts
         self.sessions = SimpleNamespace(user_turns=self.user_turns, read=self.read)
-        self.deliver = SimpleNamespace(send=self.send, receipt=self.receipt)
+        self.deliver = SimpleNamespace(receipt=self.receipt, legacy_jobs=lambda: dict(self.legacy),
+                                       legacy_receipt=lambda key: self.legacy_receipts.get(key, {"status": "unknown", "reason": "no_delivery_job"}))
         self.woken, self.stores = [], {}
         self.cron = SimpleNamespace(pause=lambda job_id, reason: self.paused.append(job_id) or True,
                                     outcome=lambda job_id, execution_id=None: self.outcomes.get(execution_id),
-                                    wake=lambda job_id: self.woken.append(job_id) or True)
+                                    wake=lambda job_id: self.woken.append(job_id) or True, remove=self.remove,
+                                    job=lambda key: {"id": "job-deliver", "deliver": "bot-chat", "enabled": True} if key == "deliver" else None)
         self.memory = SimpleNamespace(stores=lambda: self.stores)
         self.owners = SimpleNamespace(status=lambda handle: {"state": self.owner.get(handle, "unknown")})
         self.config = SimpleNamespace(get=lambda: {})
@@ -77,20 +80,13 @@ class FakeHost:
         part = text[offset:offset + min(length, 12000)]
         return {"ref": ref, "available": True, "offset": offset, "total": len(text), "text": part, "more": offset + len(part) < len(text)}
 
-    def send(self, target, text, key):
-        assert KEY.fullmatch(key), key
-        if self.send_errors:
-            self.send_errors -= 1
-            return {"status": "failed", "reason": "host_error"}
-        if key in self.delivered:
-            return self.receipt(key)
-        self.delivered[key] = text
-        return {"status": "sending", "job_id": "job-" + key[:8]}
+    def receipt(self, job_id, execution_id=None):
+        return {"job_id": job_id, **self.receipts.get(execution_id, {"status": "sending"})}
 
-    def receipt(self, key):
-        if key not in self.delivered:
-            return {"status": "unknown", "reason": "no_delivery_job"}
-        return self.receipts.get(key, {"status": "sending", "job_id": "job-" + key[:8]})
+    def remove(self, job_id):
+        key = next(key for key, job in self.legacy.items() if job["id"] == job_id)
+        self.removed.append(self.legacy.pop(key)["id"])
+        return True
 
 
 def make_home(base, prefs=None):
@@ -107,9 +103,20 @@ def seen(value):
     return value
 
 
+def run_deliver(k, host):
+    """One muse-deliver run as entry.deliver makes it: tick, claim for a new execution, record the printed message."""
+    k.tick()
+    execution = f"exec-{len(host.delivered) + 1}"
+    text = notifier.message(notifier.claim(k, host.cron.job("deliver"), execution, k.clock()))
+    if text:
+        host.delivered[execution] = text
+    return text
+
+
 def deliver_all(k, host):
-    for key in list(host.delivered):
-        host.receipts.setdefault(key, {"status": "sent", "job_id": "job-" + key[:8]})
+    run_deliver(k, host)
+    for execution in host.delivered:
+        host.receipts.setdefault(execution, {"status": "sent", "outcome": "delivered"})
     k.tick()
 
 
@@ -216,7 +223,7 @@ def part_notifier(base):
 
     clock[0] += H
     _, _, out = patrol(k, [alert], verdict="supersede", text="Vendor alert: rotation completed, new details")
-    k.tick()
+    run_deliver(k, host)
     rail = [e for e in k.store.query("notice") if e["natural_key"] == "src:synthetic-alert-1"]
     check("N1 supersede: explicit, new evidence, new generation and delivery key",
           out[0]["result"] == "superseded" and len(rail) == 2 and len(host.delivered) == 3
@@ -238,17 +245,19 @@ def part_notifier(base):
 
     clock[0] = datetime(2026, 11, 5, 23, 0, tzinfo=UTC).timestamp()
     patrol(k, [{"upstream_id": "cal:evt-1", "title": "Meeting moved"}], priority="time_sensitive", source="calendar:home")
+    host.woken.clear()
     patrol(k, [{"upstream_id": "mail:<outage@example.org>", "title": "Outage"}], priority="urgent")
-    k.tick()
+    woken = list(host.woken)
+    run_deliver(k, host)
     quiet = {e["natural_key"]: e for e in k.store.query("notice")}
     held, urgent = quiet["src:cal:evt-1"], quiet["src:outage@example.org"]
-    check("N3 quiet hours: time_sensitive waits for 09:00, urgent goes at once",
+    check("N3 quiet hours: time_sensitive waits for 09:00, urgent wakes muse-deliver and goes at once",
           held["state"] == "scheduled" and datetime.fromtimestamp(held["payload"]["next_eligible"], UTC).hour == 9
-          and urgent["state"] == "sending", {"held": held["state"], "urgent": urgent["state"]})
+          and urgent["state"] == "sending" and woken == ["job-deliver"], {"held": held["state"], "urgent": urgent["state"], "woken": woken})
 
     for n in (2, 3):  # urgent_per_day (default 2): the third urgent of the night is gated as time_sensitive
         patrol(k, [{"upstream_id": f"mail:<urgent{n}@example.org>", "title": f"Urgent {n}"}], priority="urgent")
-        k.tick()
+        run_deliver(k, host)
     crypto = patrol(k, [{"upstream_id": "mail:<coin@example.org>", "title": "Token sale"}], priority="urgent", topic="crypto")
     k.tick()
     fade = patrol(k, [{"upstream_id": "mail:<f@example.org>", "title": "x"}], priority="urgent", topic="goal-fade")
@@ -265,20 +274,44 @@ def part_notifier(base):
            "held": [[n["state"], n["payload"]["priority"]] for n in (second, third)],
            "crypto": quiet["src:coin@example.org"]["state"], "fade": fade[2][0]})
 
-    # Crash/host error before the host saw the delivery: reconcile resends under the same key, once.
+    # One run, one message: every notice due now in it (up to PER_MESSAGE), each tied to the run's execution;
+    # an unreadable receipt waits, a failed one is recorded and nothing is ever claimed or sent again.
     clock[0] = datetime(2026, 11, 6, 10, 0, tzinfo=UTC).timestamp()
-    host.send_errors = 1
-    patrol(k, [{"upstream_id": "https://status.example.org/incidents/42?utm_source=x", "title": "Incident 42"}])
+    held = run_deliver(k, host)  # the three notices held overnight (the stale digest waits for patrol)
+    clock[0] += D  # a fresh urgent allowance
+    patrol(k, [{"upstream_id": "https://status.example.org/incidents/42?utm_source=x", "title": "Incident 42"},
+               {"upstream_id": "https://status.example.org/incidents/43", "title": "Incident 43"}], text="Incident")
+    text = run_deliver(k, host)
+    execution = list(host.delivered)[-1]
+    pending = [e for e in k.store.query("notice", state="sending") if e["payload"].get("execution_id") == execution]
+    host.receipts[execution] = {"status": "unknown", "reason": "host_error"}
     k.tick()
-    pending = [e for e in k.store.query("notice", state="sending") if e["natural_key"].endswith("incidents/42")][0]
-    k.tick()
-    key = pending["payload"]["delivery_key"]
-    host.receipts[key] = {"status": "failed", "reason": "host_config", "detail": "invalid_params field=cwd", "job_id": "job-x"}
-    k.tick()
-    failed = k.store.get(pending["id"])
-    check("N4 delivery: host error retried under the same key once; failed(host_config) recorded, not unknown",
-          list(host.delivered).count(key) == 1 and failed["state"] == "failed" and failed["payload"]["receipt"]["reason"] == "host_config",
-          {"state": failed["state"], "receipt": failed["payload"].get("receipt")})
+    kept = [k.store.get(e["id"])["state"] for e in pending]
+    host.receipts[execution] = {"status": "failed", "reason": "host_config", "detail": "invalid_params field=cwd"}
+    again = run_deliver(k, host)
+    failed = [k.store.get(e["id"]) for e in pending]
+    check("N4 deliver run: due notices in one message with a separator, tied to the run's execution; host_error keeps them "
+          "sending, failed(host_config) recorded, never claimed again",
+          held.count(notifier.SEPARATOR) == 2 and len(pending) == 2 and text.count(notifier.SEPARATOR) == 1 and text.count("Incident") == 2 and kept == ["sending"] * 2
+          and all(e["state"] == "failed" and e["payload"]["receipt"]["reason"] == "host_config" for e in failed) and again == "",
+          {"states": [e["state"] for e in failed], "receipt": failed[0]["payload"].get("receipt"), "again": again,
+           "held": held.count(notifier.SEPARATOR), "kept": kept})
+
+    # 0.4.1 one-shot deliveries: a sending notice is read from its old job by key and never resent; finished one-shots
+    # are removed only once no notice waits for them (a Health backup one-shot has none).
+    old = k.store.create("notice", "src:legacy-1", {"text": "Legacy", "priority": "ordinary", "generation": 0,
+                                                   "delivery_key": notifier.delivery_key("src:legacy-1"), "job_id": "job-old"},
+                         state="sending", now=clock[0])
+    old_key = old["payload"]["delivery_key"]
+    host.legacy = {old_key: {"id": "job-old", "state": "completed"}, "health-ab-1": {"id": "job-health", "state": "completed"}}
+    before = len(host.delivered)
+    swept = notifier.sweep(k)
+    host.legacy_receipts[old_key] = {"status": "sent", "job_id": "job-old", "outcome": "delivered"}
+    run_deliver(k, host)
+    swept += notifier.sweep(k)
+    check("N4b legacy: one-shot receipt read by delivery key, nothing resent; settled one-shots removed, a waiting one kept until then",
+          k.store.get(old["id"])["state"] == "sent" and len(host.delivered) == before and host.removed == ["job-health", "job-old"]
+          and swept == 2 and notifier.sweep(k) == 0, {"state": k.store.get(old["id"])["state"], "removed": host.removed})
 
     # Stale scheduled notice goes back to patrol; only send/skip/withdraw apply to it.
     clock[0] += 2 * D
@@ -294,18 +327,18 @@ def part_notifier(base):
     check("N6 delivery keys: digest of the notice key, all match [a-z0-9][a-z0-9_-]{0,63}",
           keys and all(KEY.fullmatch(x) for x in keys), {"count": len(keys), "sample": keys[:2]})
 
-    # Concurrency: two kernels (processes) dispatch the same notice and build the same packet.
+    # Concurrency: two kernels (processes) claim the same notice and build the same packet.
     clock[0] += H
     patrol(k, [{"upstream_id": "gmail:message:race", "title": "Race"}])
     other = Kernel(k.home, adapter=host, clock=lambda: clock[0])
-    before = len(host.delivered)
-    ids = []
-    threads = [threading.Thread(target=lambda kk=kk: (notifier.dispatch(kk, clock[0]), ids.append(kk.build_packet("patrol", clock[0] + 1800)["id"])))
-               for kk in (k, other)]
+    claimed, ids = [], []
+    threads = [threading.Thread(target=lambda kk=kk, n=n: (claimed.extend(notifier.claim(kk, host.cron.job("deliver"), f"race-{n}", clock[0])),
+                                                           ids.append(kk.build_packet("patrol", clock[0] + 1800)["id"])))
+               for n, kk in enumerate((k, other))]
     [t.start() for t in threads]
     [t.join() for t in threads]
-    check("N7 concurrency: one delivery, one issued packet per job and period",
-          len(host.delivered) - before == 1 and len(set(ids)) == 1, {"delivered": len(host.delivered) - before, "packets": ids})
+    check("N7 concurrency: one claim, one issued packet per job and period",
+          len(claimed) == 1 and len(set(ids)) == 1, {"claimed": len(claimed), "packets": ids})
 
     # Source registry.
     for _ in range(4):
@@ -361,7 +394,8 @@ def part_goals(base):
         refused = False
     except PermissionError:
         refused = True
-    host.receipts[k.store.get(ask["id"])["payload"]["delivery_key"]] = {"status": "failed", "reason": "transport"}
+    run_deliver(k, host)
+    host.receipts[k.store.get(ask["id"])["payload"]["execution_id"]] = {"status": "failed", "reason": "transport"}
     clock[0] = T0 + 13 * H  # 23:00: the re-ask waits for waking hours
     k.tick()  # the first question never arrived
     second = k.store.query("notice", natural_key="goal:revive-goal:fade:20261026:2")
@@ -645,7 +679,7 @@ def part_feed(base):
                                    "errors": out["errors"], "jazz": out["Jazz"]})
     interest = k.store.get(moon["payload"]["interest_id"])
     records.feedback(k, interest, "stop", now=clock[0])
-    k.tick()
+    run_deliver(k, host)
     moon = k.store.get(moon["id"])
     check("F3 a Feed notice is withdrawn by code when its interest stops",
           moon["state"] == "withdrawn" and k.store.events(moon["id"])[-1]["reason"] == "interest_closed", moon["state"])
@@ -752,14 +786,13 @@ def part_native(base):
           {"signals": len(signals), "purity": probe["signal_purity"]["detail"]})
     notice = notifier.draft(k, text="Native delivery check", priority="urgent", upstream_id="gmail:message:native1",
                             title="Native", now=now)
-    notifier.dispatch(k, now)
+    job = k.adapter.cron.ensure("deliver", schedule="*/10 * * * *", entry=ROOT / "cron_entry.py", deliver="bot-chat", no_agent=True)
+    claimed = notifier.claim(k, job, "native-run", now)
     sent = k.store.get(notice["id"])
-    key = sent["payload"].get("delivery_key", "")
-    jobs = k.adapter.cron.jobs()
-    check("NATIVE delivery: host accepted the code-derived key as a one-shot job in the temporary home (not run)",
-          sent["state"] == "sending" and sent["payload"].get("job_id") in jobs
-          and jobs[sent["payload"]["job_id"]]["name"] == f"muse-deliver-{key}" and k.adapter.deliver.receipt(key)["status"] == "sending",
-          {"state": sent["state"], "key": key, "faults": list(k.adapter.faults)[-2:]})
+    check("NATIVE delivery: claimed for the muse-deliver run; its receipt is read from that job (not run: sending)",
+          [e["id"] for e in claimed] == [notice["id"]] and sent["state"] == "sending" and sent["payload"]["job_id"] == job["id"]
+          and k.adapter.deliver.receipt(job["id"], "native-run")["status"] == "sending",
+          {"state": sent["state"], "faults": list(k.adapter.faults)[-2:]})
 
 
 def main():

@@ -141,38 +141,59 @@ def main():
         assert host.sessions.job_of(f"cron_{job['id']}_20261029_120000") == job["id"]
         assert host.sessions.job_of("other-run") is None and host.sessions.job_of("chat") is None
 
-        # deliver: one-shot no-agent job, at most once, receipts from native ledger and native Bot Chat key.
-        sent = host.deliver.send("bot-chat", "Your synthetic reminder.", "k1")
-        assert sent["status"] == "sending", sent
-        assert host.deliver.send("bot-chat", "Your synthetic reminder.", "k1")["status"] == "sending"
-        deliver_jobs = [j for j in host.cron.jobs().values() if j["name"] == "muse-deliver-k1"]
-        assert len(deliver_jobs) == 1 and deliver_jobs[0]["no_agent"], deliver_jobs
-        out = home / "scripts" / "hermes-muse-deliver-k1.py"
-        ran = subprocess.run([sys.executable, str(out)], cwd=base, capture_output=True, text=True, check=True)
-        assert ran.stdout.strip() == "Your synthetic reminder." and not out.exists()
-        assert host.deliver.receipt("k1")["status"] == "sending"
-        k1 = deliver_jobs[0]["id"]
-        with profile_scope(home), mock.patch("tools.bot_live_delivery.find_canonical_live_owner", side_effect=ValueError("down")):
-            from cron.scheduler_delivery import _deliver_to_bot_chat
-            execution = create_execution(k1, source="test")
-            native = _deliver_to_bot_chat({"id": k1, "name": "muse-deliver-k1", "execution_id": execution["id"]}, "body", "")
-            assert "queued" in native, native
-            from cron.executions import finish_execution, mark_execution_running
+        # deliver: the owned no-agent muse-deliver run prints the notices it claimed; Hermes delivers that stdout and the
+        # receipt is read from the run's execution (native ledger, native Bot Chat key). Nothing is created per notice.
+        from cron.executions import finish_execution, mark_execution_running
+        from cron.scheduler_delivery import _deliver_to_bot_chat
+        from cron.scheduler_script import _run_job_script
+        from hermes_muse.kernel import Kernel, notifier
+        deliver = host.cron.ensure("deliver", schedule="*/10 * * * *", entry=PROJECT / "cron_entry.py", deliver="bot-chat",
+                                   no_agent=True)
+        assert deliver["no_agent"] and host.cron.job("deliver")["id"] == deliver["id"], deliver
+        k = Kernel(home, adapter=host)
+        notice = notifier.draft(k, text="Your synthetic reminder.", priority="urgent", upstream_id="contract-1",
+                                title="Reminder", now=time.time())
+        assert host.cron.jobs()[deliver["id"]].get("manual_run_at"), "an urgent notice wakes muse-deliver"
+        with profile_scope(home):
+            execution = create_execution(deliver["id"], source="test")
             mark_execution_running(execution["id"])
+            ok, out = _run_job_script(deliver["script"])  # the launcher as the scheduler runs it
+        assert ok and out.strip() == "Your synthetic reminder.", out
+        claimed = k.store.get(notice["id"])["payload"]
+        assert claimed["execution_id"] == execution["id"] and claimed["job_id"] == deliver["id"], claimed
+        assert host.deliver.receipt(deliver["id"], execution["id"])["status"] == "sending"
+        with profile_scope(home), mock.patch("tools.bot_live_delivery.find_canonical_live_owner", side_effect=ValueError("down")):
+            native = _deliver_to_bot_chat({"id": deliver["id"], "name": "muse-deliver", "execution_id": execution["id"]}, out, "")
+            assert "queued" in native, native
             finish_execution(execution["id"], success=True, delivery_outcome="queued")
-        assert host.deliver.receipt("k1") == {"job_id": k1, "execution_id": execution["id"], "outcome": "queued",
-                                              "status": "sending"}, host.deliver.receipt("k1")
-        for key, outcome, error, expected in (("k2", "delivered", None, "sent"),
-                                              ("k3", "failed", "bot_relay.deliver refused: invalid_params field=cwd", "host_config"),
-                                              ("k4", "failed", "adapter timeout", "transport"), ("k5", "suppressed", None, "unknown")):
-            job_id = host.deliver.send("telegram", "x", key)["job_id"]
+        assert host.deliver.receipt(deliver["id"], execution["id"]) == {
+            "job_id": deliver["id"], "execution_id": execution["id"], "outcome": "queued", "status": "sending"}
+        for outcome, error, expected in (("delivered", None, "sent"),
+                                         ("failed", "bot_relay.deliver refused: invalid_params field=cwd", "host_config"),
+                                         ("failed", "adapter timeout", "transport"), ("suppressed", None, "unknown")):
             with profile_scope(home):
-                finish(job_id, outcome)
+                run = finish(deliver["id"], outcome)
                 if error:
-                    update_job(job_id, {"last_delivery_error": error})
-            receipt = host.deliver.receipt(key)
-            assert expected in (receipt["status"], receipt.get("reason")), (key, receipt)
-        assert host.deliver.receipt("never")["status"] == "unknown"
+                    update_job(deliver["id"], {"last_delivery_error": error})
+            receipt = host.deliver.receipt(deliver["id"], run)
+            assert expected in (receipt["status"], receipt.get("reason")), (outcome, receipt)
+        assert host.deliver.receipt(deliver["id"], "no-such-run")["status"] == "sending"  # never a terminal guess
+
+        # 0.4.1 one-shot deliveries: still read by key until settled, then removed with their launcher.
+        from cron.jobs import create_job
+        legacy = host.cron.write_script("hermes-muse-deliver-k1.py", "print('old')\n")
+        with profile_scope(home):
+            k1 = create_job(prompt=None, schedule="2099-01-01T00:00:00+00:00", name="muse-deliver-k1", deliver="telegram",
+                            script=legacy, no_agent=True)["id"]
+            finish(k1, "delivered")
+        assert host.deliver.legacy_receipt("k1")["status"] == "sent" and host.deliver.legacy_jobs() == {}
+        assert host.deliver.legacy_receipt("never") == {"status": "unknown", "reason": "no_delivery_job"}
+        with profile_scope(home):
+            update_job(k1, {"enabled": False, "state": "completed"})
+        assert list(host.deliver.legacy_jobs()) == ["k1"] and host.cron.remove(k1)
+        assert k1 not in host.cron.jobs() and not (home / "scripts" / legacy).exists() and host.cron.remove(k1) is False
+        assert host.cron.add_route(deliver["id"], "telegram") and host.cron.jobs()[deliver["id"]]["deliver"] == "bot-chat,telegram"
+        assert host.cron.add_route(deliver["id"], "telegram") is False
         assert host.owners.status("no-such-delegation")["state"] == "unknown"
 
         # A4: a healthy profile probes all ok; the seeded faults are each caught; a fixed Bot Chat cwd clears.
@@ -199,14 +220,16 @@ def main():
         faults = host.fault_count
         with mock.patch("cron.jobs.list_jobs", side_effect=RuntimeError("host down")):
             assert host.cron.jobs() == {}
-            assert host.deliver.send("bot-chat", "again", "k1") == {"status": "failed", "reason": "host_error"}
+            assert host.deliver.legacy_receipt("k1") == {"status": "unknown", "reason": "host_error"}
+            assert host.deliver.receipt(deliver["id"]) == {"status": "unknown", "reason": "host_error"}
+            assert host.cron.remove(deliver["id"]) is False and host.cron.job("deliver") is None
             assert host.cron.ensure("patrol", schedule="every 30m", entry=entry) is None
             assert host.probe()[1]["status"] != "ok"
         with mock.patch.object(host_sessions, "reader", side_effect=sqlite3.OperationalError("locked")):
             assert host.sessions.user_turns(0) == [] and host.sessions.job_of("local-run") is None
         assert host.fault_count > faults
         with profile_scope(home):
-            assert len(list_jobs(include_disabled=True)) == 8  # patrol, intake, nightly, k1..k5: no duplicates
+            assert len(list_jobs(include_disabled=True)) == 4  # patrol, intake, nightly, deliver: no duplicates
     print("PASS native_host_contract")
 
 
