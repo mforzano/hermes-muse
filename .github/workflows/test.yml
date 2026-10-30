@@ -31,6 +31,8 @@ jobs:
   windows:
     # No Hermes: content files, locks and the Store on native Windows (contributed in #4).
     runs-on: windows-latest
+    env:
+      PYTHONIOENCODING: utf-8  # the scripts print CJK results; Hermes runs launchers with PYTHONUTF8=1
     strategy:
       matrix:
         python: ['3.11', '3.14']
