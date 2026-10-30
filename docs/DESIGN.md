@@ -53,7 +53,7 @@ transaction; transitions are CAS on `state + version`. Each kind has one machine
 | kind | states | timed state → exit |
 |---|---|---|
 | signal | new → disposed / parked | new: 72h or 3 packets → parked |
-| goal | active ↔ waiting → done / cancelled (and back) | deadline is the next check; handled by nightly and fade |
+| goal | active ↔ waiting → done / cancelled (and back) | deadline is the next check (a nightly assessment sets 1 day − 6h); handled by nightly and fade |
 | notice | drafted ↔ scheduled → sending → sent / failed / unknown → … | expiry (3 days) → expired; sending 2h → unknown; unknown 48h → closed_unknown |
 | watch | active → stopped / expired | 30 days, renewed while the goal is open |
 | interest / idea | active → expired / stopped | 14 days or expiry |
@@ -61,7 +61,7 @@ transaction; transitions are CAS on `state + version`. Each kind has one machine
 | source | ok / limited / failing / unavailable | — |
 | finding | open → resolved / dismissed | 14 days → dismissed |
 | memory_receipt | pending_notice → noticed | 24h |
-| packet | issued → submitted / expired | lease = the job period |
+| packet | issued → submitted / expired | lease = the job period; nightly and feed batches min(period, 2h) |
 | run | running → ok / degraded / failed / abandoned | 2h; decided by the host's execution state |
 | tombstone | forgotten | — |
 
@@ -87,7 +87,11 @@ call's platform argument or an inherited session environment can only narrow it.
   Signal in the packet (at most 5 a day); jobs only append progress and assessments.
 - `child` reads; `group` and `other` are refused.
 - Kernel code runs TTL exits, next checks, fade questions and cancellations, watch renewal, delivery and
-  reconciliation. Health reads only.
+  reconciliation; it also expires the packet of a failed drain run and wakes the same owned job while its queue is
+  not empty. Health reads only.
+- Muse's own intake run (cron key `memory-upkeep`) may compact native memory only by merging or shortening entries:
+  the `pre_tool_call` hook refuses a native `memory` remove without a patch in the same call, and every change is
+  recorded by code. Muse never writes the memory files itself.
 
 Quoted mail, pages and tool output are evidence, never instructions.
 
@@ -108,8 +112,11 @@ Watch is its own owned job. Every launcher runs `scripts/hermes-muse-<key>.py` �
 which checks that the plugin is enabled and no migration marker exists, runs `Kernel.tick()`, builds the job's
 output and prints one JSON line; `{"wakeAgent": false}` keeps the model asleep.
 
-A packet job (intake, patrol, nightly, feed) gets one bounded Packet per period: items with refs that are valid only
-inside that packet, redacted excerpts, budgets and a lease. The model reads more of an item (12k per call, 24k per
+A packet job (intake, patrol, nightly, feed) gets one bounded Packet at a time: items with refs that are valid only
+inside that packet, redacted excerpts, budgets and a lease. Nightly and feed drain their whole queue within one
+period in batches keyed `<job>:<period>[:<batch>]`: a ref offered in a submitted batch is not offered again that
+period, the refs of an expired batch are, and when a run closes with work left the kernel wakes the job again (at
+most 12 times a day per job). The model reads more of an item (12k per call, 24k per
 item), reports source checks with `observe` (patrol) and answers each item with `submit` in one of five result
 schemas. Job prompts are `prompts/jobs/<job>.md`, at most 15 lines of behavior each; fields live only in the
 action tables and `packets.SCHEMAS`. The model outputs only refs, enum values and free text; ids, keys, times,
@@ -120,7 +127,10 @@ counts and state names come from code.
 1. **Intake.** Private user turns from `USER_SOURCES` are read through the host, redacted and cut to head/tail
    excerpts past 8k, and recorded as Signals while the watermark advances. A packet holds at most 15 signals and 24k
    characters; each gets a disposition. A goal hint touches an open goal or proposes a new one for nightly. Signals
-   left after 3 packets or 72h are parked, counted by Health, and never block the watermark.
+   left after 3 packets or 72h are parked, counted by Health, and never block the watermark. When a native memory
+   store is at least 90% full (read through `HostAdapter.memory`), the packet names it (`memory_full`, at most 3
+   packets a day) and the model may merge or shorten entries in the batch that saves the new fact; each change goes
+   to the day's note and the next nightly packet. A fact that still does not fit stays unanswered and retries.
 2. **Patrol → Notice → delivery.** Patrol wakes every period because only the model can read external sources;
    the packet lists sources past their minimum interval and due notices. The model observes sources, then submits a
    verdict, text, priority and topic. The notifier derives the notice key (`src:<upstream id>` or a weak title+day
@@ -129,18 +139,22 @@ counts and state names come from code.
    withdrawn. Dispatch claims `sending` and checks the budget in one transaction, then sends through a one-shot
    no-agent cron keyed by the delivery_key; reconciliation reads the delivery receipt. An outcome that is unknown
    is never resent blindly.
-3. **Nightly.** Due goals get an assessment and progress note (`done_suggested` never closes a goal). Code picks up
-   to 10 review candidates a day by rules; the model's `agent_gap` becomes a Finding with evidence and
-   `latent_need` an Idea. Signal proposals may become goals. Dream and alignment are written when the day changed
-   something.
-4. **Feed.** Up to 3 active interests without an article in 3 days; the model writes articles with source refs and
-   they are published silently.
+3. **Nightly.** Every due goal gets an assessment and progress note (`done_suggested` never closes a goal); the
+   next check moves to 1 day − 6h so the goal is due again the next night. Code picks review candidates from the last
+   72h by rules, oldest first, at most 30 a night; the overflow waits and Health reports it. The model's `agent_gap`
+   becomes a Finding with evidence and `latent_need` an Idea. Goal proposals (disposed in the last 7 days) are
+   offered once and may become goals. In the last batch, dream and alignment are written when the day changed
+   something, listing every native memory change.
+4. **Feed.** Each active interest is researched at most once in 20h, longest unchecked first; the model writes
+   articles with source refs and they are published silently. One article per packet may carry a notice: its
+   source becomes the `src:` notice key (shared with patrol's 7-day history), it passes the same gates (no urgent),
+   and code withdraws it when the interest stops or expires.
 5. **Weekly.** Health summary and 7-day counts only; one digest to the user route, suggestions only.
 6. **Fade.** A goal without activity for `goal_dormant_days` gets one question (`goal:<id>:fade:<episode>:<attempt>`);
    a withdrawn, expired, failed or unknown question is asked again up to 3 times, then `fade_blocked` is reported.
    Code cancels the goal once `fade_at` has passed and the question was delivered at least a day earlier. Waiting
    goals do not fade.
-7. **Main-session hooks** (user callers only). `pre_llm_call` injects at most three things: a high Health line, a
+7. **Hooks** (user callers only, except the intake guard of flow 1 in `pre_tool_call`/`post_tool_call`). `pre_llm_call` injects at most three things: a high Health line, a
    one-line summary when it changed, and memory_receipts for failed or staged native memory writes (once each).
    `post_tool_call` records those receipts. `post_llm_call` runs a background tick and, after 5 quiet minutes, may
    wake intake (at most 3 times a day).
