@@ -1,4 +1,4 @@
-# 0.4.2 — One fixed `muse-deliver` job instead of a one-shot cron per notice (unreleased)
+# 0.4.2 — One fixed `muse-deliver` job instead of a one-shot cron per notice (2026-10-30)
 
 - Delivery: one owned no-agent job `muse-deliver` (cron key `deliver`, every 10 minutes, on the user's route, no
   model, added to `install.JOBS`) sends notices. Each run ticks, re-checks the gates (quiet hours, budgets,
