@@ -54,8 +54,8 @@ def static():
     docs = [ROOT / "prompts/system.md", *(ROOT / "prompts/jobs").glob("*.md"), *(ROOT / "skills/companion").rglob("*.md")]
     stale = {str(p.relative_to(ROOT)): sorted(set(REMOVED.findall(p.read_text(encoding="utf-8")))) for p in docs if REMOVED.search(p.read_text(encoding="utf-8"))}
     tables = [str(p.relative_to(ROOT)) for p in docs if p != s.REFERENCE and re.search(r"^\|\s*`?field`?\s*\|", p.read_text(encoding="utf-8"), re.M)]
-    check("S4 five job prompts <=15 lines; no removed action, request_id or hand-written field table in prompts/skill",
-          jobs == sorted(j for j, _, _ in install.JOBS.values()) == sorted([*packets.JOBS, "weekly"]) and not long and not stale and not tables,
+    check("S4 five job prompts <=15 lines (the no-agent deliver job has none); no removed action, request_id or hand-written field table in prompts/skill",
+          jobs == sorted(j for j, _, _ in install.JOBS.values() if j not in install.NO_AGENT) == sorted([*packets.JOBS, "weekly"]) and not long and not stale and not tables,
           {"jobs": jobs, "long": long, "stale": stale, "tables": tables})
 
 
@@ -64,7 +64,8 @@ class Host(FakeHost):
         super().__init__(clock)
         self.jobs, self.ensured = {"j-intake": {"name": "muse-intake", "enabled": True}}, []
         self.cron = SimpleNamespace(pause=self.pause, outcome=lambda job_id, execution_id=None: None,
-                                    jobs=lambda: dict(self.jobs), ensure=self.ensure, wake=lambda job_id: True)
+                                    jobs=lambda: dict(self.jobs), ensure=self.ensure, wake=lambda job_id: True,
+                                    job=lambda key: None)
 
     def pause(self, job_id, reason):
         self.paused.append(job_id)

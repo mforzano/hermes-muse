@@ -9,4 +9,5 @@ from hermes_muse.host import profile_scope
 
 if __name__ == "__main__":
     with profile_scope(MUSE_HOME):  # noqa: F821 - injected by the launcher
-        print(json.dumps(run(MUSE_HOME, MUSE_JOB), ensure_ascii=False))  # noqa: F821
+        out = run(MUSE_HOME, MUSE_JOB)  # noqa: F821
+        print(out if isinstance(out, str) else json.dumps(out, ensure_ascii=False))  # the deliver run prints its message

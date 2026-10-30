@@ -15,7 +15,7 @@
 | 读外部来源（邮件、日历、提醒、网页） | 模型 | 用用户自己的工具；Muse 按 `source_id` 记录每次检查的间隔、limitation 和失败状态 |
 | 是否值得通知、措辞 | 模型 | patrol 的 verdict、text、priority、topic |
 | Notice 去重、静默时段、预算、`urgent_per_day`、blocked_topics | 代码 | notice key 对 7 天历史去重；gate 计算 `next_eligible` |
-| 投递与对账 | 代码 | 每个 delivery_key 一个 one-shot no_agent cron；结果未知不重发 |
+| 投递与对账 | 代码 | 一个固定的 no_agent `muse-deliver` job 打印到期通知（每 10 分钟，urgent 立即唤醒）；按 run 的 execution 读回执；结果未知不重发 |
 | 对话复盘 | 代码 + 模型 | 代码按规则每天挑 ≤10 个候选；模型判断 `agent_gap`（Finding）或 `latent_need`（Idea） |
 | Interest 与 Idea | 代码 | 14 天到期；只有用户输入能续期 |
 | Feed 文章 | 模型 | 每天最多 3 个近期无文章的 interest；静默发布，可在 Muse 页面浏览 |

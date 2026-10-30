@@ -5,7 +5,7 @@ ok | low | medium | high. Checks only read; they never repair, so a kernel bug s
 Payload fields read here are the kernel's contract: signal.source, notice.next_eligible/priority/strong_key,
 goal.fade_at/fade_blocked (goals.fade), finding.evidence (review.record), source.health (sources.record),
 packet.job/issued_at/context.review_overflow (packets.build), run.job (runs.start), interest.checked_at
-(packets.feed_result).
+(packets.feed_result), notice.verified_at/topic (notifier.draft).
 Tests seed these through the kernel writers, never with hand-written payloads.
 """
 from __future__ import annotations
@@ -269,6 +269,24 @@ def jobs(owned, now):
             item("jobs_paused", "low" if silent else "ok", len(silent), 0,
                     f"{len(silent)} Muse jobs paused without a reason", silent,
                     "Confirm the pause was intended; resume it otherwise")]
+
+
+def deliver_stalled(store, job, now, readable=True):
+    """Notices left unclaimed for three muse-deliver periods (its next_run_at - last_run_at; up to 5 go per run, a
+    stale one waits for patrol, see notifier.stale): the job is missing, paused or its runs claim nothing. A job
+    that never ran is jobs_late's case; unreadable host jobs are host_faults'."""
+    period = job and job.get("enabled") and job.get("last_run_at") and job.get("next_run_at") and \
+        _epoch(job["next_run_at"]) - _epoch(job["last_run_at"])
+    grace = 3 * period if period and period > 0 else None
+    due = [n for n in store.query("notice", state="scheduled") if (n["payload"].get("next_eligible") or now) < now - (grace or 0)
+           and (n["payload"].get("topic") == "goal-fade" or (n["payload"].get("verified_at") or 0) >= now - D)] if store else []
+    state = "unreadable" if not readable else "missing" if not job else "enabled" if job.get("enabled") else "paused"
+    quiet = not due or state == "unreadable" or state == "enabled" and not grace
+    level = "ok" if quiet else "low" if state == "paused" else "high"
+    return item("deliver_stalled", level, len(due), 0,
+                f"{len(due)} notices due and not sent" + (f" for over {grace / 60:.0f} min" if grace else "")
+                + f"; muse-deliver {state}", ids(due),
+                "Resume the muse-deliver job, or reinstall Muse if it is missing; check its last execution error")
 
 
 def _epoch(stamp):

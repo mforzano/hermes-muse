@@ -51,6 +51,7 @@ class Kernel:
         """Every due business exit once, in dependency order; idempotent and safe from concurrent processes.
 
         Receipts are read before store TTLs move `sending` to `unknown`; watches renew before they expire.
+        Nothing is sent here: only the muse-deliver run claims and prints notices (entry.deliver).
         One failing step is reported and does not stop the others.
         """
         now = self._now(now)
@@ -73,7 +74,6 @@ class Kernel:
                                               for m in moved if m["kind"] == "watch"))
         step("fade", lambda: goals.fade(self, now))
         step("runs_closed", lambda: runs.check(self, now))
-        step("dispatched", lambda: notifier.dispatch(self, now))
         return {**report, **({"errors": errors} if errors else {})}
 
     def _pause(self, watch, reason):

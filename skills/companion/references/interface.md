@@ -69,7 +69,7 @@ Change proactive preferences; pause_jobs=true pauses every Muse job (after insta
 | `time_sensitive_per_day` |  | integer/null; 0–50 |
 | `urgent_per_day` |  | integer; 0–50 — urgent notices that may skip quiet hours per day; more are sent as time_sensitive |
 | `blocked_topics` |  | array |
-| `deliver` |  | string/null; ≤200 chars — Hermes delivery route, e.g. bot-chat or telegram |
+| `deliver` |  | string/null; ≤200 chars — route of the muse-deliver job (notices), e.g. bot-chat or telegram; applied from its next run, null keeps the job's route |
 | `goal_dormant_days` |  | integer/null; 1–365 |
 | `goal_fade_days` |  | integer/null; 1–365 |
 | `fade_question` |  | string/null; ≤500 chars — dormancy question in the user's language with {title}, {days}, {date} |

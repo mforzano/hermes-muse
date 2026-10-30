@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -117,7 +118,7 @@ def main():
             "probe.symbols": "ok", "probe.cron_sessions": "ok", "probe.delivery_semantics": "medium",
             "probe.delivery_target": "high", "probe.signal_purity": "high", "probe.config_location": "ok",
             "probe.home": "ok", "delivery": "high", "executions": "ok", "tool_errors": "medium",
-            "model_input": "medium", "jobs_late": "ok", "jobs_paused": "ok", "host_faults": "ok"}
+            "model_input": "medium", "jobs_late": "ok", "jobs_paused": "ok", "deliver_stalled": "high", "host_faults": "ok"}
         by = {f["id"]: f for f in report["invariants"]}
         check("H1 delivery failure is high within one run", levels["delivery"] == "high"
               and "invalid_params field=cwd" in by["delivery"]["detail"],
@@ -147,11 +148,17 @@ def main():
         check("Store opened read-only (state-v2.db bytes unchanged)", digest(db_file) == before, {})
         check("stdout exit: alert text on first change", text.startswith("Muse health (profile): high") and "delivery" in text,
               {"first_line": text.splitlines()[0]})
-        backup = report.get("backup") or {}
-        deliver_jobs = [j for j in host.cron.jobs().values() if j["name"].startswith("muse-deliver-health-")]
-        check("backup exit: health_deliver queues one one-shot on its own route (not run, nothing sent)",
-              backup.get("status") == "sending" and len(deliver_jobs) == 1 and deliver_jobs[0]["deliver"] == "telegram",
-              {"backup": backup.get("status"), "jobs": [j["deliver"] for j in deliver_jobs]})
+        stamp = lambda t: datetime.fromtimestamp(t, timezone.utc).isoformat()
+        ran = {"enabled": True, "last_run_at": stamp(now - 600), "next_run_at": stamp(now)}  # a 10-minute period
+        stalled = {name: invariants.deliver_stalled(store, job, now, readable)["level"] for name, job, readable in (
+            ("ran", ran, True), ("four_hourly", {**ran, "last_run_at": stamp(now - 4 * H)}, True),
+            ("never_ran", {"enabled": True, "next_run_at": stamp(now)}, True), ("paused", {**ran, "enabled": False}, True),
+            ("unreadable", None, False))}
+        check("deliver_stalled: a notice due for 10h is high with no muse-deliver job or past 3 of its periods (next_run_at - "
+              "last_run_at); ok within them, before its first run or when host jobs are unreadable; low while paused",
+              "missing" in by["deliver_stalled"]["detail"] and by["deliver_stalled"]["value"] == 1
+              and stalled == {"ran": "high", "four_hourly": "ok", "never_ran": "ok", "paused": "low", "unreadable": "ok"},
+              {"detail": by["deliver_stalled"]["detail"], "levels": stalled})
 
         again = health.run(home, now=now + 60)
         report2 = health.load(home)
@@ -184,6 +191,11 @@ def main():
               cron_job["no_agent"] and cron_job["schedule_display"] == "every 30m" and ran.returncode == 0
               and report3["generated_ts"] > now + 60 - 120 and report3["generated_ts"] != report2["generated_ts"],
               {"rc": ran.returncode, "stderr": ran.stderr[-300:]})
+        again = health.ensure_cron(host, "bot-chat")
+        check("backup exit: health_deliver is a second route of the health job (Hermes delivers its stdout to both); "
+              "no job per alert", cron_job["deliver"] == again["deliver"] == "bot-chat,telegram"
+              and not [j for j in host.cron.jobs().values() if "-deliver-" in j["script"]],
+              {"deliver": [cron_job["deliver"], again["deliver"]]})
 
         # -- a healthy profile is silent; recovery is announced --------------------------------------
         clean = base / "clean"

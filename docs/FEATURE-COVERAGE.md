@@ -17,7 +17,7 @@ What code guarantees and what is left to the model. **Code**: deterministic, cov
 | Reading external sources (mail, calendar, reminders, web) | Model | with the user's own tools; Muse records each check per `source_id` with interval, limitation and failure state |
 | Whether something is worth a notice, and its wording | Model | patrol verdict, text, priority, topic |
 | Notice dedupe, quiet hours, budgets, `urgent_per_day`, blocked topics | Code | notice key against 7 days of history; gate computes `next_eligible` |
-| Delivery and reconciliation | Code | one-shot no-agent cron per delivery_key; unknown outcomes are never resent |
+| Delivery and reconciliation | Code | one owned no-agent `muse-deliver` job prints due notices (every 10 min, urgent wakes it); receipts per run execution; unknown outcomes are never resent |
 | Conversation review | Code + Model | code picks ≤10 candidates a day by rules; the model judges `agent_gap` (Finding) or `latent_need` (Idea) |
 | Interests and Ideas | Code | 14-day expiry; only user input renews |
 | Feed articles | Model | up to 3 interests a day without a recent article; published silently, browsable on the Muse page |

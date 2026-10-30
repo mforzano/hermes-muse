@@ -5,7 +5,7 @@
              Health cron (for an offline copy, or to repeat a failed load)
   verify     one Health pass, then A4 (probes) and A7 (oldest unhandled signal < 2h)
   rollback   set the marker (v2 jobs go silent), write v2 facts back into the 0.3.x state.db, restore the
-             0.3.x job prompts, resume the job Muse paused, pause the Health cron; then reinstall 0.3.x
+             0.3.x job prompts, resume the job Muse paused, pause the Health and deliver crons; then reinstall 0.3.x
 Run with the Hermes interpreter: PYTHONPATH=<hermes-agent> python scripts/cutover.py <step> --home <profile home>
 """
 import argparse
@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from hermes_muse import health  # noqa: E402
 from hermes_muse.host import HostAdapter  # noqa: E402
-from hermes_muse.install import MARKER, PROMPTS_BACKUP, RETIRED, install, owned  # noqa: E402
+from hermes_muse.install import MARKER, PROMPTS_BACKUP, RETIRED, ROLLED_BACK, install, owned  # noqa: E402
 
 DB_FILES = ("*.db", "*.db-wal", "*.db-shm", "*.lock")
 
@@ -66,8 +66,9 @@ def rollback(adapter):
         job = owned(adapter, key)
         if job and not job.get("enabled") and reason in str(job.get("paused_reason") or ""):
             out["resumed"] += [job["id"]] if adapter.cron.resume(job["id"]) else []
-    job = owned(adapter, "health")
-    out["health_cron_paused"] = bool(job and adapter.cron.pause(job["id"], "rolled back to 0.3.x"))
+    for key in ("health", "deliver"):  # no-agent jobs: whatever an older cron_entry printed would be delivered
+        job = owned(adapter, key)
+        out[f"{key}_cron_paused"] = bool(job and adapter.cron.pause(job["id"], ROLLED_BACK))
     out["next"] = ["reinstall the 0.3.x plugin version (catalog 0.3.1 SHA, or the previous local checkout)",
                    "put back the external callers' previous prompts/scripts",
                    f"after the 0.3.x plugin loaded, delete {MARKER}; cancel instead: delete it and reload v2"]
