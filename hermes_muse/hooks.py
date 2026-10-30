@@ -15,7 +15,7 @@ import threading
 import time
 
 from . import health
-from .host.sessions import failed_result
+from .host.sessions import failed_result, run_of
 from .install import migrating, owned
 from .kernel import intake, receipts, upkeep
 from .kernel.common import clip
@@ -100,14 +100,13 @@ class Hooks:
             + ". Tell the user once if it matters; never repeat the write.")
 
     # -- pre_tool_call / post_tool_call ---------------------------------------------------------------
-    def intake_run(self, session_id, **kwargs):
-        if self.k.adapter.caller(session_id=session_id, **kwargs) != "cron":
-            return False
+    def intake_run(self, task_id):
+        """Muse's own intake run, told by the hook's task_id alone: no session-row or schedule heuristics."""
         job = owned(self.k.adapter, "memory-upkeep")
-        return bool(job) and self.k.adapter.sessions.job_of(session_id) == job["id"]
+        return bool(job) and run_of(task_id, job["id"])
 
-    def pre_tool(self, tool_name="", args=None, session_id="", tool_call_id="", **kwargs):
-        if self.closed or tool_name != "memory" or not session_id or not tool_call_id or not self.intake_run(session_id, **kwargs):
+    def pre_tool(self, tool_name="", args=None, task_id="", tool_call_id="", **kwargs):
+        if self.closed or tool_name != "memory" or not tool_call_id or not self.intake_run(task_id):
             return None
         refused = upkeep.guard(args or {})
         if refused:
