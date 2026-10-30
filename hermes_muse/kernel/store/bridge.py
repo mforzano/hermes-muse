@@ -1,7 +1,7 @@
 """rollback-bridge: write v2 facts back into the v1 state.db before reinstalling 0.3.1 / 0.3.16 (design 7.4).
 
 - v2 notices: the v1 row of a migrated notice takes the v2 outcome; a notice sent under v2 becomes a
-  v1 `sent` row whose event_key and sources carry the source_key.
+  v1 `sent` row whose event_key and sources carry the notice key.
 - cursor(memory-upkeep) moves to the end of the continuous prefix that v2 disposed or parked; settled
   signals beyond it move to kind `v2_settled_signal`, which neither 0.3.1 (cursor only) nor 0.3.16 reads,
   so no version processes them twice. Signals still new in v2 are handed back to v1 unprocessed.

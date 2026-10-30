@@ -100,7 +100,7 @@ def packets(store, now):
 
 
 def notices(store, now):
-    """7-day duplicate sends per strong source_key; hanging drafted/scheduled notices; closed unknowns."""
+    """7-day duplicate sends per strong notice key; hanging drafted/scheduled notices; closed unknowns."""
     groups = defaultdict(list)
     for n in store.query("notice", state="sent", since=now - 7 * D):
         if n["payload"].get("strong_key", n["natural_key"].startswith("src:")):

@@ -9,7 +9,7 @@ import hashlib
 from datetime import datetime, timedelta
 
 from .common import D, H, local_midnight, one, patch, preferences
-from .store import notice_key
+from .store import keys
 
 PRIORITIES = ("urgent", "time_sensitive", "ordinary")
 VERDICTS = ("send", "skip", "withdraw", "supersede")
@@ -22,9 +22,9 @@ FADE_TOPIC = "goal-fade"
 TEXT_MAX = 2000
 
 
-def delivery_key(source_key, generation=0):
-    """Host delivery key ([a-z0-9][a-z0-9_-]{0,63}): a digest of the source key, stable across retries."""
-    return "n" + hashlib.sha256(f"{source_key}#{generation}".encode()).hexdigest()[:40]
+def delivery_key(key, generation=0):
+    """Host delivery key ([a-z0-9][a-z0-9_-]{0,63}): a digest of the notice key, stable across retries."""
+    return "n" + hashlib.sha256(f"{key}#{generation}".encode()).hexdigest()[:40]
 
 
 def check_text(text):
@@ -80,14 +80,14 @@ def stale(p, now):
 
 
 def draft(k, *, text, priority="ordinary", title="", upstream_id=None, sources=(), source_id=None, topic="",
-          goal_id=None, evidence=(), expires=None, observed_at=None, source_key=None, now):
-    """Create (or return the live) notice for this source key and schedule it."""
+          goal_id=None, evidence=(), expires=None, observed_at=None, notice_key=None, now):
+    """Create (or return the live) notice for this notice key and schedule it."""
     if priority not in PRIORITIES:
         raise ValueError(f"priority must be one of {', '.join(PRIORITIES)}")
-    if source_key:
-        key, strong = source_key, True
+    if notice_key:
+        key, strong = notice_key, True
     else:
-        key, strong = notice_key(upstream_id, sources, title, now if observed_at is None else observed_at)
+        key, strong = keys.notice_key(upstream_id, sources, title, now if observed_at is None else observed_at)
     payload = {"text": check_text(text), "priority": priority, "title": str(title or "")[:200], "upstream_id": upstream_id,
                "sources": [str(s)[:500] for s in sources or ()][:20], "source_id": source_id, "topic": topic or "",
                "goal_id": goal_id, "evidence": list(evidence)[:20], "strong_key": strong, "generation": 0, "verified_at": now}
@@ -152,7 +152,7 @@ def decide(k, item, verdict, *, text=None, priority=None, topic=None, now):
             raise ValueError("withdraw applies to a due notice; skip an observed item instead")
         sources = [item["url"]] if item.get("url") else []
         if verdict == "supersede":
-            key, _ = notice_key(item.get("upstream_id"), sources, item["title"], item.get("ts") or now)
+            key, _ = keys.notice_key(item.get("upstream_id"), sources, item["title"], item.get("ts") or now)
             live = one(k.store, "notice", key)
             if not live or live["state"] not in LIVE:
                 raise ValueError("nothing was notified for this item; use send")

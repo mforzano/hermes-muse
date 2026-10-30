@@ -287,7 +287,7 @@ def part_notifier(base):
           {"due": [(i["ref"], i["why"]) for i in due], "sources_due": [s["source_id"] for s in packet["context"]["sources_due"]]})
 
     keys = [e["payload"]["delivery_key"] for e in k.store.query("notice") if e["payload"].get("delivery_key")]
-    check("N6 delivery keys: digest of source_key, all match [a-z0-9][a-z0-9_-]{0,63}",
+    check("N6 delivery keys: digest of the notice key, all match [a-z0-9][a-z0-9_-]{0,63}",
           keys and all(KEY.fullmatch(x) for x in keys), {"count": len(keys), "sample": keys[:2]})
 
     # Concurrency: two kernels (processes) dispatch the same notice and build the same packet.

@@ -240,7 +240,7 @@ def fade(k, now):
                     if ask is None:
                         date = datetime.fromtimestamp(max(fade_at or now, now + D), tz).date().isoformat()
                         text = question(prefs, record.get("title") or slug, days, date if fade_at else None)
-                        notifier.draft(k, text=text, topic=notifier.FADE_TOPIC, goal_id=slug, source_key=key,
+                        notifier.draft(k, text=text, topic=notifier.FADE_TOPIC, goal_id=slug, notice_key=key,
                                        title=record.get("title") or slug, evidence=[f"goal:{slug}"],
                                        expires=max(fade_at or 0, now + 2 * D) + D, now=now)
                         asked += 1

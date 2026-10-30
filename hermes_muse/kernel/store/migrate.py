@@ -172,7 +172,7 @@ def _migrate(home, store, now):
 
 
 def _notices(put, notices, now, merged):
-    """Map notices; keep at most one sendable notice per source_key (A2/A5)."""
+    """Map notices; keep at most one sendable notice per notice key (A2/A5)."""
     groups = defaultdict(list)
     for row in notices:
         snapshot = row.get("source_snapshot") or {}

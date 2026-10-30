@@ -24,7 +24,7 @@ def upstream(value):
 
 
 def notice_key(item_id=None, sources=(), title="", ts=None):
-    """(source_key, strong). Strong keys are upstream IDs and dedupe against 7-day sent history;
+    """(notice key, strong). Strong keys are upstream IDs and dedupe against 7-day sent history;
     weak keys (title + day) only dedupe unsent candidates.
 
     The key holds the upstream ID without a source prefix: 0.3.x notices never recorded a source_id,
