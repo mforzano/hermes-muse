@@ -5,7 +5,7 @@ ok | low | medium | high. Checks only read; they never repair, so a kernel bug s
 Payload fields read here are the kernel's contract: signal.source, notice.next_eligible/priority/strong_key,
 goal.fade_at/fade_blocked (goals.fade), finding.evidence (review.record), source.health (sources.record),
 packet.job/issued_at/context.review_overflow (packets.build), run.job (runs.start), interest.checked_at
-(packets.feed_result).
+(packets.feed_result), notice.verified_at/topic (notifier.draft).
 Tests seed these through the kernel writers, never with hand-written payloads.
 """
 from __future__ import annotations
@@ -22,6 +22,7 @@ EVIDENCE = 10
 REVIEWS = 30  # kernel.review.PER_NIGHT (kernel_acceptance N4 asserts they match)
 DRAIN_GRACE = 3 * H  # a nightly drain between two batches is still in progress
 MEMORY_NEAR_FULL = 0.98
+DELIVER_GRACE = 30 * 60  # three muse-deliver periods
 
 
 def item(id, level, value, threshold, detail="", evidence=(), fix=""):
@@ -269,6 +270,18 @@ def jobs(owned, now):
             item("jobs_paused", "low" if silent else "ok", len(silent), 0,
                     f"{len(silent)} Muse jobs paused without a reason", silent,
                     "Confirm the pause was intended; resume it otherwise")]
+
+
+def deliver_stalled(store, job, now):
+    """Notices due for over 30 minutes and not claimed: the muse-deliver job is missing or not running (a stale
+    one waits for patrol to re-verify it, see notifier.stale)."""
+    due = [n for n in store.query("notice", state="scheduled") if (n["payload"].get("next_eligible") or now) < now - DELIVER_GRACE
+           and (n["payload"].get("topic") == "goal-fade" or (n["payload"].get("verified_at") or 0) >= now - D)] if store else []
+    level = "ok" if not due else "low" if job and not job.get("enabled") else "high"
+    return item("deliver_stalled", level, len(due), 0,
+                f"{len(due)} notices due for over 30 min and not sent; muse-deliver "
+                + ("missing" if not job else "enabled" if job.get("enabled") else "paused"), ids(due),
+                "Resume the muse-deliver job, or reinstall Muse if it is missing; check its last execution error")
 
 
 def _epoch(stamp):

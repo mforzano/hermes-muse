@@ -6,7 +6,7 @@ through the Muse Notifier:
   1. main-session injection: `injection(home)` returns one line while any high health item is open;
   2. Dashboard: `load(home)` behind the plugin's `/health` route;
   3. cron stdout: `run()` returns a message only when the alert set changes (empty stdout is silent);
-  4. optional `health_deliver` setting: the same message sent to a second Hermes route.
+  4. optional `health_deliver` setting: a second route on the health job, so Hermes delivers that stdout to both.
 """
 from __future__ import annotations
 
@@ -81,6 +81,7 @@ def check(adapter, now=None):
     items += inv.deliveries(store, adapter.cron.executions(now - inv.D), owned, now)
     items += inv.tools(adapter.sessions.tool_results(now - inv.D))
     items += inv.jobs(owned, now)
+    items.append(inv.deliver_stalled(store, adapter.cron.job("deliver"), now))
     items.append(inv.memory(adapter.memory.stores()))
     items.append(inv.host_faults(list(adapter.faults)))
     return items
@@ -124,10 +125,6 @@ def run(home=None, *, now=None, adapter=None):
               "invariants": items, "faults": list(adapter.faults)}
     changed = report["alert_fingerprint"] != old.get("alert_fingerprint", fingerprint([]))
     text = message(report) if changed else ""
-    target = adapter.config.get().get("health_deliver")
-    if text and target:  # the slot keeps a recurring alert set from hitting the one-shot's replay guard
-        key = f"health-{report['alert_fingerprint']}-{int(now // INTERVAL)}"
-        report["backup"] = adapter.deliver.send(str(target), text, key)
     write(adapter.home, report)
     return text
 
@@ -147,6 +144,11 @@ def injection(home, now=None):
 
 
 def ensure_cron(adapter, deliver):
-    """Create or refresh the health no_agent job on `deliver` (the profile's main route)."""
+    """Create or refresh the health no_agent job on `deliver` (the profile's main route), plus the optional
+    `health_deliver` backup route."""
     entry = Path(__file__).resolve().parents[2] / "health_entry.py"
-    return adapter.cron.ensure("health", schedule="every 30m", entry=entry, deliver=deliver, no_agent=True)
+    job = adapter.cron.ensure("health", schedule="every 30m", entry=entry, deliver=deliver, no_agent=True)
+    backup = adapter.config.get().get("health_deliver")
+    if job and backup and adapter.cron.add_route(job["id"], str(backup)):
+        return adapter.cron.jobs().get(job["id"])
+    return job
