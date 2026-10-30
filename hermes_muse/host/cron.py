@@ -124,15 +124,19 @@ class Cron(Part):
         return bool(removed)
 
     @tolerant(False)
-    def add_route(self, job_id, target):
-        """Add `target` to an owned job's comma-separated route (Hermes delivers to each); the user's targets stay."""
-        job = self.jobs().get(job_id)
-        routes = [r.strip() for r in str((job or {}).get("deliver") or "").split(",") if r.strip()]
-        if not job or target in routes:
+    def set_route(self, job_id, target):
+        """Replace an owned job's delivery route (comma-separated targets; Hermes delivers to each)."""
+        if job_id not in self.jobs():
             return False
         from cron.jobs import update_job
         with self.scope():
-            return bool(update_job(job_id, {"deliver": ",".join(routes + [target])}))
+            return bool(update_job(job_id, {"deliver": target}))
+
+    def add_route(self, job_id, target):
+        """Add `target` to an owned job's route; the user's targets stay."""
+        job = self.jobs().get(job_id)
+        routes = [r.strip() for r in str((job or {}).get("deliver") or "").split(",") if r.strip()]
+        return bool(job) and target not in routes and self.set_route(job_id, ",".join(routes + [target]))
 
     @tolerant(False)
     def resume(self, job_id):
@@ -245,7 +249,8 @@ class Deliver(Part):
         if outcome == "delivered":
             return "sent", None
         if outcome in ("failed", "not_configured"):
-            return "failed", job.get("last_delivery_error") or outcome
+            latest = self.adapter.cron.outcome(job["id"]) or {}  # last_delivery_error describes only the latest run
+            return "failed", (latest.get("execution_id") == run["execution_id"] and job.get("last_delivery_error")) or outcome
         if outcome != "queued":
             return "unknown", outcome
         target = str(job.get("deliver") or "")
@@ -261,8 +266,9 @@ class Deliver(Part):
             return "unknown", state
         from cron.delivery_queue import get_status
         with self.scope():
-            state = (get_status(run["execution_id"]) or {}).get("status")
-        return {"delivered": ("sent", None), "failed": ("failed", "delivery queue failed"),
+            row = get_status(run["execution_id"]) or {}
+        state = row.get("status")
+        return {"delivered": ("sent", None), "failed": ("failed", row.get("error") or "delivery queue failed"),
                 "unknown": ("unknown", state), "suppressed": ("unknown", state)}.get(state, ("sending", None))
 
     def bot_receipt(self, target, job_id, execution_id):
