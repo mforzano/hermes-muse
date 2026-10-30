@@ -37,11 +37,11 @@ def check(name, ok, detail=""):
 def static():
     kinds = [kind for kind, _, _ in s.MAIN.values()]
     check("S1 counts: muse_manage 14 (11 write + 3 read), muse_job read/observe/submit",
-          len(s.MAIN) == 14 and kinds.count("write") == 11 and kinds.count("read") == 3 and list(s.JOB) == ["read", "observe", "submit"],
-          {"main": len(s.MAIN), "writes": kinds.count("write"), "reads": kinds.count("read"), "job": list(s.JOB)})
+          len(s.MAIN) == 14 and kinds.count("write") == 11 and kinds.count("read") == 3 and list(s.JOB_ACTIONS) == ["read", "observe", "submit"],
+          {"main": len(s.MAIN), "writes": kinds.count("write"), "reads": kinds.count("read"), "job": list(s.JOB_ACTIONS)})
     schemas = {t: s.tool_schema(t) for t in s.TOOLS}
     branches = {t: [b["title"] for b in schemas[t]["parameters"]["properties"]["data"]["anyOf"]] for t in s.TOOLS}
-    results = s.JOB["submit"][2]["properties"]["results"]["items"]["anyOf"]
+    results = s.JOB_ACTIONS["submit"][2]["properties"]["results"]["items"]["anyOf"]
     check("S2 tool schemas generated from the table; submit results are packets.SCHEMAS verbatim",
           all(branches[t] == list(s.TOOLS[t]) == schemas[t]["parameters"]["properties"]["action"]["enum"] for t in s.TOOLS)
           and [{k: v for k, v in r.items() if k != "title"} for r in results] == list(packets.SCHEMAS.values())

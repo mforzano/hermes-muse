@@ -105,7 +105,7 @@ MAIN = {  # action: (kind, summary, data schema)
     "installation_prepare": ("read", "Read-only plan for disabling or removing Muse: owned jobs and the confirmed steps.",
                              obj(["operation"], operation=enum("disable", "remove"))),
 }
-JOB = {
+JOB_ACTIONS = {
     "read": ("read", "Original text of a packet item beyond its excerpt (12k per call, 24k per item).",
              obj(["packet_id", "ref"], packet_id=ID, ref=text(200), offset=count(0, 10 ** 7))),
     "observe": ("write", "Record one source check of a patrol packet with the items seen (upstream IDs as the source gives them).",
@@ -121,7 +121,7 @@ JOB = {
                    results={"type": "array", "maxItems": 100,
                             "items": {"anyOf": [{**s, "title": name} for name, s in packets.SCHEMAS.items()]}})),
 }
-TOOLS = {"muse_manage": MAIN, "muse_job": JOB}
+TOOLS = {"muse_manage": MAIN, "muse_job": JOB_ACTIONS}
 DESCRIPTIONS = {
     "muse_manage": "Hermes Muse: goals, interests, ideas, preferences, watches, Feed, notes and calendar for the user "
                    "of this private conversation. Arguments go inside data. Muse fills IDs, keys and next checks; only "
