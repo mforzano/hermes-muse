@@ -3,11 +3,12 @@
 build(job) -> {id, type, items, schema, budget[, context]}. While a packet of the job is issued, every caller
 gets that same packet; an empty intake/nightly/feed packet is not stored (id None) and the caller stays silent.
 Patrol always gets a packet: only the model can read its sources.
-Item count adapts to the median seconds per item of the job's last 10 packets: clamp(0.6 T / median).
-Drain jobs (nightly, feed) work their whole queue within one period in batches `<job>:<period>[:<batch>]`
+Item count adapts to the median seconds per item of the job's last 10 packets: clamp(0.6 T / median); a batch
+also stays within EXCERPT_TOTAL chars of excerpts.
+Drain jobs (intake, nightly, feed) work their whole queue within one period in batches `<job>:<period>[:<batch>]`
 (lease min(period, 2h)); a ref offered in a submitted batch is not offered again that period, the refs of an
 expired batch are, and so are the unanswered refs of a batch whose run failed (close); runs.relay wakes the job
-again while work remains.
+again while work remains. Work arriving after the last batch waits for the next wake or period.
 read/observe/submit accept only refs that belong to the packet (trust boundary).
 """
 import hashlib
@@ -22,12 +23,11 @@ EXCERPT_TOTAL = 24000
 READ_MAX, READ_TOTAL = 12000, 24000
 OBSERVE_MAX = 50
 JOBS = {  # expected run seconds T, cron period, packet lease, adaptive item bounds (a batch size when draining)
-    "intake": {"type": "intake", "expected": 180, "period": H, "lease": H, "items": (3, 15)},
+    "intake": {"type": "intake", "expected": 180, "period": H, "lease": H, "items": (3, 15), "drain": True},
     "patrol": {"type": "patrol", "expected": 360, "period": 30 * 60, "lease": 30 * 60, "items": (2, 8)},
     "nightly": {"type": "nightly", "expected": 600, "period": D, "lease": 2 * H, "items": (2, 10), "drain": True},
     "feed": {"type": "feed", "expected": 300, "period": D, "lease": 2 * H, "items": (1, 3), "drain": True},
 }
-DUE_NOTICES = 5
 PROPOSE_WITHIN = 7 * D
 CHECK_GAP = 20 * H  # an interest is researched at most once a day
 FEED_NOTICES, FEED_PRIORITIES = 1, ("ordinary", "time_sensitive")
@@ -77,20 +77,15 @@ def size(k, job):
 
 # -- builders: (items, context) ----------------------------------------------------------------------
 def intake_items(k, n, now, offered):
-    items, chars = [], 0
-    for e in sorted(k.store.query("signal", state="new"), key=lambda e: (e["payload"].get("created") or 0, e["id"])):
-        item = intake.item(e)
-        if items and (len(items) >= n or chars + len(item["excerpt"]) > EXCERPT_TOTAL):
-            break
-        items.append(item)
-        chars += len(item["excerpt"])
-    full = upkeep.full(k, now) if items else []
-    return items, {"memory_full": full} if full else None
+    """New signals not offered this period, oldest first."""
+    rows = sorted((e for e in k.store.query("signal", state="new") if e["natural_key"] not in offered),
+                  key=lambda e: (e["payload"].get("created") or 0, e["id"]))
+    return [intake.item(e) for e in rows], {}
 
 
 def patrol_items(k, n, now, offered):
     recent = [{"at": t["at"], "text": clip(t["text"], 500)} for t in k.adapter.sessions.user_turns(now - 6 * H)][-5:]
-    return notifier.due_items(k, now, DUE_NOTICES), {
+    return notifier.due_items(k, now), {
         "sources_due": sources.due(k.store, now, k.settings().get("source_intervals")),
         "recent_user_messages": recent, "send_limit": n, "blocked_topics": blocked_topics(k)}
 
@@ -103,17 +98,13 @@ def blocked_topics(k):
 
 
 def nightly_items(k, n, now, offered):
-    """The whole queue, obligations first: due goals (earliest first), goal proposals, then review candidates
-    within the per-night cap; the overflow is counted for Health."""
+    """The whole queue, obligations first: due goals (earliest first), goal proposals, then review candidates."""
     due = [goals.item(k, e) for e in k.store.due(now, kind="goal") if e["natural_key"] not in offered]
     proposals = [{**intake.item(e), "kind": "signal", "facts": e["payload"].get("facts", [])}
                  for e in reversed(k.store.query("signal", state="disposed", since=now - PROPOSE_WITHIN))
                  if e["payload"].get("goal_hint") == "new" and not e["payload"].get("proposed_at")
                  and not goals.read(k.home, goals.slug_for(e["natural_key"]))]
-    found = review.candidates(k, now, skip=offered)
-    room = max(0, review.PER_NIGHT - sum(ref.startswith("review:") for ref in offered))
-    return due + proposals + found[:room], {"review_overflow": max(0, len(found) - room),
-                                            "memory_changes": upkeep.unreported(k, now)}
+    return due + proposals + review.candidates(k, now, skip=offered), {"memory_changes": upkeep.unreported(k, now)}
 
 
 def feed_items(k, n, now, offered):
@@ -137,6 +128,17 @@ def view(e, spec):
     out = {"id": e["id"], "type": spec["type"], "items": p["items"],
            "schema": {name: SCHEMAS[name] for name in TYPE_SCHEMAS[spec["type"]]}, "budget": p["budget"]}
     return {**out, "context": p["context"]} if p.get("context") else out
+
+
+def take(queue, n):
+    """The first n items whose excerpts fit EXCERPT_TOTAL chars (at least one)."""
+    items, chars = [], 0
+    for i in queue:
+        chars += len(i.get("excerpt", ""))
+        if items and (len(items) >= n or chars > EXCERPT_TOTAL):
+            break
+        items.append(i)
+    return items
 
 
 def batches(k, job, now):
@@ -165,7 +167,8 @@ def plan(k, job, now):
         p["payload"]["handled"] if p["payload"].get("released") else [i["ref"] for i in p["payload"]["items"]]))
     n = size(k, job)
     queue, context = BUILDERS[job](k, n, now, offered)
-    return None, f"{key}:{len(batch)}" if batch else key, n, queue[:n], {**context, "remaining": max(0, len(queue) - n)}
+    items = take(queue, n)
+    return None, f"{key}:{len(batch)}" if batch else key, n, items, {**context, "remaining": len(queue) - len(items)}
 
 
 def pending(k, job, now):
@@ -174,10 +177,21 @@ def pending(k, job, now):
     return not issued and not empty(items, context)
 
 
+def stalls(k, job, now):
+    """This period's batches in a row, latest first, that handled no item."""
+    _, batch = batches(k, job, now)
+    n = 0
+    for p in sorted(batch, key=lambda p: p["payload"]["issued_at"], reverse=True):
+        if p["payload"].get("handled"):
+            break
+        n += 1
+    return n
+
+
 def close(k, packet_id, outcome, now):
     """The run of a drain batch closed. ok/degraded consumes the batch: its proposals count as made and, on the
     last batch, its memory changes as reported. failed/abandoned releases its unanswered refs. A batch still issued
-    expires. True when the run made progress (closed ok/degraded having handled an item)."""
+    expires."""
     e = k.store.get(packet_id)
     p, done = e["payload"], outcome in ("ok", "degraded")
     context = p.get("context") or {}  # a packet issued by 0.4.0 may have none
@@ -191,7 +205,6 @@ def close(k, packet_id, outcome, now):
     elif e["state"] == "submitted":
         patch(k.store, packet_id, expect=("submitted",), reason=f"run:{outcome}", payload={"released": True}, now=now)
     patch(k.store, packet_id, "expired", expect=("issued",), reason=f"run:{outcome}", now=now)
-    return done and bool(p.get("handled"))
 
 
 def build(k, job, now):
@@ -205,6 +218,8 @@ def build(k, job, now):
               "read_chars": READ_MAX, "read_total_per_item": READ_TOTAL, "lease_until": now + spec["lease"]}
     if empty(items, context) and job != "patrol":
         return {"id": None, "type": spec["type"], "items": [], "schema": {}, "budget": budget}
+    if job == "intake" and (full := upkeep.full(k, now)):  # counts an ask, so only for a packet being issued
+        context = {**context, "memory_full": full}
     with store.atomic():
         e = store.create("packet", key, {"job": job, "type": spec["type"], "items": items, "context": context,
                                          "budget": budget, "observed": [], "reads": {}, "handled": [], "issued_at": now},
