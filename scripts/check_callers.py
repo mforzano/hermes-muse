@@ -1,7 +1,8 @@
 """A11: find 0.3.x Muse dependencies in external callers (cron prompts, scripts) before the cutover.
 
 Flags, per file and line:
-  action    a muse_manage action that v2 removed, on a line that mentions muse_manage, or as "action": "<name>"
+  action    a muse_manage action that v2 removed: an underscored name anywhere, a bare word (context, status, delegate)
+            on a line that mentions muse_manage, or as "action": "<name>"
   session   cron sessions looked up by the old `cron_<job id>_` id prefix only (v2: source='cron' + title)
   store     direct reads of the 0.3.x muse/state.db `records` table
   import    imports of removed hermes_muse modules
@@ -30,8 +31,8 @@ def scan(path):
     has_source = bool(SOURCE_CRON.search(text))
     for number, line in enumerate(text.splitlines(), 1):
         hits = []
-        if "muse_manage" in line:
-            hits += [("action", m) for m in WORD.findall(line)]
+        # bare words (context, status, delegate) count only next to muse_manage; underscored names anywhere
+        hits += [("action", m) for m in WORD.findall(line) if "muse_manage" in line or "_" in m]
         hits += [("action", m) for m in ACTION.findall(line)]
         if SESSION.search(line) and not has_source:
             hits.append(("session", "cron_ id prefix without source='cron'"))
