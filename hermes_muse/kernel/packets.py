@@ -6,7 +6,8 @@ Patrol always gets a packet: only the model can read its sources.
 Item count adapts to the median seconds per item of the job's last 10 packets: clamp(0.6 T / median).
 Drain jobs (nightly, feed) work their whole queue within one period in batches `<job>:<period>[:<batch>]`
 (lease min(period, 2h)); a ref offered in a submitted batch is not offered again that period, the refs of an
-expired batch are, and runs.relay wakes the job again while work remains.
+expired batch are, and so are the unanswered refs of a batch whose run failed (close); runs.relay wakes the job
+again while work remains.
 read/observe/submit accept only refs that belong to the packet (trust boundary).
 """
 import hashlib
@@ -27,6 +28,7 @@ JOBS = {  # expected run seconds T, cron period, packet lease, adaptive item bou
     "feed": {"type": "feed", "expected": 300, "period": D, "lease": 2 * H, "items": (1, 3), "drain": True},
 }
 DUE_NOTICES = 5
+PROPOSE_WITHIN = 7 * D
 CHECK_GAP = 20 * H  # an interest is researched at most once a day
 FEED_NOTICES, FEED_PRIORITIES = 1, ("ordinary", "time_sensitive")
 
@@ -124,7 +126,6 @@ def feed_items(k, n, now, offered):
 
 
 BUILDERS = {"intake": intake_items, "patrol": patrol_items, "nightly": nightly_items, "feed": feed_items}
-PROPOSE_WITHIN = 7 * D
 
 
 def empty(items, context):
@@ -160,7 +161,8 @@ def plan(k, job, now):
     issued = next((p for p in batch if p["state"] == "issued"), None)
     if issued:
         return issued, key, None, None, None
-    offered = frozenset(i["ref"] for p in batch if p["state"] == "submitted" for i in p["payload"]["items"])
+    offered = frozenset(ref for p in batch if p["state"] == "submitted" for ref in (
+        p["payload"]["handled"] if p["payload"].get("released") else [i["ref"] for i in p["payload"]["items"]]))
     n = size(k, job)
     queue, context = BUILDERS[job](k, n, now, offered)
     return None, f"{key}:{len(batch)}" if batch else key, n, queue[:n], {**context, "remaining": max(0, len(queue) - n)}
@@ -170,6 +172,26 @@ def pending(k, job, now):
     """True when a drain job has work left this period and no batch is out."""
     issued, _, _, items, context = plan(k, job, now)
     return not issued and not empty(items, context)
+
+
+def close(k, packet_id, outcome, now):
+    """The run of a drain batch closed. ok/degraded consumes the batch: its proposals count as made and, on the
+    last batch, its memory changes as reported. failed/abandoned releases its unanswered refs. A batch still issued
+    expires. True when the run made progress (closed ok/degraded having handled an item)."""
+    e = k.store.get(packet_id)
+    p, done = e["payload"], outcome in ("ok", "degraded")
+    context = p.get("context") or {}  # a packet issued by 0.4.0 may have none
+    if done and (e["state"] == "submitted" or not p["items"]):
+        for i in p["items"]:  # a proposal is made once, whether or not the model created the goal
+            if i["kind"] == "signal":
+                patch(k.store, one(k.store, "signal", i["ref"])["id"], reason="nightly:proposed",
+                      payload=lambda s: {"proposed_at": s["payload"].get("proposed_at") or now}, now=now)
+        if not context.get("remaining"):
+            upkeep.reported(k, context.get("memory_changes"))
+    elif e["state"] == "submitted":
+        patch(k.store, packet_id, expect=("submitted",), reason=f"run:{outcome}", payload={"released": True}, now=now)
+    patch(k.store, packet_id, "expired", expect=("issued",), reason=f"run:{outcome}", now=now)
+    return done and bool(p.get("handled"))
 
 
 def build(k, job, now):
@@ -333,11 +355,4 @@ def submit(k, packet_id, results, now):
                 "per_item": (now - e["payload"]["issued_at"]) / max(1, len(total))}
     if not patch(k.store, packet["id"], "submitted", expect=("issued",), reason="submit", payload=done, now=now):
         patch(k.store, packet["id"], reason="submit", payload=done, now=now)  # a late or repeated submit on an expired/submitted packet
-    if p["type"] == "nightly":
-        for i in p["items"]:  # a proposal is made once, whether or not the model created the goal
-            if i["kind"] == "signal":
-                patch(k.store, one(k.store, "signal", i["ref"])["id"], reason="nightly:proposed",
-                      payload=lambda e: {"proposed_at": e["payload"].get("proposed_at") or now}, now=now)
-        if not (p.get("context") or {}).get("remaining"):
-            upkeep.reported(k, p["context"].get("memory_changes"))
     return out

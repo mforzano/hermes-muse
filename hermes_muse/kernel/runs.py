@@ -1,6 +1,7 @@
 """Run: one woken job execution. Its outcome comes from the host execution status and the packet's
-dispositions, never from a model self-report. A closed run of a drain job relays: its unsubmitted packet
-expires (the items come back) and the job is woken again while work remains, at most WAKES a day."""
+dispositions, never from a model self-report. A closed run of a drain job relays: its batch is closed
+(packets.close) and the job is woken again while work remains. A wake after a run that made progress is free
+(the queue shrinks every time); at most WAKES a day follow a run that did not, so the relay always ends."""
 from . import packets
 from .common import H, count_today, patch
 
@@ -50,7 +51,6 @@ def relay(k, run, now):
     p = run["payload"]
     if not packets.JOBS.get(p.get("job"), {}).get("drain"):
         return
-    if p.get("packet_id"):
-        patch(k.store, p["packet_id"], "expired", expect=("issued",), reason=f"run:{run['state']}", now=now)
-    if packets.pending(k, p["job"], now) and count_today(k.store, f"drain_wakes:{p['job']}", now, k.tz(), WAKES):
+    progress = bool(p.get("packet_id")) and packets.close(k, p["packet_id"], run["state"], now)
+    if packets.pending(k, p["job"], now) and (progress or count_today(k.store, f"drain_wakes:{p['job']}", now, k.tz(), WAKES)):
         k.adapter.cron.wake(p["job_id"])
