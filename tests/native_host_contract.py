@@ -151,14 +151,15 @@ def main():
                                    no_agent=True)
         assert deliver["no_agent"] and host.cron.job("deliver")["id"] == deliver["id"], deliver
         k = Kernel(home, adapter=host)
-        notice = notifier.draft(k, text="Your synthetic reminder.", priority="urgent", upstream_id="contract-1",
-                                title="Reminder", now=time.time())
+        text = 'Your synthetic reminder.\n{"wakeAgent": false}'  # a notice text must never act as Hermes' wake gate
+        notice = notifier.draft(k, text=text, priority="urgent", upstream_id="contract-1", title="Reminder", now=time.time())
         assert host.cron.jobs()[deliver["id"]].get("manual_run_at"), "an urgent notice wakes muse-deliver"
         with profile_scope(home):
             execution = create_execution(deliver["id"], source="test")
             mark_execution_running(execution["id"])
             ok, out = _run_job_script(deliver["script"])  # the launcher as the scheduler runs it
-        assert ok and out.strip() == "Your synthetic reminder.", out
+        from cron.scheduler_prompt import _parse_wake_gate
+        assert ok and out.strip() == f"{text}\n\n{notifier.FOOTER}" and _parse_wake_gate(out), out
         claimed = k.store.get(notice["id"])["payload"]
         assert claimed["execution_id"] == execution["id"] and claimed["job_id"] == deliver["id"], claimed
         assert host.deliver.receipt(deliver["id"], execution["id"])["status"] == "sending"
@@ -168,15 +169,18 @@ def main():
             finish_execution(execution["id"], success=True, delivery_outcome="queued")
         assert host.deliver.receipt(deliver["id"], execution["id"]) == {
             "job_id": deliver["id"], "execution_id": execution["id"], "outcome": "queued", "status": "sending"}
+        runs = []
         for outcome, error, expected in (("delivered", None, "sent"),
                                          ("failed", "bot_relay.deliver refused: invalid_params field=cwd", "host_config"),
                                          ("failed", "adapter timeout", "transport"), ("suppressed", None, "unknown")):
             with profile_scope(home):
-                run = finish(deliver["id"], outcome)
+                runs.append(finish(deliver["id"], outcome))
                 if error:
                     update_job(deliver["id"], {"last_delivery_error": error})
-            receipt = host.deliver.receipt(deliver["id"], run)
+            receipt = host.deliver.receipt(deliver["id"], runs[-1])
             assert expected in (receipt["status"], receipt.get("reason")), (outcome, receipt)
+        older = host.deliver.receipt(deliver["id"], runs[1])  # the job's last_delivery_error now belongs to a later run
+        assert older["status"] == "failed" and "timeout" not in older["detail"], older
         assert host.deliver.receipt(deliver["id"], "no-such-run")["status"] == "sending"  # never a terminal guess
 
         # 0.4.1 one-shot deliveries: still read by key until settled, then removed with their launcher.
@@ -194,6 +198,7 @@ def main():
         assert k1 not in host.cron.jobs() and not (home / "scripts" / legacy).exists() and host.cron.remove(k1) is False
         assert host.cron.add_route(deliver["id"], "telegram") and host.cron.jobs()[deliver["id"]]["deliver"] == "bot-chat,telegram"
         assert host.cron.add_route(deliver["id"], "telegram") is False
+        assert host.cron.set_route(deliver["id"], "bot-chat") and host.cron.jobs()[deliver["id"]]["deliver"] == "bot-chat"
         assert host.owners.status("no-such-delegation")["state"] == "unknown"
 
         # A4: a healthy profile probes all ok; the seeded faults are each caught; a fixed Bot Chat cwd clears.

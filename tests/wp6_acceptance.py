@@ -147,19 +147,25 @@ def part_entry(home, ids):
           {"patrol_context": sorted(patrol["packet"].get("context") or {}), "week": weekly.get("last_7_days")})
     from hermes_muse.kernel import Kernel, notifier
     k = Kernel(home)
+    from hermes_muse.kernel.common import header, render
+    prefs = home / "muse" / "PROACTIVE_PREFERENCES.md"
+    old = prefs.read_text(encoding="utf-8")
+    prefs.write_bytes(render({**header(old), "deliver": "telegram"}, old.partition("\n")[2]))  # the user changes the route
     notice = notifier.draft(k, text="Your synthetic reminder", priority="urgent", upstream_id="wp6-deliver", title="Reminder", now=now)
     deliver_id = k.adapter.cron.job("deliver")["id"]
     printed = []
-    for _ in range(2):
+    for _ in range(3):
         execution = create_execution(deliver_id, source="test")
         mark_execution_running(execution["id"])
         printed.append((execution["id"], *_run_job_script("hermes-muse-deliver.py")))
     claimed = Store.for_home(home, readonly=True).get(notice["id"])
-    check("deliver run: launcher -> cron_entry prints the due notice as plain stdout (no model), claimed for that execution; "
-          "the next run is silent (empty stdout)",
-          printed[0][1] and printed[0][2].strip() == "Your synthetic reminder" and _parse_wake_gate(printed[0][2])
-          and claimed["state"] == "sending" and claimed["payload"]["execution_id"] == printed[0][0]
-          and claimed["payload"]["job_id"] == deliver_id and printed[1][1] and printed[1][2].strip() == "",
+    check("deliver run: a changed `deliver` preference becomes the job's route (that run silent); then the launcher prints "
+          "the due notice as plain stdout (no model), claimed for that execution on the new route; the next run is silent",
+          printed[0][1] and printed[0][2].strip() == "" and printed[1][1]
+          and printed[1][2].strip() == f"Your synthetic reminder\n\n{notifier.FOOTER}" and _parse_wake_gate(printed[1][2])
+          and claimed["state"] == "sending" and claimed["payload"]["execution_id"] == printed[1][0]
+          and claimed["payload"]["target"] == "telegram" == k.adapter.cron.job("deliver")["deliver"]
+          and claimed["payload"]["job_id"] == deliver_id and printed[2][1] and printed[2][2].strip() == "",
           {"out": [p[2][:200] for p in printed], "state": claimed["state"]})
     silent = {key: entry.run(home, key) for key in ("deliver-abc", "watch-gone", "watch-523b6d11996b")}
     (home / MARKER).write_text(json.dumps({"at": now}))
@@ -326,8 +332,12 @@ def part_rollback(home, ids, adapter):
           and jobs[ids["weekly-governance-review"]]["state"] == "paused" and set(paused.values()) == {"paused"} and len(paused) == 2,
           {k: v for k, v in out.items() if k != "bridge"})
     (home / MARKER).unlink()  # cancel the rollback: reload v2
-    install(adapter, ROOT)
+    reloaded = install(adapter, ROOT)
     jobs = {j["id"]: j for j in list_jobs(include_disabled=True)}
+    states = {j["script"]: j["state"] for j in jobs.values() if j.get("script") in ("hermes-muse-health.py", "hermes-muse-deliver.py")}
+    check("cancelled rollback: reinstall resumes the Health and deliver jobs the rollback paused; the user's pause stays",
+          set(states.values()) == {"scheduled"} and len(reloaded["resumed"]) == 2
+          and jobs[ids["weekly-governance-review"]]["state"] == "paused", {"states": states, "resumed": reloaded["resumed"]})
     from hermes_muse.install import WATCH_PROMPT, watch_check
     v1 = ("Read hermes-muse:companion ... Work only on goal g1. Check its status ... "
           "With nothing approved return [SILENT].\nCheck the visa page\nStop condition: visa issued")

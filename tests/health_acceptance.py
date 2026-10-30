@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -147,8 +148,17 @@ def main():
         check("Store opened read-only (state-v2.db bytes unchanged)", digest(db_file) == before, {})
         check("stdout exit: alert text on first change", text.startswith("Muse health (profile): high") and "delivery" in text,
               {"first_line": text.splitlines()[0]})
-        check("deliver_stalled: a notice due for 10h and no muse-deliver job is high",
-              "missing" in by["deliver_stalled"]["detail"] and by["deliver_stalled"]["value"] == 1, by["deliver_stalled"]["detail"])
+        stamp = lambda t: datetime.fromtimestamp(t, timezone.utc).isoformat()
+        ran = {"enabled": True, "last_run_at": stamp(now - 600), "next_run_at": stamp(now)}  # a 10-minute period
+        stalled = {name: invariants.deliver_stalled(store, job, now, readable)["level"] for name, job, readable in (
+            ("ran", ran, True), ("four_hourly", {**ran, "last_run_at": stamp(now - 4 * H)}, True),
+            ("never_ran", {"enabled": True, "next_run_at": stamp(now)}, True), ("paused", {**ran, "enabled": False}, True),
+            ("unreadable", None, False))}
+        check("deliver_stalled: a notice due for 10h is high with no muse-deliver job or past 3 of its periods (next_run_at - "
+              "last_run_at); ok within them, before its first run or when host jobs are unreadable; low while paused",
+              "missing" in by["deliver_stalled"]["detail"] and by["deliver_stalled"]["value"] == 1
+              and stalled == {"ran": "high", "four_hourly": "ok", "never_ran": "ok", "paused": "low", "unreadable": "ok"},
+              {"detail": by["deliver_stalled"]["detail"], "levels": stalled})
 
         again = health.run(home, now=now + 60)
         report2 = health.load(home)
