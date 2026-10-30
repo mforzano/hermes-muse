@@ -22,7 +22,6 @@ EVIDENCE = 10
 REVIEWS = 30  # kernel.review.PER_NIGHT (kernel_acceptance N4 asserts they match)
 DRAIN_GRACE = 3 * H  # a nightly drain between two batches is still in progress
 MEMORY_NEAR_FULL = 0.98
-DELIVER_GRACE = 30 * 60  # three muse-deliver periods
 
 
 def item(id, level, value, threshold, detail="", evidence=(), fix=""):
@@ -272,15 +271,21 @@ def jobs(owned, now):
                     "Confirm the pause was intended; resume it otherwise")]
 
 
-def deliver_stalled(store, job, now):
-    """Notices due for over 30 minutes and not claimed: the muse-deliver job is missing or not running (a stale
-    one waits for patrol to re-verify it, see notifier.stale)."""
-    due = [n for n in store.query("notice", state="scheduled") if (n["payload"].get("next_eligible") or now) < now - DELIVER_GRACE
+def deliver_stalled(store, job, now, readable=True):
+    """Notices left unclaimed for three muse-deliver periods (its next_run_at - last_run_at; up to 5 go per run, a
+    stale one waits for patrol, see notifier.stale): the job is missing, paused or its runs claim nothing. A job
+    that never ran is jobs_late's case; unreadable host jobs are host_faults'."""
+    period = job and job.get("enabled") and job.get("last_run_at") and job.get("next_run_at") and \
+        _epoch(job["next_run_at"]) - _epoch(job["last_run_at"])
+    grace = 3 * period if period and period > 0 else None
+    due = [n for n in store.query("notice", state="scheduled") if (n["payload"].get("next_eligible") or now) < now - (grace or 0)
            and (n["payload"].get("topic") == "goal-fade" or (n["payload"].get("verified_at") or 0) >= now - D)] if store else []
-    level = "ok" if not due else "low" if job and not job.get("enabled") else "high"
+    state = "unreadable" if not readable else "missing" if not job else "enabled" if job.get("enabled") else "paused"
+    quiet = not due or state == "unreadable" or state == "enabled" and not grace
+    level = "ok" if quiet else "low" if state == "paused" else "high"
     return item("deliver_stalled", level, len(due), 0,
-                f"{len(due)} notices due for over 30 min and not sent; muse-deliver "
-                + ("missing" if not job else "enabled" if job.get("enabled") else "paused"), ids(due),
+                f"{len(due)} notices due and not sent" + (f" for over {grace / 60:.0f} min" if grace else "")
+                + f"; muse-deliver {state}", ids(due),
                 "Resume the muse-deliver job, or reinstall Muse if it is missing; check its last execution error")
 
 
