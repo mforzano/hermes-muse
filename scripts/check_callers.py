@@ -16,7 +16,7 @@ REMOVED = ("content_read", "memory_feedback_review", "context", "status", "conve
            "notification_resolve", "notification_review", "feed_add", "feed_list", "calendar_window", "source_check",
            "review_complete", "run_complete", "delegate", "research_start", "research_status", "operations_read",
            "operations_complete", "operations_batch", "operations_evidence", "operations_commit", "finding_record")
-WORD = re.compile(r"(?<![\w.-])(" + "|".join(REMOVED) + r")(?![\w-])")
+WORD = re.compile(r"(?<![\w.-])(" + "|".join(REMOVED) + r")(?![\w=-])")
 ACTION = re.compile(r"""["']action["']\s*:\s*["'](""" + "|".join(REMOVED) + r""")["']""")
 SESSION = re.compile(r"""cron_%s_|cron_\{|cron_<|LIKE\s+'cron_""", re.I)
 SOURCE_CRON = re.compile(r"""source\s*=\s*['"]cron['"]""")
