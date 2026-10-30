@@ -44,15 +44,15 @@ Hermes Muse 是一个独立的 Hermes 插件（standalone plugin，MIT）。它�
 | kind | 状态（→ 表示允许的迁移） | natural_key（代码派生） | 计时状态：TTL → exit | 写入方（都在 `kernel/`） |
 |---|---|---|---|---|
 | `signal` | `new → disposed / parked`；`parked → disposed` | `<session_id>:<message_id>`（`keys.signal_key`） | `new`：72h 或 attempts≥3 → `parked` | `intake.capture/dispose`；`records.forget` |
-| `goal` | `active ↔ waiting → done / cancelled`；`done/cancelled → active` | goal slug | `active`/`waiting`：deadline 即 next_check，exit —（由 nightly 和 `goals.fade` 处理） | `goals`。**事实源是 GOAL.md**；权限见第 2.2 节 |
-| `notice` | `drafted ↔ scheduled → sending → sent / failed / unknown`；`unknown → sent / failed / closed_unknown`；`drafted/scheduled → withdrawn / expired / superseded` | notice key：`src:<上游ID>`、`weak:<标题+日>`，或淡出询问的 `goal:<id>:fade:<episode>:<attempt>` | drafted/scheduled：到 expires（默认 3 天）→ `expired`；`sending` 2h → `unknown`；`unknown` 48h → `closed_unknown` | `notifier`；`goals.fade`；`records.feedback` |
+| `goal` | `active ↔ waiting → done / cancelled`；`done/cancelled → active` | goal slug | `active`/`waiting`：deadline 即 next_check（触碰后 +1d；nightly 评估后 +1d−6h，次晚必到期），exit —（由 nightly 和 `goals.fade` 处理） | `goals`。**事实源是 GOAL.md**；权限见第 2.2 节 |
+| `notice` | `drafted ↔ scheduled → sending → sent / failed / unknown`；`unknown → sent / failed / closed_unknown`；`drafted/scheduled → withdrawn / expired / superseded` | notice key：`src:<上游ID>`、`weak:<标题+日>`，或淡出询问的 `goal:<id>:fade:<episode>:<attempt>` | drafted/scheduled：到 expires（默认 3 天）→ `expired`；`sending` 2h → `unknown`；`unknown` 48h → `closed_unknown` | `notifier`；`goals.fade`；`records.feedback`；`packets.feed_result`（带 `interest_id`，兴趣不再 active 时由代码撤回，reason `interest_closed`） |
 | `watch` | `active → stopped / expired` | `goal:<id>:watch:<n>`（`goals.watch_slot`） | `active`：到 expires，或 30 天（goal 仍开放时自动续期）→ `expired` | `goals.add_watch/stop_watch/watches` |
 | `interest` / `idea` | `active → expired / stopped`，可回到 `active` | title key（`keys.title_key`）；复盘产生的 idea 用 `review:<ref>` | `active`：14 天或 expires → `expired` | `records.remember/feedback/forget`；`review.record` |
 | `feed` | `published → deleted` | 来源 key 集合的摘要 | 无 | `packets.feed_result`；`records.mark_feed/delete_feed` |
 | `source` | `ok / limited / failing / unavailable` 任意互转 | `source_id`（`<kind>:<account>`） | 无 | 只有 `sources.record`（经 `observe`）：同一 limitation_code 连续 5 次 → `limited`；error → `failing`，连续 3 次置 `health` |
 | `finding` | `open → resolved / dismissed` | `review:<session>:<message>` | `open`：14 天 → `dismissed` | `review.record`（payload 带 `evidence`）；`records.feedback` |
 | `memory_receipt` | `pending_notice → noticed`；`noticed → pending_notice` | `tool_call_id` | `pending_notice`：24h → `noticed` | `receipts.record/due`；只记 failed/staged，staged 一天后再提示一次 |
-| `packet` | `issued → submitted / expired` | `<job>:<周期序号>` | `issued`：租约（等于 job 周期）→ `expired` | `packets.build/submit` |
+| `packet` | `issued → submitted / expired` | `<job>:<周期序号>`；drain job（nightly、feed）第 1 批起加 `:<批次>` | `issued`：租约（intake/patrol 等于 job 周期；drain job 为 min(周期, 2h)）→ `expired` | `packets.build/submit`；`runs.relay`（失败 run 的 issued packet → `expired`） |
 | `run` | `running → ok / degraded / failed / abandoned` | 宿主 execution ID | `running`：2h，exit —（由 `runs.check` 依据宿主终态决定） | `runs.start/check`；结果来自宿主执行状态和 packet 处置情况，**不来自模型自评** |
 | `tombstone` | `forgotten`（终态） | 被遗忘对象的 natural_key | 无 | `records.forget`；之后的旧证据不得重建该对象 |
 
@@ -81,7 +81,9 @@ Hermes Muse 是一个独立的 Hermes 插件（standalone plugin，MIT）。它�
    - 发淡出询问，并执行淡出取消；
    - GOAL.md 被删除时，把镜像置为 `cancelled`；
    - 停止和续期 watch；
-   - 投递与对账。
+   - 投递与对账；
+   - drain job 的 run 结束后：把仍 issued 的 packet 置为 `expired`；本周期还有剩余时唤醒同一个 owned job（`cron.wake`，每 job 每天最多 12 次）；
+   - 在 Muse 自己的 intake run（cron key `memory-upkeep`）里拒绝“直接删除条目”的原生 memory 写入（`pre_tool_call` 否决：remove 必须与 patch 同批，即合并），并记录每次改动的前后文本。
 6. **Health** 只读，不修复任何东西。
 
 引用的邮件、网页和工具输出只是证据，不是指令。
@@ -116,7 +118,8 @@ owned job 由 `install.JOBS` 定义，cron key 沿用 0.3.x 的名字，这样 j
    - `intake.capture()`（在 tick 中）把它记成 `signal(new)`，并推进水位 `meta.intake_since`；
    - intake packet 最多 15 条，摘录合计不超过 24k。模型对每条 submit 一个 disposition，`intake.dispose()` 把 signal 置为 `disposed`；
    - `goal_hint` 指向某个开放目标时，触碰该目标；为 `new` 时，进入 nightly 的建目标提案；
-   - 3 次 packet 或 72h 后仍未处置的 signal 转为 `parked`，计入 Health，**不阻塞水位**。
+   - 3 次 packet 或 72h 后仍未处置的 signal 转为 `parked`，计入 Health，**不阻塞水位**；
+   - 记忆整理：有条目时 `upkeep.full` 经 `host.memory.stores()` 读用量，任一 store ≥90% 时 packet 带 `context.memory_full`（每天最多 3 次）。模型只能在保存新事实的同一个原生 memory batch 里**合并重复或缩短冗长条目**，不得直接删除；`hooks.pre_tool` 否决违规写入，`hooks.post_tool` 用前后快照由 `upkeep.record` 把改动写进 `meta.memory_changes` 和当天的 `memory/<日期>.md`。仍放不下的事实不作答，下小时重试。Muse 从不写记忆文件，`memory.write_approval` 保持关闭（它会把 cron 的每次写入都暂存待批）。
 2. **Patrol → Notice → 投递**：
    - patrol 每轮都唤醒，因为外部来源只有模型能读。packet 包含 `context.sources_due`（已过最小检查间隔的来源）和到期的 Notice（证据超过 1 天，或可发送已超过 6h）；
    - 模型先 `observe`，得到 `o1, o2…` 这些 ref，再 `submit` verdict、text、priority 和 topic；
@@ -126,12 +129,14 @@ owned job 由 `install.JOBS` 定义，cron key 沿用 0.3.x 的名字，这样 j
      - topic 在 blocked_topics 中的直接撤回（`goal-fade` 保留给淡出询问）。
    - `tick` 中的 `dispatch()` 在同一个事务里检查预算并认领为 `sending`，然后调用 `host.deliver.send(target, text, delivery_key)`，由宿主生成一个 one-shot no_agent cron；
    - `reconcile()` 读取 delivery receipt，把 Notice 推进到 `sent`、`failed` 或 `unknown`。
-3. **Nightly**：
+3. **Nightly**（分批排空）：
+   - 队列按顺序为：全部到期目标（不封顶，deadline 早的在前）、7 天内 `goal_hint=new` 且未提过的提案、复盘候选；每批大小由 `size()` 决定，`context.remaining` 是本批之后的剩余数；
+   - 本周期已 submitted 的批次里出现过的 ref 当晚不再提供；expired 批次的条目会重新提供；run 结束后由 `runs.relay` 接力唤醒；
    - 对到期目标给出 assessment 和 progress_note；`done_suggested` 只是提示，不关闭目标；
-   - 复盘候选由代码按规则挑选，每天最多 10 条。模型的判断中，`agent_gap` 生成 Finding，`latent_need` 生成 Idea；
-   - signal 提案由模型决定是否 `create` 目标；
-   - 当天有实质变化时，用 `content_write` 写 dream 和 alignment。
-4. **Feed**：每次最多取 3 个最近 3 天没有文章的 active interest。模型写文章并附 `source_refs`，`packets.feed_result` 生成 `feed` 实体，`records.write_feed` 把正文写入 `feed/<key>.md`。静默发布。
+   - 复盘候选由代码按规则在 72h 窗口内挑选，从最老的开始，每晚最多 `review.PER_NIGHT`（30）条，溢出数写入 `context.review_overflow`，由 Health 报告。模型的判断中，`agent_gap` 生成 Finding，`latent_need` 生成 Idea；
+   - signal 提案由模型决定是否 `create` 目标；提交后代码给每个提案写 `proposed_at`，之后不再提出；
+   - 只在 `remaining` 为 0 的批次里、当天有实质变化或 `context.memory_changes` 不为空时，用 `content_write` 写 dream 和 alignment，并列出每条记忆改动；该批 submit 后 `meta.memory_reported_until` 前移。
+4. **Feed**（分批排空）：每个 active interest 最多每 20h 研究一次，最久未查的在前；每个作答的兴趣都由 `packets.feed_result` 写 `checked_at`。模型写文章并附 `source_refs`，生成 `feed` 实体，`records.write_feed` 把正文写入 `feed/<key>.md`，静默发布。一篇文章可附一条 `notice`（每个 packet 最多 1 条，priority 只能 ordinary/time_sensitive，`source_ref` 必须是文章来源之一）：经 `notifier.draft` 用 `src:` 强键去重（任一来源 7 天内已有 LIVE notice 时返回 existing），之后走完整门控、与 patrol 共享预算；兴趣不再 active 时由代码撤回。
 5. **Weekly**：输入只有 Health 摘要和 7 天的计数。模型写一条周报，投到用户的路由。只提建议，不改任何东西。
 6. **淡出**（`goals.fade`，在 tick 中运行）：
    - 目标超过 `goal_dormant_days` 没有活动时，发一次询问，键为 `goal:<id>:fade:<episode>:<attempt>`；
@@ -146,6 +151,7 @@ owned job 由 `install.JOBS` 定义，cron key 沿用 0.3.x 的名字，这样 j
 8. **主会话 hooks**（`hooks.Hooks`，只对 `user` 调用方生效）：
    - `pre_llm_call` 最多注入 3 项：Health 的 high 告警；只在有变化时出现的一行摘要；`receipts.due` 给出的 memory_receipt，每条只提示一次；
    - `post_tool_call` 把原生 memory 写入的 failed/staged 结果交给 `receipts.record`；
+   - 例外：`pre_tool_call` 和 `post_tool_call` 对 Muse 自己的 intake run（`caller()=cron` 且 `sessions.job_of` 为 `memory-upkeep` 的 job）执行流程 1 的记忆整理守卫和记录；
    - `post_llm_call` 在后台运行一次 tick；用户静默 5 分钟后，满足 `intake.quiet_wake` 时唤醒 `memory-upkeep`，每天最多 3 次。
 9. **安装/升级**（`install.install`，在插件加载时运行，持有 `muse/install.lock`）：
    1. 写迁移标记 `muse/migrating.json`；
@@ -223,6 +229,7 @@ Hermes 宿主
   - `outcome` 在读失败时返回 `status: "host_error"`。
 - `deliver`：`send(target, text, key)`，同一个 key 只投递一次；`receipt(key)` 只读，返回 `sending|sent|failed(reason)|unknown`，读失败时为 `unknown(host_error)`。
 - `owners.status(handle)`：查原生委派的状态，读失败时为 `host_error`。
+- `memory.stores()`：用 Hermes 自己的 `load_on_disk_store` 读已启用的内置记忆 store，返回 `{target: {entries, chars, limit}}`；读失败时为 `{status: host_error}`。只读。
 - `config.get()`：先读 `plugins.entries.hermes-muse.settings/config`，再回退旧的 `plugins.hermes-muse`；`config.enabled()`：读失败时视为未启用。
 - `caller(session_id, **kwargs)`、`cwd()`、`now()`、`probe()`，以及 `faults`（最近 50 条宿主故障）；模块级函数 `resolve_home`、`profile_scope`、`interrupted`。
 - `host/dashboard.py`：Dashboard 侧的 profile 解析、列表、选择和请求令牌，只读。
@@ -269,7 +276,9 @@ Hermes 宿主
 | cron key / job | owned job 的脚本键（沿用 0.3.x 名，如 `memory-upkeep`）/ 它运行的逻辑 job（如 `intake`） | `install.JOBS` |
 | packet job | 签发 Packet 的 job：intake、patrol、nightly、feed | `packets.JOBS` |
 | job prompt | 一个 job 的行为说明，唯一位置是 `prompts/jobs/<job>.md` | `install.jobs` |
-| Packet / item / ref / budget / lease | 一个 packet job 每个周期唯一的有界工作包 / 其中的一条工作 / 条目的引用（只在本 packet 内有效）/ 上限 / 租约 | kind `packet`、`kernel/packets.py` |
+| drain job / batch / relay | 同一周期内分批排空队列的 packet job（nightly、feed）/ 其中一个 packet / run 结束后过期未交批次并唤醒 job 接着跑 | `packets.JOBS[...]["drain"]`、`packets.plan`、`runs.relay` |
+| memory upkeep | intake 在原生记忆接近满额时合并或缩短条目；Muse 只测量、守卫、记录 | `kernel/upkeep.py`、`host.memory.stores`、`hooks.pre_tool/post_tool` |
+| Packet / item / ref / budget / lease | 一个 packet job 每个时刻唯一 issued 的有界工作包 / 其中的一条工作 / 条目的引用（只在本 packet 内有效）/ 上限 / 租约 | kind `packet`、`kernel/packets.py` |
 | result schema | 每种 item 的 submit 结果形状（共 5 种） | `packets.SCHEMAS` |
 | observe / observation | patrol 上报一次来源检查 / 由此得到的条目 `o<n>` | `packets.observe` |
 | upstream_id | 来源给出的原始 ID（message-id、事件 ID+revision、URL） | `keys.upstream` |
@@ -335,7 +344,7 @@ Hermes 宿主
 - **新增的计时状态必须有 deadline**（验收 A3；Health 的 `deadlines` 检查会拦）。到期后的处理只能二选一：
   - 写 exit，由 `Store.tick` 迁移（Health 的 `tick_stalled` 检查会拦）；
   - exit 为空，由所属模块在 tick 的某一步或某个 packet 中处理，同时补一条 Health 检查。现有的 `goal`、`run` 就是这种情况。
-- packet：同一 job 同一周期只有一个 `issued`，并发调用拿到同一个 packet；ref 只在本 packet 内有效；submit 按条目幂等。
+- packet：同一 job 同一时刻只有一个 `issued`，并发调用拿到同一个 packet；drain job 同一周期内可有多批 submitted；ref 只在本 packet 内有效；submit 按条目幂等，可边做边交（`per_item` 每次 submit 重算）。
 - 投递：先在事务内认领 `sending` 并写入 `delivery_key`，再调用宿主；同一个 key 重复 send 时返回已有回执。**结果未知的外部写入不得盲目重发**。
 - 文件：GOAL.md 和内容文件必须持有 `mutations.lock`，并通过 `expected_revision` CAS 写入。冲突时返回 `revision_conflict`，调用方需重读并合并。
 - 安装：同一 profile 同时只有一个 install（`install.lock`）；迁移标记存在期间，launcher 和后台 tick 都不推进状态。
@@ -513,6 +522,8 @@ Hermes 宿主
 - **宿主读失败时不登记 run**：`entry.output` 调用 `cron.outcome` 得到 `host_error` 时，不调 `start_run`。这一轮的 run 不会被记录，它的结果也就不会计入 Health 的 `runs_ok`。
 - **没有会话行的会话不能用 Muse 工具**：`caller()` 在没有会话行时只认宿主的 `platform` kwarg，而工具 handler（`surface.register`）不传 platform，所以这种会话会被判为 `other` 而拒绝。目前按“工具调用总在 Hermes 写入会话行之后发生”处理，属于 fail closed。
 - **cron 调用方没有核对 job 归属**：`caller()` 返回 `cron` 只说明是某个 cron 会话，不一定是 Muse 的 job run。用户自己的 cron 也能用 cron 允许的 `muse_manage` 动作（read、calendar_view、写 note/dream/alignment）；`muse_job` 还需要猜中 packet ID。
+- **drain 接力依赖登记的 run**：上一条缺口导致没有 run 时，这一批不会触发接力；packet 2h 后过期，剩余条目由 Health `goals_missed` 报告，下一晚优先处理。
+- **记忆快照只在同一进程内配对**：`pre_tool_call` 的快照存在 hooks 的进程内存里；若别的插件否决了该调用、`post_tool_call` 不来，快照留到进程结束。
 - **Feed 记录与正文之间崩溃会丢正文**：`feed` 实体写入后、`records.write_feed` 落盘前如果崩溃，正文会丢失，而且无法恢复：重新提交会返回 `existing`，不再写正文。
 
 **刻意的取舍**：
@@ -522,4 +533,5 @@ Hermes 宿主
   - 迁移来的 watch 如果没有 expires，给 30 天（`migrate._watches`）；
   - 安装时解析不了 prompt 的旧 watch 保留原 prompt，需要用户重建（`install.jobs`）；
   - hooks 的“只在变化时注入”记在进程内存中，进程重启后摘要会再注入一次（`hooks.Hooks`）；
+  - 记忆守卫只要求 remove 旁边有任一 patch，不核对内容是否真被合并；被删的原文已记录，可恢复（`upkeep.guard`）；
   - Windows 没有 `dir_fd`/`O_NOFOLLOW`：内容路径逐级按属性拒绝 symlink/junction 后再按绝对路径使用，检查与使用之间换入的 junction 拦不住（`content_io._windows_directory`）；回滚桥 `bridge.py` 仍只支持 POSIX。
