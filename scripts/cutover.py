@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from hermes_muse import health  # noqa: E402
 from hermes_muse.host import HostAdapter  # noqa: E402
-from hermes_muse.install import MARKER, PROMPTS_BACKUP, RETIRED, install, owned  # noqa: E402
+from hermes_muse.install import MARKER, PROMPTS_BACKUP, RETIRED, ROLLED_BACK, install, owned  # noqa: E402
 
 DB_FILES = ("*.db", "*.db-wal", "*.db-shm", "*.lock")
 
@@ -68,7 +68,7 @@ def rollback(adapter):
             out["resumed"] += [job["id"]] if adapter.cron.resume(job["id"]) else []
     for key in ("health", "deliver"):  # no-agent jobs: whatever an older cron_entry printed would be delivered
         job = owned(adapter, key)
-        out[f"{key}_cron_paused"] = bool(job and adapter.cron.pause(job["id"], "rolled back to 0.3.x"))
+        out[f"{key}_cron_paused"] = bool(job and adapter.cron.pause(job["id"], ROLLED_BACK))
     out["next"] = ["reinstall the 0.3.x plugin version (catalog 0.3.1 SHA, or the previous local checkout)",
                    "put back the external callers' previous prompts/scripts",
                    f"after the 0.3.x plugin loaded, delete {MARKER}; cancel instead: delete it and reload v2"]
