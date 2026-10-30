@@ -423,16 +423,16 @@ function makeMusePage(React, useScope, request, draft, profileAdmin) {
           h('ul', {className:'muse-list', 'aria-label':'Closed goals'}, ...currentClosed.items.map(goalRow))),
         closedOpen && currentClosed?.next_cursor && button('Load more closed goals',()=>loadClosed(currentClosed.next_cursor),busy,'text'));
     }
-    // Last health check (muse/health.json); the dashboard never runs one.
+    // Last health check (muse/health.json); Dashboard and Desktop never run one.
     const healthPanel = report => {
       if (report.available === false) return h('section', {className:'muse-health', 'aria-label':'Muse health'}, h('span', {className:'muse-sub'}, 'Health: no check has run in this profile yet.'));
-      const findings = (report.invariants || []).filter(f=>f.level !== 'ok').sort((a,b)=>['info','low','medium','high'].indexOf(b.level)-['info','low','medium','high'].indexOf(a.level));
+      const items = (report.invariants || []).filter(f=>f.level !== 'ok').sort((a,b)=>['info','low','medium','high'].indexOf(b.level)-['info','low','medium','high'].indexOf(a.level));
       const tone = {high:'danger', medium:'warn', ok:'ok'}[report.level] || '';
       return h('section', {className:'muse-health '+(report.level||''), 'aria-label':'Muse health'},
         h('details', {open:report.level === 'high'},
           h('summary', null, h('strong', null, 'Health'), badge(report.level || 'unknown', tone),
-            h('span', {className:'muse-sub'}, 'checked ' + new Date(report.generated_at).toLocaleString() + (findings.length ? ' · ' + plural(findings.length, 'finding') : ''))),
-          findings.length > 0 && h('ul', null, ...findings.map(f=>h('li', {key:f.id}, h('strong', null, f.level + ' ' + f.id), ': ' + f.detail + (f.fix ? ' — Fix: ' + f.fix : ''))))));
+            h('span', {className:'muse-sub'}, 'checked ' + new Date(report.generated_at).toLocaleString() + (items.length ? ' · ' + plural(items.length, 'health item') : ''))),
+          items.length > 0 && h('ul', null, ...items.map(f=>h('li', {key:f.id}, h('strong', null, f.level + ' ' + f.id), ': ' + f.detail + (f.fix ? ' — Fix: ' + f.fix : ''))))));
     };
     const label = {feed:'Feed', ideas:'Ideas', goals:'Goals'};
     const state = selectedRow && (selectedRow.enabled ? 'Enabled' : selectedRow.installed ? 'Disabled' : 'Not installed');
