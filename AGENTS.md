@@ -455,7 +455,7 @@ Hermes 宿主
 - 设计契约：14+3 个动作、5 种 submit schema、第 2.1 节的状态机与 TTL、第 2.2 节的授权规则、第 2.3 节的门控规则、`install.JOBS` 的 cron key。要改契约，先提出，由维护者拍板，并同步更新本文件。
 
 ### 6.2 评审与验收清单
-运行前先设置隔离目录：`export TMPDIR=$(mktemp -d) HERMES_HOME=$(mktemp -d)`。下表中 `<hermes-agent>` 是 Hermes 源码路径，`<py>` 是 Hermes venv 的 python。没有 Hermes 时，store_v2、kernel、surface 三个验收可用系统 python 运行，native 部分为 SKIP；health、wp6 和宿主契约需要 Hermes。CI（`.github/workflows/test.yml`）在无 Hermes 的 Linux/macOS 上跑前者，在钉住的 Hermes 上跑下表全部检查。
+运行前先设置隔离目录：`export TMPDIR=$(mktemp -d) HERMES_HOME=$(mktemp -d)`。下表中 `<hermes-agent>` 是 Hermes 源码路径，`<py>` 是 Hermes venv 的 python。没有 Hermes 时，store_v2、kernel、surface 三个验收可用系统 python 运行，native 部分为 SKIP；health、wp6 和宿主契约需要 Hermes。CI（`.github/workflows/test.yml`）在无 Hermes 的 Linux/macOS 上跑前者（Windows 上跑 kernel、surface），在钉住的 Hermes 上跑下表全部检查。
 
 | 检查 | 命令 |
 |---|---|
@@ -521,4 +521,5 @@ Hermes 宿主
 - 已标注的 shortcut：
   - 迁移来的 watch 如果没有 expires，给 30 天（`migrate._watches`）；
   - 安装时解析不了 prompt 的旧 watch 保留原 prompt，需要用户重建（`install.jobs`）；
-  - hooks 的“只在变化时注入”记在进程内存中，进程重启后摘要会再注入一次（`hooks.Hooks`）。
+  - hooks 的“只在变化时注入”记在进程内存中，进程重启后摘要会再注入一次（`hooks.Hooks`）；
+  - Windows 没有 `dir_fd`/`O_NOFOLLOW`：内容路径逐级按属性拒绝 symlink/junction 后再按绝对路径使用，检查与使用之间换入的 junction 拦不住（`content_io._windows_directory`）；回滚桥 `bridge.py` 仍只支持 POSIX。
