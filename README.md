@@ -41,6 +41,12 @@ Installation uses the selected profile (`hermes -p <profile> plugins install …
 
 Requires Hermes 0.21.5 or later with the plugin APIs for tools, Skills, prompt sections and hooks; tested on Hermes 0.22.5 ([baseline](docs/ACCEPTANCE.md)). First load registers one Skill, two tools (`muse_manage`, `muse_job`), three hooks and one system prompt section, creates five recurring jobs and the `muse-health` check, and adds missing content files from `templates/` without overwriting anything. Start a new conversation to load the prompt section; background work needs a running scheduler and an available model, at their normal cost.
 
+### Requirements
+
+- Hermes Agent 0.21.5 or later (`requires_hermes: ">=0.21.5"` in `plugin.yaml`). Hermes itself needs Python 3.14.
+- Tested on Hermes 0.22.5 only: CI pins that release and runs the full acceptance set against it.
+- On another version Muse does not check the version number; its host probes check the capabilities it needs. A missing capability degrades that feature and shows a high item in Health, rather than raising an error. After upgrading Hermes, run `tests/native_host_contract.py` ([details](docs/ACCEPTANCE.md)).
+
 **Upgrading from 0.3.x** (0.3.1 from the catalog or any later 0.3 release): the first load migrates `muse/state.db` into `muse/state-v2.db` and refreshes the jobs in place, keeping their ids, schedules, routes and pauses. Rewrite personal cron prompts or scripts that call removed actions first ([caller migration](docs/CALLER-MIGRATION.md)), and follow [cutover and rollback](docs/CUTOVER.md) to go step by step or back to 0.3.x.
 
 ## How it works

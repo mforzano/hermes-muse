@@ -41,6 +41,12 @@ hermes plugins install xiaohei-info/hermes-muse --enable
 
 需要 Hermes 0.21.5 及以上，并具备工具、Skill、提示词段和 hooks 的插件接口；已在 Hermes 0.22.5 上测试（[基线](docs/ACCEPTANCE.md)）。首次加载注册 1 个 Skill、2 个工具（`muse_manage`、`muse_job`）、3 个 hooks 和 1 段系统提示词，创建 5 个周期 job 和 `muse-health` 检查，并从 `templates/` 补齐缺失的内容文件，不覆盖已有文件。新开会话后提示词段生效；后台工作需要运行中的调度器和可用模型，按正常用量计费。
 
+### 版本要求
+
+- Hermes Agent 0.21.5 及以上（`plugin.yaml` 中 `requires_hermes: ">=0.21.5"`）。Hermes 本身需要 Python 3.14。
+- 仅在 Hermes 0.22.5 上测试过：CI 固定该版本并跑完整验收。
+- 其他版本不按版本号判断，而由宿主探测检查所需能力；能力缺失时只降级对应功能，并在 Health 显示一条 high 项，不会报错崩溃。升级 Hermes 后请运行 `tests/native_host_contract.py`（[详情](docs/ACCEPTANCE.md)）。
+
 **从 0.3.x 升级**（目录里的 0.3.1 或之后任一 0.3 版本）：首次加载把 `muse/state.db` 迁移到 `muse/state-v2.db`，并原地刷新 job，保留 job ID、调度、路由和暂停状态。先改写调用了已删除动作的个人 cron prompt 或脚本（[调用方迁移](docs/CALLER-MIGRATION.md)），按[切换与回滚](docs/CUTOVER.md)逐步切换或回到 0.3.x。
 
 ## 工作方式
