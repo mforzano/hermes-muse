@@ -15,7 +15,7 @@ from datetime import datetime
 from ..content_io import Files, revision
 from ..locks import file_lock
 from . import notifier
-from .common import D, count_today, header, one, patch, preferences, render
+from .common import D, count_today, header, local_day, one, patch, preferences, render
 from .sources import classify
 from .store import machine
 
@@ -176,6 +176,10 @@ def create(k, *, title, criteria, signal_ref=None, now, by="nightly", session_id
         return record, f"# {title}\n\n## Completion criteria\n{criteria}\n"
     write(k, slug, mutate, reason=f"create:{by}", now=now, create=True)
     return {"result": "created", "goal_id": slug}
+
+
+def cron_creates_left(k, now):
+    return max(0, CRON_CREATES_PER_DAY - k.store.meta("cron_goal_creates", {}).get(local_day(now, k.tz()), 0))
 
 
 def item(k, e):

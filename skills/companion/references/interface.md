@@ -236,6 +236,7 @@ One result per packet item. The packet's `schema` names the shapes its items tak
 | `assessment` |  | on_track / stalled / blocked / done_suggested |
 | `progress_note` |  | string |
 | `create` |  | object |
+| `decline` |  | object |
 
 ### review
 

@@ -49,7 +49,8 @@ SCHEMAS = {  # design 2.6: one result shape per item kind group
                   topic={"type": "string", "maxLength": 100,
                          "description": "short topic label; the exact context.blocked_topics entry when the item is about one"}),
     "goals": obj([], goal_id=REF, assessment=enum(*goals.ASSESSMENTS), progress_note=S,
-                 create=obj(["signal_ref", "title", "criteria"], signal_ref=REF, title=S, criteria=S)),
+                 create=obj(["signal_ref", "title", "criteria"], signal_ref=REF, title=S, criteria=S),
+                 decline=obj(["signal_ref", "reason"], signal_ref=REF, reason={"type": "string", "maxLength": 500})),
     "review": obj(["candidate_ref", "verdict", "reason"], candidate_ref=REF, verdict=enum(*review.VERDICTS),
                   reason={"type": "string", "maxLength": 500}),
     "feed": obj(["interest_ref"], interest_ref=REF,
@@ -86,12 +87,13 @@ def blocked_topics(k):
 
 
 def nightly_items(k, n, now, offered):
-    """The whole queue, obligations first: due goals (earliest first), goal proposals, then review candidates."""
+    """The whole queue, obligations first: due goals (earliest first), goal proposals (no more than cron may still
+    create today; the rest wait for the next period), then review candidates."""
     due = [goals.item(k, e) for e in k.store.due(now, kind="goal") if e["natural_key"] not in offered]
     proposals = [{**intake.item(e), "kind": "signal", "facts": e["payload"].get("facts", [])}
                  for e in reversed(k.store.query("signal", state="disposed", since=now - PROPOSE_WITHIN))
                  if e["payload"].get("goal_hint") == "new" and not e["payload"].get("proposed_at")
-                 and not goals.read(k.home, goals.slug_for(e["natural_key"]))]
+                 and not goals.read(k.home, goals.slug_for(e["natural_key"]))][:goals.cron_creates_left(k, now)]
     return due + proposals + review.candidates(k, now, skip=offered), {"memory_changes": upkeep.unreported(k, now)}
 
 
@@ -177,15 +179,15 @@ def stalls(k, job, now):
 
 
 def close(k, packet_id, outcome, now):
-    """The run of a drain batch closed. ok/degraded consumes the batch: its proposals count as made and, on the
-    last batch, its memory changes as reported. failed/abandoned releases its unanswered refs. A batch still issued
-    expires."""
+    """The run of a drain batch closed. ok/degraded consumes the batch: its handled (created or declined) proposals
+    count as made and, on the last batch, its memory changes as reported. failed/abandoned releases its unanswered
+    refs. A batch still issued expires."""
     e = k.store.get(packet_id)
     p, done = e["payload"], outcome in ("ok", "degraded")
     context = p.get("context") or {}  # a packet issued by 0.4.0 may have none
     if done and (e["state"] == "submitted" or not p["items"]):
-        for i in p["items"]:  # a proposal is made once, whether or not the model created the goal
-            if i["kind"] == "signal":
+        for i in p["items"]:  # an unanswered proposal comes back next period
+            if i["kind"] == "signal" and i["ref"] in p["handled"]:
                 patch(k.store, one(k.store, "signal", i["ref"])["id"], reason="nightly:proposed",
                       payload=lambda s: {"proposed_at": s["payload"].get("proposed_at") or now}, now=now)
         if not context.get("remaining"):
@@ -316,7 +318,7 @@ HANDLERS = {
                                                      topic=r.get("topic"), now=now),
     "notice": lambda k, i, r, now: notifier.decide(k, i, r.get("verdict"), text=r.get("text"), priority=r.get("priority"), now=now),
     "goal": lambda k, i, r, now: goals.assess(k, i["ref"], r.get("assessment"), r.get("progress_note"), now),
-    "signal": lambda k, i, r, now: goals.create(k, title=(r.get("create") or {}).get("title"),
+    "signal": lambda k, i, r, now: {"result": "declined"} if r.get("decline") and not r.get("create") else goals.create(k, title=(r.get("create") or {}).get("title"),
                                                 criteria=(r.get("create") or {}).get("criteria"), signal_ref=i["ref"], now=now),
     "review": lambda k, i, r, now: review.record(k, i["ref"], r.get("verdict"), r.get("reason"), now, i.get("rules", ())),
     "interest": feed_result,
@@ -334,7 +336,7 @@ def submit(k, packet_id, results, now):
     out, handled, sends, notices = [], [], 0, 0
     for r in results:
         r = r if isinstance(r, dict) else {}
-        ref = next((r[f] for f in REF_FIELDS if r.get(f)), None) or (r.get("create") or {}).get("signal_ref")
+        ref = next((r[f] for f in REF_FIELDS if r.get(f)), None) or (r.get("create") or r.get("decline") or {}).get("signal_ref")
         try:
             item = items.get(ref)
             if item is None:
