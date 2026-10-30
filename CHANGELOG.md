@@ -1,4 +1,4 @@
-# Unreleased
+# 0.4.1 — Drain in batches, interest news via Feed, memory upkeep (2026-10-30)
 
 - Nightly and Feed drain their whole queue: batches `<job>:<period>[:<batch>]` with a 2h lease; when a run closes with
   work left, the kernel wakes the job again (at most 12 a day after runs that made no progress); a failed run
