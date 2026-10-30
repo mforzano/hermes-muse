@@ -41,9 +41,9 @@ def seed_store(home, now, host):
     k = Kernel(home, adapter=host, store=s, clock=lambda: now)
     s.create("signal", "chat:long", {"source": "cli"}, now=now - 80 * H)          # watermark stuck, tick not run
     s.create("signal", "once:1", {"source": "oneshot"}, now=now - H)               # E16 oneshot captured
-    for i in range(2):                                                             # urgent sent twice by v2
+    for i in range(2):  # urgent sent twice by v2, before the local day of the draft below (not its urgent_per_day)
         s.create("notice", "src:msgaaa", {"priority": "urgent", "strong_key": True,
-                 "delivery_key": notifier.delivery_key("src:msgaaa", i)}, state="sent", now=now - (2 - i) * D, dedupe=False)
+                 "delivery_key": notifier.delivery_key("src:msgaaa", i)}, state="sent", now=now - (3 - i) * D, dedupe=False)
     for i in range(2):                                                             # migrated 0.3.x history: not counted
         s.create("notice", "src:msgold", {"priority": "urgent", "strong_key": True, "v1_id": f"old{i}"}, state="sent",
                  now=now - (2 - i) * D, dedupe=False)
@@ -113,7 +113,7 @@ def main():
             "store": "ok", "deadlines": "ok", "tick_stalled": "high", "signal_watermark": "high", "signal_parked": "ok",
             "packet_expiry": "medium", "packets_idle": "high", "notice_duplicates": "high", "notice_hanging": "medium",
             "notice_unknown": "ok", "runs_ok": "medium", "runs_unclosed": "low", "goals_missed": "high",
-            "goal_fade": "medium", "sources_failing": "medium", "review_findings": "low", "review_overflow": "ok",
+            "goal_fade": "medium", "sources_failing": "medium", "review_findings": "low", "drain_stopped": "ok",
             "interests_unchecked": "ok", "memory_capacity": "ok",
             "probe.symbols": "ok", "probe.cron_sessions": "ok", "probe.delivery_semantics": "medium",
             "probe.delivery_target": "high", "probe.signal_purity": "high", "probe.config_location": "ok",
