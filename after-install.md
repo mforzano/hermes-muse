@@ -2,10 +2,10 @@
 
 Recommended: use the current profile's **Bot Chat** for your goals, interests and follow-up.
 
-Patrols deliver selected reminders themselves, without extra delivery Cron jobs. Scheduled weekly/monthly reports also go to that profile's Bot Chat. The bot reads them and replies there, using the profile's model. Hermes can create a missing Bot Chat on first delivery.
+First plugin load sets up one Skill, the Muse tools (`muse_manage`, `muse_job`), three conversation hooks, five recurring Cron jobs (intake, patrol, nightly review, Feed, weekly digest) and a `muse-health` check that runs every 30 minutes without a model. An existing 0.3.x installation is migrated in place; its jobs keep their ids, schedules and routes. Start a new conversation to load the system prompt section; keep the Hermes scheduler running for background work.
 
-First plugin load sets up one Skill, one state tool, four conversation hooks, seven prompts and six recurring Cron jobs. Start a new conversation to load the system prompt section; keep the Hermes scheduler running for background work.
+Patrols deliver selected reminders themselves. Health problems show up in the main conversation, on the Dashboard's Muse page and in `muse/health.json`; set `health_deliver` to also send them to a second route.
 
-No external messaging channel is required. This installer does not present a channel/session picker. See README.md or README.zh-CN.md for the workflow and uninstall instructions.
+No external messaging channel is required. See README.md or README.zh-CN.md for the workflow, docs/CUTOVER.md for upgrading and rolling back, and the uninstall instructions.
 
 If this profile has explicit `platform_toolsets` lists, include `muse` in the relevant platform lists so the assistant can call `muse_manage`.

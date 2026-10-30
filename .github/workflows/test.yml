@@ -6,6 +6,7 @@ permissions:
   contents: read
 jobs:
   unit:
+    # No Hermes: the acceptance scripts that can run without it print SKIP for their native parts.
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -13,70 +14,20 @@ jobs:
         python: ['3.11']
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # store_v2_acceptance exports 0.3.x code from the v0.3.1/v0.3.16 tags
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - name: Timezone data for Windows calendar tests
-        if: runner.os == 'Windows'
-        run: python -m pip install tzdata
-      - run: python -m unittest discover -s tests -v
-      - run: python -m compileall -q hermes_muse tests
-  windows-tests:
-    # Real native/unit coverage; a green job alone is not a support declaration.
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: bash
-    env:
-      TMPDIR: ${{ github.workspace }}/.muse-tmp
-      TEMP: ${{ github.workspace }}/.muse-tmp
-      TMP: ${{ github.workspace }}/.muse-tmp
-    strategy:
-      matrix:
-        python: ['3.11', '3.14']
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-      - run: mkdir -p "$TMPDIR"
-      - run: python -m pip install 'pywin32>=311,<312' 'tzdata>=2025.3,<2027'
-      - run: python -W error -m unittest discover -s tests -p test_windows_compatibility.py -v
-      - run: python tests/run_isolated.py
-      - run: python -m compileall -q hermes_muse tests
-  windows-hermes:
-    runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: plugin
-        shell: bash
-    env:
-      TMPDIR: ${{ github.workspace }}/.muse-tmp
-      TEMP: ${{ github.workspace }}/.muse-tmp
-      TMP: ${{ github.workspace }}/.muse-tmp
-      HERMES_IGNORE_USER_CONFIG: '1'
-      HERMES_DISABLE_LAZY_INSTALLS: '1'
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          path: plugin
-      - uses: actions/checkout@v4
-        with:
-          repository: NousResearch/hermes-agent
-          ref: f594424e58f18ebc2607decaa72f300e0a26a24b
-          path: hermes-core
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.14'
-      - run: mkdir -p "$TMPDIR"
-      - run: python -m pip install -e ../hermes-core
-      - run: python tests/native_smoke.py
-        env:
-          HERMES_SOURCE: ${{ github.workspace }}/hermes-core
-      - name: Official plugin validation in a scratch profile
-        run: |
-          MUSE_TEST_HOME=$(mktemp -d)
-          HERMES_HOME="$MUSE_TEST_HOME" hermes plugins validate . --json
+      - run: python scripts/check_boundaries.py
+      - run: python scripts/check_callers.py prompts templates skills after-install.md
+      - run: python -m compileall -q hermes_muse dashboard scripts tests
+      - run: node --test tests/page_markdown.test.mjs
+      - name: Generated interface reference is current
+        run: python -m hermes_muse.surface && git diff --exit-code skills/companion/references/interface.md
+      - run: python tests/store_v2_acceptance.py
+      - run: python tests/kernel_acceptance.py
+      - run: python tests/surface_acceptance.py
   hermes:
     runs-on: ubuntu-latest
     defaults:
@@ -86,16 +37,28 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: plugin
+          fetch-depth: 0
       - uses: actions/checkout@v4
         with:
           repository: NousResearch/hermes-agent
-          ref: f594424e58f18ebc2607decaa72f300e0a26a24b
+          ref: bf0203a794a07aac3ff764972ab9087baa4e4f4e  # v0.22.5
           path: hermes-core
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
-      - run: python -m pip install -e ../hermes-core
-      - run: python tests/native_smoke.py
+      # pip cannot honour Hermes' [tool.uv] overrides (Pillow pin); install from its uv.lock
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen --python 3.14
+        working-directory: hermes-core
+      - run: echo "$GITHUB_WORKSPACE/hermes-core/.venv/bin" >> "$GITHUB_PATH"
+      - run: python scripts/check_boundaries.py
+      - run: python scripts/check_callers.py prompts templates skills after-install.md
+      - run: python tests/native_host_contract.py
+      - run: python tests/store_v2_acceptance.py
+      - run: python tests/kernel_acceptance.py
+      - run: python tests/surface_acceptance.py
+      - run: python tests/health_acceptance.py
+      - run: python tests/wp6_acceptance.py
       - name: Official plugin validation in a scratch profile
         shell: bash
         run: |

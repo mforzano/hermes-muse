@@ -1,64 +1,70 @@
-# Verification and user acceptance
+# Verification and acceptance
 
 ## Automated checks
 
-- Standard-library unit suite: `python -m unittest discover -s tests -v`.
-- Real Hermes integration: `python tests/native_smoke.py` with a Hermes interpreter.
-- To test a separate source checkout with that interpreter: `HERMES_SOURCE=/path/to/hermes-agent python tests/native_smoke.py`.
-- Published-repository install/remove smoke test: `python tests/install_smoke.py` (network required, isolated home).
-- Official validation: `hermes plugins validate . --json`.
+Run in isolated directories: `export TMPDIR=$(mktemp -d) HERMES_HOME=$(mktemp -d)`. `<hermes-agent>` is a Hermes
+source checkout and `<py>` its venv python. Without Hermes, the system python runs the scripts marked *SKIP-able*;
+their native parts print `SKIP`.
 
-Native integration runs under temporary homes and checks actual plugin registration, Skill lookup, bounded system prompt rendering, actual native final-output transformation, tool availability, six real Cron jobs, actual script gates, idempotent reload, preserved paused jobs/templates/native identity/memory, A -> B -> A profile switching and harmless launchers after removal. It also checks restored 0.1.2 background actions with real saved user signals, rejection of fabricated/reused evidence, native schedules and long watch prompts, writable Bot Chat result handling, profile-local routing, exact execution binding, idempotent preparation and migration from the old silent patrol. These regressions are in tests/native_companion_smoke.py and run as part of native_smoke.py. Weekly/monthly checks verify native schedules and routes, empty-profile wake gates, summary persistence and exclusion of delivered reports from user signals. It makes no model calls and sends no real messages.
+| Check | Command |
+|---|---|
+| Outbound boundaries, no 0.3.x modules | `python scripts/check_boundaries.py` |
+| No removed 0.3.x dependency in Muse's own prompts, skills and templates | `python scripts/check_callers.py prompts templates skills after-install.md` |
+| Compile | `python -m compileall -q hermes_muse dashboard scripts tests` |
+| Dashboard and Desktop page | `node --test tests/page_markdown.test.mjs` |
+| Generated interface is current | `python -m hermes_muse.surface && git diff --exit-code skills/companion/references/interface.md` |
+| Store v2, migration, rollback (SKIP-able; needs tags `v0.3.1`, `v0.3.16`) | `python tests/store_v2_acceptance.py` |
+| Kernel (SKIP-able) | `PYTHONPATH=<hermes-agent> <py> tests/kernel_acceptance.py` |
+| Model surface S1–S11 (SKIP-able) | `PYTHONPATH=<hermes-agent> <py> tests/surface_acceptance.py` |
+| Health | `PYTHONPATH=<hermes-agent> <py> tests/health_acceptance.py` |
+| Install, hooks, views, cutover and rollback | `PYTHONPATH=<hermes-agent> <py> tests/wp6_acceptance.py` |
+| Host contract (run after every Hermes upgrade) | `HERMES_SOURCE=<hermes-agent> <py> tests/native_host_contract.py` |
+| Official plugin validation | `HERMES_HOME=$(mktemp -d) hermes plugins validate . --json` |
+| External callers before a cutover | `python scripts/check_callers.py <their prompts and scripts>` |
 
-Public upstream compatibility baseline: `NousResearch/hermes-agent` commit `a28a5d03a9fa60418db5f44f3436fa2aa029c8f2` (2026-10-08). Local Hermes 0.21.5 was also exercised. APIs move; a broad version range is not proof of compatibility with every future revision.
+CI (`.github/workflows/test.yml`) runs the SKIP-able set on Linux and macOS without Hermes, and everything on
+Linux against Hermes `v0.22.5` (`NousResearch/hermes-agent@bf0203a794a07aac3ff764972ab9087baa4e4f4e`), the
+tested baseline. Probes judge host capabilities, not versions, so a newer Hermes is accepted when the host contract
+passes.
 
-## User acceptance on a separately installed profile
+## Release acceptance A1–A13
 
-1. Install via the official command. Start a new conversation. Ask what Muse is tracking. Confirm one Skill and six fixed jobs, inherited model/timezone, and no changes to SOUL/USER/MEMORY from installation.
-2. Mention a temporary interest. Ask to see its source and expiry. Confirm a Feed/research run does not extend it. A new explicit user mention may renew it. Expired interests do not drive research or sending.
-3. Create a formal goal and a subgoal, with completion criteria. Add an explicit bounded watch. Complete/cancel the goal; verify native owned watches are paused. Confirm an already prepared final notification retains its own delivery state; a done goal does not return to due.
-4. Produce two candidate records for the same original event. Check only one notice is prepared and no delivery-only Cron is created. Exercise waking hours/daily budget, dismiss once, stop-topic and snooze. Verify none uses another route to bypass a denial. Check original-source semantic quality yourself.
-5. In this profile's Bot Chat, verify that the selected notice body, not merely a dispatch-status summary, produces one bot reply and subsequent questions retain context. Try a missing chat and a busy live chat; verify native creation/queueing without another writer. Receipt admission is not processing completion or user-read proof. Confirm receiving a result does not manufacture a user signal or prepare the same notice for a later execution; legitimate state updates remain possible with their existing evidence. Check failures/unknowns without resending.
-6. Generate a Feed article using an available source tool. Search it, discuss it, provide explicit feedback, change the brief, reorder and delete it. Confirm the same deleted article key is not regenerated. No Feed announcement should be sent.
-7. Review incremental memory and a nightly reflection: evidence-based people/group notes, concrete repair/next behavior, no invented facts or automatic SOUL rewrite. Force a failed source/model operation and ensure the processing cursor is not advanced.
-8. Delegate independent read-only research. Continue chatting and verify the native result returns without a status request. Check per-question coverage and bounded retries; cancelled/unknown actions must not be blindly recreated.
-9. Request forgetting a scoped topic. Verify watchers and indexed records are removed/suppressed, then inspect native/external memory and derived notes with real tools. Confirm the assistant reports inaccessible histories/backups rather than claiming unverified erasure.
-10. Run official remove, then ask Hermes to clean the owned jobs/scripts using install.json. Confirm unrelated jobs/data remain and reinstallation preserves your documents.
+| # | Invariant | Where it is computed |
+|---|---|---|
+| A1 | Migrating twice gives no diff | `store_v2_acceptance` |
+| A2 | Migrated counts match the 0.3.x database, every difference has a reason code | `store_v2_acceptance` |
+| A3 | Every timed entity has a deadline | `store_v2_acceptance`, `kernel_acceptance`, Health `deadlines` |
+| A4 | All probes ok on the host (a broken delivery target shows as high) | `native_host_contract`, `health_acceptance`, `wp6_acceptance`, `cutover.py verify` |
+| A5 | Replayed duplicates leave one sendable notice per notice key | `kernel_acceptance`, `store_v2_acceptance` |
+| A6 | In a shadow run on a data copy, v2 would send nothing the old version did not | manual, before release |
+| A7 | Signal watermark age < 2h | Health `signal_watermark`, `cutover.py verify` |
+| A8 | Packet expiry rate < 10% | Health |
+| A9 | Tool error rate per job < 3% | Health |
+| A10 | No tool result > 20k; no credential pattern after redaction | `kernel_acceptance`, Health |
+| A11 | Rewritten external callers use no removed action | `scripts/check_callers.py`, `wp6_acceptance` |
+| A12 | After rollback, 0.3.x resends no notice and reprocesses no signal | `store_v2_acceptance` |
+| A13 | Host contract and per-machine table tests pass | `native_host_contract`, `kernel_acceptance` |
 
-These acceptance checks depend on the user's actual model, configured tools and messaging adapter. Unit/integration tests do not establish model judgment quality or real external delivery. Planning coverage percentages are not release pass rates.
+Release gate: every check above passes and the A1–A13 outputs are attached; install only from a tag; for 7 days
+after release fix only high-level problems. Health keeps computing the post-release invariants (watermark age,
+parked signals, 7-day duplicate sends, hanging or unknown notices, run outcomes, overdue next checks, fade
+deadlocks, cron session recognition, probes, review candidates) in `muse/health.json`.
 
-For weekly/monthly review acceptance, inspect a real scheduled report: it should cite available outcomes, state missing evidence, offer concise recommendations and leave SOUL/configuration/skills/jobs unchanged. Confirm Bot Chat receives it once and the next review can retrieve its summary. Model judgment and report quality require this live acceptance; automated tests do not prove them.
+## User acceptance on a scratch profile
 
-For proactive behavior acceptance, distinguish a committed near-term plan from a speculative wish; confirm an existing in-scope next step is prepared before a generic offer; reject unchanged repeats after silence; distinguish dismiss/snooze/stop-topic; and verify nightly Working lessons updates preserve user instructions and avoid personal facts/task logs. This needs model-level review; keyword or template checks do not establish the behavior.
+Use a separate profile with synthetic data; never a profile in daily use.
 
-For connected-source acceptance, begin with no goals/interests/notices. Each fixed job's script must still wake the model. Give the patrol connected mail/calendar/reminder fixtures (and a device/CLI source), verify actual reads and per-source success/partial/error records, then change/cancel a fixture and verify selection or retirement. A failed page must preserve the previous successful watermark. Revisit an upcoming unchanged deadline. Confirm a known-location weather change can be relevant, an unlocated weather guess is not made, a repeated headline stays quiet, and unrelated private details are not surfaced. These semantic checks require real model/tool traces; automated state tests alone do not prove source coverage.
+1. Install, start a new conversation and ask what Muse tracks. `muse_manage read(kind=status)` shows Health and
+   counts; `hermes cron list` shows the five jobs and `muse-health`. SOUL and native memory are unchanged.
+2. Accept a concrete piece of work in chat; a goal appears (or the next intake proposes it). Mention a passing
+   interest; it expires after 14 days unless renewed by you.
+3. Give the patrol two reports of the same upstream item; one notice is delivered. Check quiet hours, the daily
+   budget, `urgent_per_day`, a blocked topic and "stop" feedback.
+4. Let a goal go dormant (or lower `goal_dormant_days`): one question arrives; without activity, code cancels the goal
+   after the question was delivered and `goal_fade_days` passed.
+5. Break the delivery route: a high health item appears in the main session and on the Muse page, not through a notice.
+6. Ask Muse to forget an interest; it is gone from `read`, and a tombstone stops later evidence from rebuilding it.
+7. Run `installation_prepare(operation=remove)`, confirm, pause the jobs and remove the plugin; data stays in `muse/`.
 
-Additional regressions cover hourly/nightly cursor independence, pending notices surviving recent-history limits, snoozed interests returning without extending expiry, parent-confirmed cross-day goal completion, independent expiring Ideas, and native research dispatch/status without user-driven waves. Native delegation integration checks the actual public registry dispatch and parent/background binding with a stubbed executor, without model calls. Host callbacks and model judgment still need live acceptance.
-
-Runtime regressions also cover native async-completion exclusion, reversible archival of historical misclassified signals/free-form source records, stable source identity despite scan labels, resource-coverage downgrade without checkpoint advancement, purpose-specific Cron context, and exact settled receipt recovery after a later run. Native integration compares the computed receipt key with the actual Hermes delivery producer under a stubbed transport. Live acceptance should run two patrols: verify the same sources reuse IDs, all claimed calendar resources were actually queried, and no new message is sent when reconciling an old receipt. Reduced model usage must be measured on actual runs rather than inferred from prompt changes.
-
-User-experience acceptance also checks substance and depth, reasoning quality, personal relevance, proactive discovery, research initiative and completion of accepted work. Lower call counts are not a pass if answers become shallow, useful topics disappear or work becomes passive. Existing attention preferences still prevent repetitive or unhelpful interruption.
-
-Verify a >25-message snapshot completes all batches in one run, with new arrivals deferred and timestamp ties retained. Check pending eligibility across overnight windows, budget reset, active conversation, expiry, snooze and evidence-backed urgency changes. Verify tool aliases reuse a source and preserve historical duplicates without crossing accounts or moving checkpoints on partial reads.
-
-For the unified prompt pass, inspect the delivered packet and actual Bot reply: the packet should carry internal receiving guidance; the reply should address the user with evidence-backed findings, useful context and real completed work, not acknowledge a Cron or invent a memory/action. Check notices and governance reports, direct-channel text, no double wrapping, no user-signal pollution and no extra notification/job. Review source failures for current-run recovery or an evidence-backed gap rather than automatic deferral. Do not manufacture live user interests or incident alerts for acceptance.
-
-Regression scenarios for conversation freshness: an answered screenshot diagnosis must not become a new request for a screenshot; a completed reply between prepare and finalization must suppress the stale output and release its unsent budget; an unrelated reply may be reviewed and the useful notice sent. Verify private-profile native reads, no copied history, literal source title/item identity, atomic supersession, two independent ordinary notices under defaults, preserved explicit limits, and pristine-only preference migration. Live acceptance must review real pending items, not fabricate user intent or send synthetic alerts.
-
-## Operation self-review
-
-In a scratch profile, record a tool call then its result after a review checkpoint. Confirm operations_read links the late result to its original arguments and excludes groups/unrelated Cron sessions. Exhaust the snapshot via operations_complete and confirm new arrivals remain for the next snapshot. Simulate unavailable native history/ledger and stale tokens: neither may advance the checkpoint. A finding needs observed references; closure needs verified outcome and disclosure evidence or a justified lack of user impact. Use actual native persisted child sessions for lineage checks. Do not manufacture mistakes, destructive actions or user notifications in a live profile for testing.
-
-Bot Chat acceptance: verified findings should be expressed as the same assistant’s work; no “received,” attribution to another assistant or invented completed action. Actual wording remains model behavior, so inspect real receiving replies as well as envelope tests.
-
-For Cron delegation, set a scratch profile delegation model different from the parent. Verify owned Cron calls through muse_manage delegate inherit the live parent model and route and join results; a second parent model follows automatically. Ordinary chat and unrelated Cron calls retain native registry routing. Reject caller-provided credentials/ownership/transport fields and denied parent tools. Test both profiles independently. Native routing tests use fixtures without model calls; live acceptance should inspect actual child-session model records and confirm the model selects the plugin entry. Native reasoning effort remains a separate Hermes setting.
-
-For incomplete handoffs, provide a mail subject/sender and an authorized readable thread with a substantive update. Verify the receiving Bot actually reads the original and gives an evidence-backed judgment, rather than saying the summary is insufficient. Repeat with a missing locator (search and verify identity), an already complete fresh packet (no gratuitous re-read), and an inaccessible source (specific honest gap, no fabricated content or external write). For a subscribed briefing, verify original titles/locators survive, current evidence outranks simplistic overdue/label rankings, source failures remain gaps, and one existing job produces one report without creating a notice. Check subsequent patrols against the actual delivered reply. These checks require real model traces; prompt text tests do not prove them.
-
-## Calendar 30-day acceptance
-
-Run python -m unittest discover -s tests -p test_calendar.py -v for synthetic rolling/month/DST/fixed-offset windows, all-day original dates and cross-zone overlays, multi-day ordering/conflicts, recurrence moves/cancellations, conservative copy identity, day-8/day-30 preparation, full inventory/event pagination, stale/failed receipts and successful-watermark protection. Legacy seven-day, rolling-30d and natural-month checkpoints must remain independent. Runtime.handle is exercised with native host bindings stubbed in unit tests; native_smoke additionally exercises both registered actions through the actual plugin registry in temporary A/B homes with unchanged six-job inventory.
-
-Before release, run the full unit suite, native_smoke and official plugin validation. Live semantic acceptance remains separate: use synthetic authorized connector fixtures, inspect model/tool traces for actual multi-account discovery and complete full-interval pagination, confirm useful day-8/day-30 preparation is assessed without extra notices or jobs, then verify no unchanged event spam on the next patrol. Do not access private calendars to validate this change.
-
-0.1.27 adds synthetic registered-tool conversation previews/full chunk traversal (including old intent, long cancellation tails and revision changes), real native CronRunScope watch policy/length boundaries and public delegation synchronous fallback, lower worker limits, soft retention and internal-unreturned-preview protection. CI pins public core f594424e58f18ebc2607decaa72f300e0a26a24b; native tests also run against the separately recorded installed core. Provider/semantic policy/transport are synthetic; no private sources are used.
+Model judgment (what is worth a notice, review conclusions, writing quality) needs real traces; the scripts only
+prove the bookkeeping.

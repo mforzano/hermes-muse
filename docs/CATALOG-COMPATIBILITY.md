@@ -1,28 +1,46 @@
-# Compatibility decisions in 0.2.0
+# Compatibility and retention (0.4.0)
 
-This version retains the six recurring jobs, their schedules, notice policy, rolling 30-day/natural-month calendar, source coverage/watermarks and follow-through lifecycle. Local goal registration creates no Cron; it remains available for recovery of genuinely accepted but unregistered work under the original signal/24-hour rules.
+## Compatibility
 
-Model-created watches in native Cron context now require the active profile's `cron.allow_agent_scheduling: true`. A recorded user signal does not override that operator setting. Fixed installation jobs and ordinary goal state/verification are separate. Watch prompt and stop_condition must each be nonempty strings of at most 4,000 characters; errors do not truncate scope. This limit does not shorten shipped prompts or the assembled wrapper. Store complete accepted scope in the managed goal, use verifiable references and recheck cancellation; a reference grants no authority and bypasses no scheduling guard. An omitted watch schedule defaults to every 30 minutes. New repeating schedules must provably be at least 30 minutes apart over the entire pattern; ambiguous cron patterns are rejected. One-off reminders are exempt. Existing user job settings retain native semantics and are not rewritten.
+- **Hermes.** Needs the plugin APIs for tools, Skills, system prompt sections, hooks and unload (Hermes 0.21.5 or
+  later); tested against `v0.22.5`. Host behavior Muse depends on (cron session identity, delivery semantics and
+  target, signal sources, config location, profile home) is checked by 7 probes in `muse/health.json` instead of a
+  version range; a missing capability turns off only its feature and shows as a high health item.
+- **Upgrade.** 0.3.1 and 0.3.16 databases migrate in place on first load. Job ids, user schedules, routes and pauses
+  are kept; job prompts are refreshed from `prompts/jobs/`; `monthly-system-audit` is paused; `muse-health` is added.
+  GOAL.md, memory, dreams, people and group pages, Feed articles, TOOLS.md, AGENTS.md and preferences keep their
+  formats. Callers of removed actions must be rewritten first ([CALLER-MIGRATION.md](CALLER-MIGRATION.md));
+  rollback is in [CUTOVER.md](CUTOVER.md).
+- **Platforms.** Linux and macOS. Windows is not supported: content files and locks use POSIX file locks and
+  descriptor-relative opens.
+- **Isolation.** Everything lives in the current profile; Muse never reads or monitors another profile. Jobs set no
+  `workdir`, so Docker and remote terminals work.
 
-Conversation context is a preview: newest 24 eligible messages per session, up to 1,000 characters of each and 24,000 text characters shared across sessions. Complete native content remains available via `conversation_read` in 12,000-character pages under the exact revision. One latest-revision range/hash record is kept per tracked session (replaced on change, no automatic TTL); no conversation body is copied. Only previews returned to the caller and explicit pages count as served; internal freshness checks do not mark unseen text. partial coverage prevents notice review/finalization. A final page alone cannot certify skipped pages; changed messages invalidate old coverage. These are conversation-preview budgets, not a maximum on total work, selected operation cases, signal scopes, research results or all tool/context metadata. Existing signal/operation/source processing cursors are not advanced by conversation reads. Notification delivery evidence continues to use native identity independently of previews. Goal completion is the private parent’s explicit decision.
+## Retention
 
-## Retention disclosure
+Muse stores, under `<profile home>/muse/`:
 
-The signal inbox stores the first 8,000 Python characters, truncation flag, source turn/session and timestamp; routes may contain platform/chat/user/thread/message/scope keys. There is no automatic count/time expiry. One upkeep marker records the revision actually processed; native originals are still required for truncated text. Hourly selected scopes retain unread/uncertain authority, including old requests. Nightly has no independent raw-input processing queue. Legacy operation cursor/wave and native logs are kept as explicitly unreviewed history. Consequential selection is narrower than historical all-log audit; opaque terminal side effects and hidden/plain-text failures may escape bounded sampling, so it is not a comprehensive safety guarantee.
+| Data | Content | Kept |
+|---|---|---|
+| Signals (`state-v2.db`) | redacted excerpt of a private user message (head and tail past 8k), its session/message pointer, disposition and extracted facts | until forgotten; no automatic expiry |
+| Notices, Findings | notice text, title, upstream ID, source links and delivery state; review evidence refs | no automatic expiry |
+| Goals | GOAL.md (body, progress, assessments) and its mirror | until the user deletes them |
+| Interests, Ideas, Feed records | title, rationale, source refs | until forgotten (state expiry does not delete) |
+| Packets | the items handed to one job run (redacted excerpts) | no automatic expiry |
+| Events | state transitions with short reason codes | 30 days |
+| `health.json` | health items with entity ids as evidence, recent host fault messages | replaced every run |
+| `state.db` (0.3.x) | the old database, read-only after migration | until the user deletes it |
+| `backup/cron-prompts-0.3.json`, `muse-backup-<time>/` | 0.3.x job prompts; the cutover preflight copy of `muse/` | until the user deletes them |
 
-Native full conversation/tool history has separate Hermes retention and may be pruned/unavailable; removing an inbox row does not delete native history, memory, goals, Feed or backups. Followup candidates/receipts/reply hashes are metadata; unresolved items are retained and eligible settled metadata is lazily cleaned under its documented lifecycle. Research records can contain returned native result payloads, including joined report text. Idempotency journals (request keys and replay results) and oversized tool-result envelopes are kept in the state database for replay and paging, may contain written content or tool output, and have no automatic expiry. Audit page receipts contain references with seven-day expiry; findings, goal/Feed/notes and existing memory are separate persistent records/files governed by explicit lifecycle/forgetting. There is no second full native transcript or telemetry, but this is not a claim that only metadata or no sensitive result text is stored anywhere.
+Muse copies no full transcript; originals stay in Hermes's own session history under its retention, and `read`
+pages them only on demand, redacted. Forget clears the payload and writes a tombstone; it does not delete Hermes
+history, native memory, backups or anything outside `muse/`, and the assistant says what remains. There is no
+telemetry and no network access of Muse's own; external sources are read only by the model with tools the user
+already authorized.
 
 ## Validation scope
 
-Use synthetic native histories and tasks, temporary homes, actual plugin registration/core dispatch/Cron isolation, complete unit/native smoke and official validator. Provider/transport fixtures do not establish live model quality or delivery. Catalog admission remains a maintainer decision. New code is not automatically deployed to an existing installation by publication.
-
-
-## Approved implementation
-
-All Muse workers use public ctx.dispatch_tool("delegate_task", request, parent_agent=parent). Effective user delegation provider/model/reasoning/concurrency settings take precedence; the parent is only the native default: leave `delegation.provider` and `delegation.model` empty to keep the parent model. No private credentials_cfg branch, config rewrite or provider bypass. Unknown outcomes remain with their native owner and are not dispatched again.
-
-New repeating watches require a provable minimum 30-minute interval. Native parse_schedule distinguishes interval/cron/once. Five-field minute/hour schedules are checked across every daily slot and midnight, with lists, ranges, `*/step` and `N/step` expanded as croniter fires them (`0/5` is every 5 minutes); unsupported syntax or timezone-transition ambiguity is refused with advice to use every 30m. Once is exempt. Existing job schedules and user edits are not rewritten. Cron-created watches still require cron.allow_agent_scheduling. Cron edits to feed_brief do not wake feed-pulse.
-
-Children have no business-write authority. The installed host does not expose reliable parent object-grant propagation, so broad child reads fail closed; parents pass bounded evidence and keep persistence/verification. This is not a sandbox around native terminal/browser tools.
-
-Windows is not supported for now: the content and lock implementation uses POSIX file locks and descriptor-relative file access. CI covers Linux and macOS only.
+The acceptance scripts use synthetic data in temporary homes, real Hermes registration and the real HostAdapter,
+without model calls or real deliveries. They prove the bookkeeping, not model judgment or live delivery; see
+[ACCEPTANCE.md](ACCEPTANCE.md). Catalog admission remains a maintainer decision, and publishing a version does not
+update an existing installation.

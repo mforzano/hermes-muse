@@ -1,3 +1,66 @@
+# 0.4.0 — Muse v2: deterministic kernel, thin judgment layer, independent Health (2026-10-30)
+
+v2 rewrites the core and keeps the data. Code keeps the books (watermarks, dedupe, state machines with TTLs,
+delivery and reconciliation); the model only judges and writes; Health runs on its own. See
+[docs/DESIGN.md](docs/DESIGN.md).
+
+## Upgrading from 0.3.1 or later 0.3.x
+
+1. Rewrite personal cron prompts and scripts that call Muse: `python scripts/check_callers.py <files>` must pass
+   ([docs/CALLER-MIGRATION.md](docs/CALLER-MIGRATION.md)). Removed actions have no deprecation period.
+2. Back up and check the host: `scripts/cutover.py preflight --home <profile home>`.
+3. Install 0.4.0. The first load, under `muse/install.lock` and a `muse/migrating.json` marker that keeps every job
+   silent, migrates the 0.3.1 or 0.3.16 `muse/state.db` into `muse/state-v2.db` once (the old file stays,
+   read-only), backs up the 0.3.x job prompts to `muse/backup/cron-prompts-0.3.json`, refreshes the jobs in place
+   (ids, schedules, routes and pauses kept), pauses `muse-monthly-system-audit`, adds `muse-health` and removes the
+   marker. A failed install keeps the marker and its error, and the main session says so.
+4. `scripts/cutover.py verify --home <profile home>`: all probes ok and the signal watermark fresh.
+
+GOAL.md, memory, dreams, people/group pages, Feed articles, TOOLS.md, AGENTS.md and preferences keep their formats.
+Step-by-step cutover: [docs/CUTOVER.md](docs/CUTOVER.md).
+
+## Rolling back
+
+`scripts/cutover.py rollback --home <profile home>` silences v2, writes v2's sent notices and settled signals back
+into the 0.3.x database (so 0.3.x neither resends nor reprocesses them), restores the saved job prompts, resumes
+the paused job and pauses `muse-health`. Then reinstall 0.3.x (catalog: the 0.3.1 SHA), put back the external
+callers and delete `muse/migrating.json`. Residual risk: 0.3.x does not dedupe against sent history, so an event
+arriving after the rollback may still be notified twice. Details: [docs/CUTOVER.md](docs/CUTOVER.md#rollback).
+
+## Behavior changes
+
+- **Source whitelist.** Only private messages from user surfaces in `USER_SOURCES` (CLI, TUI, desktop, phone,
+  messaging DMs) are captured as signals and authorize changes. The stored `sessions.source` decides; cron,
+  delegated, group and unclassified sources (including empty values) are neither read nor authorizing.
+- **Who may change what.** Goal status and settings change only in the private main session. A cron run may call
+  `muse_job` for its own packet and, from `muse_manage`, only `read`, `calendar_view` and `content_write` for notes,
+  dreams and alignment; children read; groups and others are refused.
+- **`urgent_per_day`** (default 2): urgent notices may pass quiet hours only within this daily limit; past it they
+  are gated as time-sensitive. Notices are deduped by a code-derived notice key against 7 days of sent history.
+- **Job prompts** live in `prompts/jobs/<job>.md` (intake, patrol, nightly, feed, weekly) and are applied to the
+  existing jobs at install; their fields are generated. The weekly digest replaces the weekly and monthly reports.
+- **Removed `muse_manage` actions:** `context`, `status`, `content_read`, `conversation_read` and
+  `operations_*`/`finding_record` (use `read`); `source_check`, `review_complete`, `run_complete` (bookkeeping is
+  code's); `notification_*`, `feed_add`, `calendar_window`, `memory_feedback_review`, `delegate`, `research_*`.
+  `muse_manage` now has 14 actions; Muse's own jobs use the new `muse_job` (`read`, `observe`, `submit`).
+- **Removed mechanisms:** model-chosen `request_id` and idempotency journals, the optional LLM wake gate, generic
+  operation audits, model self-assessed run outcomes, memory receipt review/defer (only failed or staged native
+  memory writes are shown, once).
+- **New:** Store v2 with one state machine per kind; Health (`muse/health.json`, 7 host probes, invariants, alerts
+  in the main session, on the Muse page, in cron output and optionally `health_deliver`); conversation review with
+  at most 10 code-picked candidates a day; goal fade with code-keyed questions and code-run cancellation.
+- Hooks are `pre_llm_call`, `post_llm_call` and `post_tool_call`; the Dashboard and Desktop page shows the last
+  Health check.
+
+# Unreleased on 0.3.x before 0.4.0 — data sources and Apple PIM full EventKit fields
+
+- Data sources are documented as three layers in the companion Skill: Hermes built-in tools and Skills first (`web_search`/`web_extract`, `google-workspace`, `himalaya`, `apple-reminders`, `imessage`, `apple-notes`), Apple PIM as the documented external dependency, and personal sources only in the profile's TOOLS.md. Each procedure gives installation (linked to its Skill or upstream), a read-only self-check, patrol reading, normalization and known limits.
+- A source that is not installed, signed in or permitted is recorded as `unavailable` with a `not connected:` summary and its fix, distinct from a failed read and never silent.
+- New post-deployment verification procedure: pause the two source patrols, check every declared source, resume once each is connected or explicitly accepted, then recheck source_check after the first patrol.
+- Apple PIM calendar receipts are adapted per event. Events with the full EventKit fields (occurrenceDate, isDetached, isRecurring, status, availability, event timezone, original all-day dates) become strict events: cancelled instances are evidence only, busy follows availability, EventKit's 23:59:59 all-day end becomes an exclusive date, and a fully read source can be checked; EXDATE, attendance and UID are reported as known limitations. Receipts without these fields keep the observation mode with unchanged output.
+- Removed internal implementation reports and personal traces from the repository; README reflects the official catalog listing.
+- Briefings gain an optional goals section from `context(section=goal,status=attention)`: only active goals waiting for the user, blocked, with a next check missed by over an hour, without progress for 3+ days, or progressed in the last day, one line each (title, what it waits on, idle days); omitted when nothing qualifies. No new job.
+
 # 0.3.16 — preserve native result status in bounded case selection (2026-10-28)
 
 - Fix successful large skill, schema and operation-evidence results being selected as failures after a 2000-character preview broke their JSON structure. Classify the complete structured root locally and return only the failure flag with bounded previews; quoted error words are not current result status. Recognize native bridge inspection calls in their nested function shape.
@@ -251,7 +314,7 @@ Precise soft-inbox retention and instructed-read-only disclosures; Cron watch sc
 
 - Preserve the review snapshot boundary across pages and return an explicit continuation instruction. Reject substituting the page checkpoint for the snapshot boundary, caught in a real maintenance run.
 
-- Exclude self-review calls routed through Hermes’s native tool_call dispatcher, as well as direct calls. Mixed batches containing actual mutations remain visible. This closes a gap found during Macmini live acceptance of 0.1.17.
+- Exclude self-review calls routed through Hermes’s native tool_call dispatcher, as well as direct calls. Mixed batches containing actual mutations remain visible. This closes a gap found during live acceptance of 0.1.17.
 
 ## 0.1.17
 

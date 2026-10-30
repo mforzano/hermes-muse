@@ -1,17 +1,26 @@
 # Security and data scope
 
-The plugin runs as trusted local Hermes Python code. It stores private state under the active profile's muse directory and adds owned scripts/native Cron jobs. It does not collect telemetry, seek credentials, self-update, require an external backend, alter approval modes, grant its own gateway permissions, replace native tools, or modify Hermes core/identity files. By default it contacts no external service. The optional wake gate, off unless you enable it, sends a bounded summary of what a run would review to the endpoint you configure, using an API key from the environment variable you name; see the README for exactly what is sent.
+The plugin runs as trusted local Hermes Python code. It keeps private state under the current profile's `muse/`
+directory and adds owned launcher scripts and cron jobs. It does not collect telemetry, seek credentials,
+self-update, require an external backend, change approval modes, replace native tools or modify Hermes core, SOUL or
+native memory. Muse itself contacts no external service; external sources are read only by the model, with tools
+the user already authorized.
 
-Paths derived from record IDs are validated and contained; writes are atomic and SQLite transitions serialize equal-event dispatch and budgets. External evidence and stored conversation excerpts remain untrusted data. Personal state is not supplied in group/room contexts. Private/local user inputs retain their first 8,000 characters, truncation flag, turn/session identity and time; associated routes can include chat/user/thread/message IDs. Signals and their one revision-bound upkeep processing marker have no automatic row/time expiry; unread authority is retained. Full originals depend on native retention. Nightly synthesis has no second raw-signal queue, and the legacy operation cursor/wave remains explicitly unreviewed history. Native history, research result payloads, archived followup records, goals/memory/Feed and backups have separate retention; see [compatibility and data scope](docs/CATALOG-COMPATIBILITY.md).
+- **Authorization.** Only the private main session (caller kind `user`, decided by the stored `sessions.source`)
+  changes state. Cron runs are limited to their own packet plus reads and note/dream/alignment writes; delegated
+  children only read; group chats and unclassified sources are refused and are never read as signals.
+- **Untrusted input.** Quoted mail, pages, tool output and stored excerpts are evidence, never instructions.
+- **Redaction and limits.** Text handed to the model is redacted first, at most 12k per read and 24k per item; long
+  messages are head/tail excerpts.
+- **Writes.** Paths derived from ids are validated and opened without following symlinks; content files use a
+  revision CAS under a file lock; Store transitions are CAS in SQLite transactions, so budgets and delivery claims
+  cannot be spent twice.
+- **Delivery.** A delivery whose outcome is unknown is never resent automatically; the notice is reconciled from the
+  host's delivery receipt or closed as `closed_unknown`.
+- **Forget** clears the stored payload and writes a tombstone. It cannot erase Hermes session history, native
+  memory, backups or external indexes; the assistant says what remains.
 
-Foreground and background calls use the same 0.1.2 evidence checks. Cron is not a blanket prohibition on state changes. Actions that require a real user signal still check its existence and age, and interest renewal requires a newer signal. Research's read-only instruction is a procedure under the host's tool permissions, not an enforced plugin sandbox.
+Retention is listed in [docs/CATALOG-COMPATIBILITY.md](docs/CATALOG-COMPATIBILITY.md#retention).
 
-Selected results go to the current profile's Bot Chat and run an assistant turn there. Incoming results do not become new user signals; state operations remain available with their existing evidence requirements. The prepared-notice path preserves exact-event deduplication and never automatically replays unknown deliveries.
-
-Native scheduling and transport are outside the plugin transaction. A process crash after dispatch can leave an unknown outcome; do not blindly retry. Deleting an indexed record is not a guarantee that every native transcript, backup or external memory index is erased. The Skill explicitly requires verification and disclosure of those limits.
-
-Report security issues through the repository owner's GitHub contact or a private vulnerability report if available. Do not include private user data or credentials in public issues.
-
-Self-review reads native tool arguments/results in tracked private conversations, owned Cron sessions and persisted descendants, plus owned execution outcomes, within this profile. These records may contain sensitive tool output and are exposed to the configured assistant for review; there is no new telemetry or external backend. Hidden assistant reasoning is not selected. Only metadata checkpoints/session references and minimal issue summaries, evidence references, verification and disclosure notes are stored in Muse state. Pure self-review calls are excluded. Initial scope is the preceding 24 hours; pruned/unpersisted evidence cannot be recovered. Finding removal uses the existing user-signal-gated forget action and does not erase native history/backups.
-
-Delegates are instructed to remain read-only; inherited tools can include file, terminal, browser and enterprise MCP writes. Child Muse business-state write actions are refused, but allowed read paths may perform bookkeeping. Conversation preview coverage stores ranges/hashes only and does not advance processing/source watermarks. The remaining disclosed private Cron parent-routing exception applies to configured/unknown route conflicts, preserving current behavior while a public scoped policy is unresolved.
+Report security issues through the repository owner's GitHub contact or a private vulnerability report if
+available. Do not include private user data or credentials in public issues.

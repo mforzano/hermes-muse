@@ -1,282 +1,178 @@
-# Hermes Muse design — 0.3.16
-
-Status: implementation contract. This independent plugin assembles a long-term assistant using Hermes tools, memory, skills, cron and conversations. It does not modify Hermes core or require a particular model, memory provider, note app or messaging platform. All features are installed together in the active profile.
-
-## Scope and provenance
-
-Inspired by documented Muse behavior: goals and short-lived interests, evidence-based proactive reminders, nightly reflection, relationships, goal research, Ideas and a silent personalized Feed. All code, instructions and templates are independently authored. No private export, personal fact, credential, Muse service implementation or proprietary prompt is distributed. The familiar `memory/`, `dreams/alignment/derived/` and `workspace/goals/` layout is retained; native Hermes memory paths and the plugin bookkeeping below are deliberate adaptations. Browser pause/resume, phone/device services are outside this release; plugin-owned Dashboard/Desktop views are included.
-
-Coverage percentages discussed during planning were estimates, not release quality measurements. Release acceptance is defined by observable behavior and tests.
-
-## Windows adaptation (partial)
-
-The POSIX implementation and business contracts are unchanged. The Windows
-foundation uses `NtCreateFile` with a retained `RootDirectory` for each component,
-then inspects the opened object and rejects reparse points/hardlinked leaves.
-`NtQueryDirectoryFile` enumerates the retained directory directly. `LockFileEx`
-and `UnlockFileEx` preserve the mutations-before-specific lock order, thread
-reentrancy and cleanup. No absolute child opens are substituted for `dir_fd`.
-Directory sharing alone cannot stop attributes-only in-place junction changes;
-ordinary Windows tests exercise that attack against actual read/lock entrypoints.
-
-Native atomic publication/deletion uses exclusive temporary handles, file flush
-and handle-relative NT rename/disposition. Directories deny DELETE sharing but
-permit WRITE sharing for NT rename's internal parent open; reparse/identity checks
-remain. SQLite retains the complete chain and non-deletable verified DB leaf,
-then rechecks the parent before standard mode=ro/query_only filename opening.
-Pinned children keep ancestors nonempty, so NTFS cannot convert them to junctions;
-WRITE sharing preserves normal DB writers. New files/directories receive protected
-private DACLs at creation. Migration/archive rotation and launchers use native
-publication too. Read-only helper connections now close deterministically.
-Full Windows units, pinned-host native smoke and official validation pass locally.
-The branch is not a supported release until POSIX regressions and review complete. No directory-fsync-equivalent durability is claimed. See
-[WINDOWS.md](WINDOWS.md).
-
-## Installation and ownership
-
-Entry: `hermes plugins install xiaohei-info/hermes-muse --enable`. The first actual plugin load performs locked, idempotent initialization. No model/network call occurs during registration. It creates missing templates without overwriting user documents, registers one Skill (`hermes-muse:companion`), one bounded system prompt section, a small state tool and hooks; creates six native Cron jobs; records their actual IDs and owned files in `muse/install.json`. A running Hermes scheduler is required for background execution. Repeated load/upgrade preserves edits and paused jobs, and never duplicates jobs. Interrupted initialization is reconciled by the per-installation prompt marker (`[hermes-muse:<installation_id>:<key>]`) recorded in `muse/install.json`, not job name alone. Cron jobs set no `workdir`, so Docker/remote terminal backends never `cd` into a host path; 0.3.2 clears the workdir of 0.3.1 jobs in place on load.
-
-Native uninstall: `hermes plugins remove hermes-muse`. Hermes has no guaranteed uninstall callback for deleting cron jobs. README instructs the user to ask their remaining Hermes assistant to pause/remove only job IDs in `muse/install.json`, inspect in-flight work and remove owned launchers. User data is retained. Every launcher checks that the plugin is still installed and enabled, and exits silently otherwise. Reload/unload only stops in-process timers, never erases user data or cancels persistent jobs merely because a process exits.
-
-## Files and single sources of truth
-
-Paths below are relative to the active `HERMES_HOME`; resolve per call or explicitly bind a captured profile for deferred work. Never use a process-global default home.
-
-- `plugins/hermes-muse/`: immutable shipped code, `plugin.yaml`, `skills/companion/SKILL.md`, reference procedures, eight `prompts/*.md`, clean templates.
-- `memories/USER.md`, `memories/MEMORY.md`: native Hermes files, or the user's existing memory tools/provider. Installation does not write these or `SOUL.md` or replace `agent.system_prompt`.
-- `muse/install.json`: version, installation identity, owned native job IDs and launcher paths; survives remove.
-- `muse/state.db`: SQLite transactional operational state, NOT a replacement long-term memory service. Short-lived user signals/cursors, expiring interests/Ideas, notification reservations and outcomes, Feed index/feedback, source-session references, source check watermarks/coverage and native research dispatch references. Hourly intake markers and nightly synthesis have distinct responsibilities; pending notices are not hidden by recent delivered history. Native Cron remains the authoritative execution ledger.
-- `muse/AGENTS.md`, `muse/TOOLS.md`, `muse/PROACTIVE_PREFERENCES.md`: local responsibilities, actual source availability, editable attention/Feed preferences.
-- `muse/memory/YYYY-MM-DD.md`, `muse/memory/people/INDEX.md`, `muse/memory/people/<slug>.md`, `muse/memory/groups/INDEX.md`, `muse/memory/groups/<slug>.md`: dated understanding and evidence-based relationship notes.
-- `muse/dreams/YYYY-MM-DD.md`, `muse/dreams/alignment/derived/ALIGNMENT_SYNTHESIS.md`: reflection, corrections, friction/repair and next behavior.
-- `muse/workspace/goals/<slug>/GOAL.md`, `files/`, `hidden_files/`: one canonical goal record, final artifacts and working evidence. Existing external goals are referenced rather than independently declared complete.
-- `muse/workspace/your_files/feed/<id>.md`: durable Feed articles; state.db owns indexing and feedback.
-- `scripts/hermes-muse-*.py`: native Cron entrypoints, installed from plugin-owned code, recorded for cleanup. The scheduling host restricts scripts to this directory; symlink escapes are not used.
-- Native `cron/jobs.json`, `cron/executions.db`, output and delivery records stay host-owned; use their APIs, never hand-edit them.
-
-## Proactive behavior
-
-The existing Skill connects conversational intent, memory upkeep, goal research and patrol delivery. Concrete user plans can become goals without a formal creation command; wishes remain expiring interests. Within existing scope, prepare useful results before offering help. Prefer one strong ordinary proactive item, assess changed understanding rather than publication timestamps, avoid silence-driven status chasing, and preserve specific promised schedules and feedback distinctions. This is prompt-level behavior, not a new permission or scheduler.
-
-Nightly review may maintain a small Working lessons section in the companion workspace AGENTS.md when verified reusable experience exists. It preserves user-written conventions and ownership rules, does not copy personal facts or task logs, and leaves the file unchanged when nothing new was learned. Existing workspaces gain that section through the procedure, not an installer overwrite. Cron has no workdir, so AGENTS.md is not auto-injected; the Skill tells each Muse Cron run to read it with `content_read(kind=working_lessons)`.
-
-## Execution graph
-
-Main conversation -> read Skill when relevant -> create/update goal or temporary interest, record explicit preference/feedback -> native memory and Muse files/state.
-
-Research/nightly -> active goal files + user signals + actual connected tools -> evidence in hidden_files, Ideas, reflection and alignment -> proactive watch consumes the new evidence -> candidate -> recheck freshness/owner state/preferences/dedup -> native delivery -> reconcile outcome -> feedback/closure.
-
-Feed -> current, unexpired interests + brief + live evidence -> authored local article + index -> user reads/discusses/reacts -> explicit feedback informs future selection. Reading alone never counts as liking. Feed itself sends no announcement.
-
-## Scheduling
-
-Exactly six fixed jobs, all inheriting host model/provider/timezone:
-
-| Job | Schedule | Work |
-| --- | --- | --- |
-| muse-proactive-watch | */30 * * * * | Observe 24h, research relevant changes, verify candidates; ordinary delivery has its own waking-hour and daily budget gates. |
-| muse-memory-upkeep | 0 * * * * | Inspect new user signals, sourced notes and verified outcomes for incremental memory/relationships. |
-| muse-nightly-review | 20 3 * * * | Reflection/repair, goal intake safety net (accepted requests or promises without a matching goal in the last window; the prompt, not the code, dedupes against active/done/cancelled goals), goal research rotation, a separate bounded Ideas step (0-3, no quota; the run summary records the count or the reason for none), skills review and lifecycle cleanup. |
-| muse-feed-pulse | 0 * * * * | Opportunity to generate fresh content; not an article quota. |
-| muse-weekly-governance-review | 15 21 * * 0 | Seven-day review of useful outcomes, cost, reuse and simplification. |
-| muse-monthly-system-audit | 40 10 1 * * | Thirty-day review of alignment, instruction placement and redundant workflows. |
-
-Fixed external-source/governance jobs wake on each tick; local memory upkeep can deterministically skip when there are no new signals/cases or due duties. The optional wake gate (`plugins.hermes-muse.wake_gate`, off by default) skips a proactive-watch, memory-upkeep or feed-pulse tick: its pre-run script asks a System One model about a bounded read-only summary, never advances cursors or consumes signals, fails open, and wakes without asking when a goal check or review became due since the last wake, a notice is live, an explicit Feed request exists or a message backlog already requires a run, or `max_skip_minutes` has passed. It logs one metadata-only line per decision to `logs/hermes-muse-wake-gate.jsonl`. Local state cannot establish that connected sources or native memory contain nothing new. Patrols discover current connections/devices, make bounded real reads, and remain silent only after selection. Per-source checked/partial/error/unavailable records keep successful watermarks separate from failed attempts; they are agent-reported observations, not provider webhooks. Upcoming deadlines are revisited even without source updates. Weather, local opportunities and interest news use the same evidence and attention rules. Failed work does not advance a successful processing cursor. A quiet-pass timer after substantial conversation can advance the existing memory-upkeep job; a new user turn cancels/restarts it and attempts are capped at three/day. No extra permanent Cron for that timer. Explicit promised reminders and goal-owned watches create native jobs as required; patrols and new watches deliver their own final responses after notification_prepare. No new delivery-only jobs are created. All dynamic jobs are recorded for closure and uninstall.
-
-Weekly/monthly gates always wake at the scheduled tick, even without active goals. They use the same Skill and current-profile evidence, report gaps, and propose changes without applying them. No separate Skill audit or mandatory doctrine file is added. Their final outputs go directly to Bot Chat, without entering the ordinary notice budget/queue. The receiver treats the report as background evidence, not user authorization. `review_complete` saves successful processing cursors and the latest bounded summary in `state.db`; `status.reviews` exposes these summaries for follow-up, while native Cron retains full outputs and delivery records. Existing user-created review tasks are not adopted or removed.
-
-## Evidence for background work
-
-Foreground and background calls use the 0.1.2 action rules. Operations that require user evidence still need a recorded user signal; renewing an interest needs a newer signal. Goals belong to private parent conversations; Cron may update only its existing maintenance-owned state. The single exception is `goal_create` from the nightly-review Cron: the session must be a Cron session (not a delegated child), and the host-bound running execution must belong to the nightly-review job (`task_id` only names the job; the real parent also carries a `task_id`, so it never identifies Cron by itself). It requires `signal_id` and is capped at 5 per execution, counted in that execution's run record (`stages.goal_intake`) and released again if the create fails. The goal is owned by the signal's conversation, not the Cron session. `goal_update` from the same nightly execution is accepted only as `{id, status: "cancelled"}` for a goal the service itself finds fade-due (re-computed server-side; the caller's claim is not trusted); it adds the note "no user activity for N days; auto-faded" and reuses the normal cancel path (subgoals, owned watches, pending notices; external agents untouched). forget(kind=goal) and every other Cron or child goal write stay rejected. New repeating watches (interval or cron) must stay at least 30 minutes apart and prompt/stop fields allow 4000 characters each; one-off schedules are exempt and existing jobs are not rewritten. New notifications go to the current profile's Bot Chat.
-
-## Lifecycle contracts
-
-1. A casual mention is a temporary interest, not an accepted goal or monitoring subscription. Default interest/Idea lifetime is 14 days or an earlier event deadline. Only a NEW real user signal renews it; assistant output, recall, external news and cron execution cannot.
-2. Explicit goals support one level of subgoals, progress, completion, cancellation and reopening. Undated goals have a 30-day research review boundary; review does not invent completion or silently cancel promised subscriptions. Goal dates, expiry and owner state are checked on every consumption, not just during cleanup.
-2a. Goal fade (`hermes_muse/fade.py`) derives dormancy; the only stored addition is the optional boolean goal field `no_fade`. `last_activity` = the latest of the goal's `created`/`updated` (every goal_update sets `updated`), the end of a deadline or watch that exempted it (the clock restarts when the exemption lapses), the activity of an active subgoal, and the newest stored user signal whose text contains the goal ID or title (3+ characters, case-insensitive; the signal inbox retains original authority without automatic count expiry). Dormant = active and `now >= last_activity + goal_dormant_days`; `dormant_since` is that instant, `fade_at = dormant_since + goal_fade_days`. Exempt (never dormant): `no_fade`, a future deadline, an unexpired watch for which `Host.is_active_watch` is true, an owner whose native status is running/stalling/finalizing/claimed, an owner of kind `native_delegation`/`cron` whose status reads `unknown` (a purged record looks the same as a read error) for 30 days after the goal's last activity — after that a warning is logged once and the goal follows the normal ask-then-cancel path — or an active subgoal that is exempt for any of these reasons (so a parent never fades into cancelling a protected subgoal). Records without timestamps never fade. Fail-safe: a malformed goal or notice record makes only that goal not fade (logged as a warning; other goals in the same listing are unaffected); a preferences header that is present but invalid, an unreadable signal store or watch state, or a failing native check make the goal *not* fade (`exempt` says "fade data could not be read"); a missing preferences file means defaults. Preferences `goal_dormant_days`/`goal_fade_days` (1-365 or null) are validated strictly on write and cannot be written from Cron, because eligibility is computed from them. `fade_due` additionally requires the dormancy question: a notice whose id derives from `ask_key = goal-fade-ask:<goal id>:<UTC date of dormant_since>` must exist with `goal_id` equal to the goal and status exactly `sent` (every other state, including expired, failed, cancelled, dismissed and unknown, counts as not asked), have been created no earlier than `dormant_since` (a notice staged before dormancy, whose key is predictable, does not count) and have been dispatched (`dispatched_at`, which must be present: there is no fallback to `created`) at least 24 hours earlier; a user `feedback` of dismiss/done/accept/stop changes the notice away from `sent`, so the goal then stays dormant for that episode; this is read from the existing notice store, with no new record (a revived goal that goes dormant again starts a new episode and may be asked again). Dormant goals are dropped from followups, the reminder hint and the wake gate; the goal list and the patrol's own `context` reads still show them (patrol wording tells it to leave them alone). The nightly review asks and cancels through the guarded `goal_update`. Revival: any goal_update or `goal_update(status=active)` sets `updated`, restarting the clock; a cancelled goal is not reactivated by a mention alone, the parent does it.
-3. Closing a goal pauses its owned future watches, invalidates obsolete pending reminders, and preserves any explicitly marked final result awaiting delivery. Reopen does not silently resume old monitoring.
-4. User feedback distinguishes done, dismiss once, snooze and stop-topic. Silence is not acceptance. Stop-topic blocks future selection; an expired interest can remain an historical fact without being an active research directive.
-5. Discovery/preparation/queueing/dispatch are not successful delivery. Exact event fingerprints are unique under a SQLite transaction. Ordinary dispatch reserves one daily slot atomically. Unknown outcomes are retained for inspection, never blindly retried. Semantic cross-source equivalence still requires judgment.
-6. New notices target bare bot-chat, which native Cron resolves in the job-owning profile; when a gateway home channel exists (`/sethome`) the default for new goal watches is `all`, and the optional `deliver` preference (one of `all`, `bot-chat` or a platform; no comma lists) overrides it for jobs created afterwards. Plugin load never queries Hermes for home channels (that lookup waits on the load in progress and times it out), so the fixed jobs created on first load use the preference or bot-chat. Existing jobs keep their destination. Only a bot-chat destination gets the Bot Chat envelope and receipt tracking; `all`/platform notices are delivered as plain text and reconcile through the native delivery queue. The bot reads the selected result and replies in its canonical chat; Hermes can create a missing chat or queue behind its live owner. notification_prepare binds approved output to the current native task_id/execution ID; calls outside a patrol/watch only save a candidate. The old queue/handoff names alias preparation. There is no extra source-session injection. Bot Chat receipt completion is tracked separately from admission. Incoming delivery turns are excluded from user-signal collection. State operations remain available under the same evidence rules; preparing an already-dispatched notice is idempotent and cannot attach it to a later run. The shared receiving prompt asks the bot to speak directly to the user about the evidence and useful result, never acknowledge the sender or requeue the notice. Existing delivery-only jobs retain their original route until completion. On first upgrade the old default local patrol and unchanged generated watch headers migrate to direct delivery; later user destination changes are preserved. Direct same-profile receipts are read by the host execution-specific key, independent of the latest job pointer. Finalized unknown notices can reconcile to sent on that exact settled receipt; missing/ambiguous receipts never authorize replay. The native transform_llm_output hook selects the response from the current execution's approved notices and rechecks their eligibility. Its binding uses host-supplied task_id and session_id, never model-supplied IDs. Unrelated sessions are unchanged. A direct notice without output_finalized cannot be counted as sent, even if the Cron delivered a status summary. No automatic cross-channel resend.
-6a. Weather context is an optional preference, `weather_context` in PROACTIVE_PREFERENCES.md (boolean, default false; absent means false, so upgrades keep their behavior and the shipped template header is unchanged). Weather guidance and the Open-Meteo recipe live in companion references/weather.md, which the patrol reads only when the preference is true; when off the patrol makes no location lookup and no weather request. A location is private data: the plugin never obtains, stores or forwards it, and with the preference on the configured place goes to a third-party weather service.
-7. Forgetting first stops rewriters, removes owned originals/derived copies and suppresses identified pending reuse. Native/external memory deletion and historic session/backups are explicitly checked through actual tools; the plugin cannot promise erasure from a backend without a deletion API.
-8. New research batches dispatch one native coordinator through the public tool interface, which completes its questions and returns via the host callback. Bounded fan-out, one read-only retry and per-item coverage are coordinator instructions, not plugin-enforced guarantees. Status reads native durable results and no longer drives subsequent waves. Legacy lifecycle batches retain the inspection path. Unknown external mutations are never automatically repeated. Model/provider choice remains the host's.
-
-## Prompt and trust boundaries
-
-One `register_system_prompt_section(..., position="after_memory")` section is frozen by Hermes per new conversation. It supplies real paths and routing to the Skill, not full files or ever-growing history. `pre_llm_call` may add bounded current-state pointers to the current user turn without rewriting past context or the cached system prefix. All background evidence and saved conversation excerpts are data, not instruction authority. Only authenticated host conversation hooks count as user signal; ignore cron, delegated children and plugin-injected housekeeping turns. Profile and source-session ownership must be carried through deferred work.
-
-## Acceptance and release
-
-Use standard-library unit tests for actual invariants: idempotent initialization, concurrent dedup/budgets, signal-gated TTL renewal, closure/late delivery, feedback, Feed operations, failure cursors, unknown send outcomes, path containment, and removed-plugin gates. Use a real Hermes checkout and isolated temporary homes for native registration/Skill lookup/prompt rendering/Cron creation and script execution/install/remove, including A -> B -> A profile switching. Never exercise a real user's live channel in automation. Publish a tagged GitHub release and installable manifest; submit an exact-SHA community catalog entry for maintainer review. Catalog approval is external and must not be represented as granted before merge.
-
-A private parent may update an accepted goal after days without a fresh user turn, following the current user intent; completion requires a note after explaining the result. The model must match the original completion criteria, including any required user confirmation. External authoritative goals still require external verification. Independent Ideas can cite personal/source context without a fabricated goal and expire without becoming tasks. Unsent notices can be retired from verified source evidence; this does not relabel uncertain deliveries or grant a topic-wide opt-out.
-
-Substantive content, sound judgment, proactive interaction, coverage, timely follow-through and user context take priority over lowering usage; optimization must preserve these behaviors. Source identity is a digest of exact connection/account/resource fields, independent of scan timestamps or prose. Reported expected/checked resource sets gate successful checkpoints; semantic truth still depends on actual tool use. Older free-form checkpoints are archived, not guessed into new identities. Native async result envelopes are excluded at ingestion, processing and signal authorization; historical misclassified rows move to background_signal without losing their content. Cron context uses trusted task identity; hourly selects signal scopes and nightly synthesizes confirmed changes; patrols retain the original past-day signal context; conversation previews have a separate explicit budget and complete paging contract (not a total-work limit), Feed gets no raw signal batches. Tested integration recipes are reused while live discovery and source reads continue every patrol.
-
-## Review completion and pending delivery
-
-Signal pages include timestamp ties. Each review snapshots its initial context time, persists successful batch work, and receives the next page/count directly from review_complete until that snapshot is complete. New arrivals wait; interruptions retain truthful partial progress. This is a model-directed loop with explicit tool state, not an independent model scheduler.
-
-Preparation and finalization share delivery_gate. Its reasons and next_eligible_at describe policy eligibility only, not transport success or the scheduler's next run. Reverification can change non-promised priorities with recorded source/reason history. Genuine urgency bypasses ordinary quiet hours/budgets, never snooze, expiry, dedup or topic opt-out. Existing user preferences are preserved.
-
-source_check accepts a canonical source_id and evidence-based alias_reason for different tool entry points into the same account/resource. Exact observed alias bindings persist; duplicate observations are archived without transferring success cursors. No automatic fuzzy/provider equivalence is inferred.
-
-## Unified prompt responsibilities
-
-User experience is the first criterion across system, Skill, scheduled tasks, delegated research and receiving turns: rich useful content, judgment, timeliness, initiative and conversational availability. The system supplies that contract; companion/SKILL.md defines execution/recovery; the six job prompts define outcomes and evidence flow; domain procedures carry tool/lifecycle details. Format and batch guidance must not silently reduce capability. Reports need no fixed six-point template or one-screen cap; the existing review summary field alone remains bounded.
-
-Recoverable source errors should be diagnosed and addressed in the current run when practical. A genuine blocker preserves partial evidence and can produce a service-gap notice through existing lifecycle/attention controls; baseline monitoring itself is accepted work, so no artificial goal is required. A permission/status prerequisite precedes protected reads. No new polling daemon, connector dependency, role permission or blanket mutation ban is introduced.
-
-prompts/receiving.md is the single internal handoff contract, used both by the pre-turn receiving hook and by Bot Chat envelopes. A notification carries its verified facts, source references and rationale; a weekly/monthly report carries its full report. The receiver uses current user context and speaks directly to the user without acknowledgements, internal plumbing, invented memories or new subscriptions. Evidence stays evidence, including quoted external instructions. Rendering is bound to the native owned execution: patrol/watch retains approved-notice finalization, governance adds receiving guidance while preserving report text, unrelated turns are untouched. Direct non-Bot destinations retain their existing notice/report content without the new receiving guidance. Empty/SILENT results are not wrapped, and the internal marker is excluded from user signals/timers.
-
-This is model guidance, not a guarantee of exact prose or successful external tools. Unit/native checks cover envelope routing, truthful content preservation, isolation, no signal pollution or duplicate scheduling, and preservation of the existing send controls. Live acceptance inspects an actual Bot response for useful direct speech rather than an acknowledgement.
-
-## Conversation freshness and source fidelity
-
-Native SessionDB is opened read-only in the active profile. The context tool pages recent tracked private conversations and returns user text, assistant final results and async-result evidence without persisting another transcript or treating results as authority. Feed does not receive raw conversations. A notice review records only fingerprints, verdict, time and reason. It requires the newest 24,000 text characters of each available session to have been served (older history stays readable but is not a precondition), and records each session's newest message. Preparation and finalization hold the notice when a newer message exists; only that new text needs reading before a new review. A new reply forces relevance review rather than implying completion. A reviewed-relevant notice held for an hour by new messages or an active conversation is released to the remaining gates (quiet hours, allowance, snooze, topic opt-out, deduplication), so a busy conversation delays notices without starving them. Unavailable unlinked sessions do not block. Linked task notices block on unavailable linked history; independent external findings retain explicit history gaps instead of pretending a successful read. Earlier/missing context still needs native retrieval.
-
-issue_key groups revisions; supersedes cancels only explicitly named unsent siblings in the same transaction. Sent and ambiguous history is retained. Original-item snapshots store provider IDs, literal titles, due/timezone and observation time; messages must quote the supplied literal title and cannot switch item IDs on refresh. These checks preserve supplied evidence; they cannot attest external reads or guarantee a receiver's wording.
-
-ordinary_per_day defaults to null (no daily hard cap). Explicit numeric limits still reserve budget atomically and quiet hours remain. On upgrade only byte-identical old shipped defaults with no recorded explicit preference edits migrate; customized files are preserved. Counts remain visible as usage evidence, not notification targets. Learned tool-call conventions live in the existing TOOLS.md and are reused rather than adding a polling service or altering Hermes core.
-
-
-## Operation accountability
-
-The existing state tool adds operations_read, operations_complete and finding_record. Read-only SQLite access to the current profile's native sessions/messages and Cron execution ledger preserves original tool arguments/results without creating a second transcript store. Owned job IDs come from install.json; existing hooks/tool context save native Cron session/execution bindings, while native Cron session names recover older or interrupted runs. Tracked private sessions and persisted descendants are included, group ancestry is excluded, and unknown/unpersisted execution remains a limitation rather than a success claim. A private-session operation is not automatically attributed to Muse; the model checks intent and actor.
-
-Operation policy consequential-v1 records a bounded-header scan position and preserves the prior raw cursor/wave under legacy, reviewed=false. Startup initializes this boundary outside caller transactions. Existing unresolved findings/unknown results remain actionable. At most 400 new headers are inspected per scan and up to 12 cases are exposed, reserving a place for older continuation; current failures/unknown and completion claims take priority over ordinary writes. Known structured writes and reported failures are selected by deterministic fields; ordinary success reads are not deep-audit targets. Complete native JSON roots are classified locally within the bounded scan; only a failure flag and bounded previews are returned. Quoted error words and unstructured text are not result status, and successful inspection/evidence echoes do not reopen cases. Unstructured outcomes retain the existing write/opaque selection and sampling limits. Opaque execution related to active accepted work remains unknown; otherwise it has bounded samples with disclosed blind spots. A terminal name/zero exit code never certifies safety. Context is referenced once per original user turn. Native UID copies are deduplicated only when payload/call identity is unchanged.
-
-Existing operation_snapshot records hold selected-case references and completion, not raw transcripts. operations_evidence slices the reference index before loading native data and fetches only requested bodies; original user context is a distinct reusable ref. Findings require observed evidence and factual impact; closure needs verification and real disclosure or a no-notice reason. Native retention gaps remain partial. The parent reviews cases directly; no parallel audit engine, new queue/DB, polling task or extra mutation authority is added.
-
-
-## Self-contained receiving replies
-
-The shared receiving contract assumes internal deliveries/tool traces have not been read. Replies introduce the concrete subject and change, integrate follow-up checks into the current verified picture, and avoid unexplained references to a packet. Internal transcript presence is not user awareness; duplicate suppression uses actual user-facing results. The private-conversation pre-turn hook supplies the same guidance for all native Cron envelopes, including pre-existing jobs outside Muse, without adopting/editing those jobs, changing their output or recording their text as user intent. Muse outgoing envelopes and the system/communication procedure carry the same completeness rule. Ordinary user turns, groups and delegated execution retain their existing behavior. Exact wording remains model behavior.
-
-
-## Task ownership and conversational voice
-
-The existing system section, real-user turn pointer and communication procedure teach task-taking judgment: infer the intended result, consider relevant consequences, persist workable notification/failure/exit rules in the actual work and verify before confirming. This is model behavior under existing permissions, not new scheduling authority. Routine choices should not become a questionnaire, and explicit report subscriptions must not be silently converted into silent change watches. Existing native Cron inspection/update changes the original watch; watch_create is explicitly not an update API. Current source scope, lifecycle, ownership marker and generated delivery contract must be retained. Claims of scheduling, steering a child or recovery require evidence.
-
-The communication/receiving guidance favors familiar, warm, candid wording with a relevant practical judgment, respecting the existing user voice and SOUL. It does not impose a character, catchphrase, humor quota or fixed response structure. Eight prompt files, one Skill and six jobs remain. The system section keeps core principles and routing within the host’s 4,000-character limit; detailed procedures stay in the existing Skill. Native integration checks that the rendered shipped section is not clipped. Existing conversations get the procedure pointer on new real-user turns, while their frozen system prefix is unchanged.
-
-
-## Actual task completion
-
-Host-supplied task identity still binds actual owned native runs. review_complete now labels selected-signals or synthesis scope. Hourly fully read IDs receive revision-bound upkeep markers; timestamps only advance real continuous prefixes. Nightly does not advance the old raw-signal cursor. run_complete judges the declared current scope, not all historical operation rows. Meaningful nightly changes need actual artifacts; a factual unchanged_reason can retain existing dream/alignment without mechanical rewrites. Final output, ready/complete, notification preparation and native delivery remain separate. Latest partial and last complete stay visible; global backlog is not silently relabeled reviewed.
-
-Patrol completes source checks and candidate decisions before final notification preparation. It and Feed verify their own actions using immediate/targeted evidence rather than launching shared backlog scans. Nightly confirmed synthesis is written before optional research. Hourly reviews selected consequential cases with durable per-case progress; a genuine interruption leaves that selected scope partial without restoring a full-log chase. Consequential incomplete work is assessed through the same existing notice flow.
-
-Off-tick wakes use the native manual_run_at marker with the identical next_run_at timestamp. Without it, newer native due scans re-anchor the request to the recurring expression without firing. The update preserves enabled/state so a concurrent user pause is not reversed. No extra job or recurring cadence change is needed.
-
-
-## Resumable operation audit
-
-operations_batch/operations_commit are a small selected-case facade with no worker assignments. Selected cases may finish independently; no global contiguous raw-log prefix gates new work. The old wave and original owner handles remain in the policy’s legacy evidence. Requests to relaunch legacy audit work are rejected; normal native research delegation is unchanged.
-
-Selected receipt completion checks that referenced evidence still exists and the case did not gain new refs during acceptance. Parent conclusions are judgments; index IDs, process completion and opaque success do not prove correctness. Unfinished cases survive. Child mutations/allocations are denied, while current-profile pure evidence reads retain their existing boundaries.
-
-## Briefings and incomplete handoffs
-
-Receiving guidance distinguishes omitted summary detail from a failed source read. The receiver performs relevant authorized original-item retrieval before judging actionability; missing locators trigger focused search and identity verification. Producers preserve identity, time, substance, locators and gaps. Neither reading nor a Cron packet grants authority for external writes. This is a model procedure, not a guarantee of model compliance.
-
-The companion briefing reference is provider-neutral and can be loaded by user-requested native reports. It shares source records, conversation evidence and communication rules with patrols; the subscription produces its own final output and does not enqueue another notice. Daily reports are not silently installed, adopted into install.json or refreshed by initialize. They preserve their existing native lifecycle and must be included explicitly in removal cleanup. An explicit report can summarize still-relevant commitments; patrols must check actual replies before repeating them. Six fixed jobs, eight prompts, one registered Skill and tool remain unchanged.
-
-## Calendar windows, assembly and patrol horizon
-
-The existing tool exposes calendar_window and calendar_view; context includes the default rolling 30-day query. The companion calendar procedure is loaded for on-demand views and each patrol; proactive-watch explicitly requires the full 30-day interval and advance-preparation assessment on days 8–30. Natural-month views use local first-of-month boundaries. All intervals are half-open and overlap-based, with a local wall-time 30-day horizon across DST. Fixed-offset native profiles retain their actual name/offset with an explicit DST limitation, never silently UTC. Gap boundaries resolve forward; ambiguous boundaries use the first occurrence.
-
-hermes_muse/calendar.py is stdlib-only, stateless and has no connector/file/scheduling API. Native authorized tools perform discovery, inventory and expanded-instance reads; the model normalizes their receipts into the existing tool. Assembly checks inventory/event pagination chains, page observation lower/upper bounds, resource/window correspondence and event semantics, retaining independently useful results when another resource fails. Outputs preserve full supplied event fields, source/account/calendar names/IDs, original all-day date ranges, recurrence/exception identities and cancelled evidence. Daily indexes cover cross-midnight/multi-day overlaps; all-day observances are nonblocking unless explicitly busy. Missing details become partial gaps, not fabricated values. Availability always means observed busy evidence, never global free time.
-
-Apple PIM raw receipts optionally use receipt_format=apple-pim and an explicit connector-host device_timezone. The pure hermes_muse/apple_calendar.py adapter verifies local display strings against UTC, retains originals/provenance, and supplies device-display all-day dates without asserting source dates/timezone. Native ID plus observed interval scopes identities only to this query snapshot, so recurrence expansion results do not collapse. Original recurrence identity, cancellation/exception history, provider account and availability remain capability gaps; observed status and unknown busy evidence cannot imply confirmation/free time. Resource read success and semantic completeness are separate: checked_resources can contain all read calendars while source status remains partial, preserving prior successful checkpoint/cursor. The strict normalized contract remains enforced for other receipts.
-
-Exact connection/account/calendar UID (or native ID) plus original occurrence identity can merge identical copies. Different occurrences or same-title/time distinct IDs remain separate. Cross-calendar/cross-connector UID copies are deliberately retained; there is no provenance alias resolver. Conflicting versions remain visible and downgrade that resource until original evidence resolves them.
-
-Stable source resources calendars:rolling-30d and calendars:natural-month have independent checkpoints from legacy calendars:all. No historical success or cursor migrates into a wider interval. Assembly returns source_check proposals; the existing action records them only after reads and dependent work, independently verifies query_window/resource consistency, and preserves successful scope/resources/window/observation and cursor on partial/error/unavailable attempts. Source transaction ordering rejects older starts and older observations at the same start. No events are persisted in operational state. This validates reported receipts, not cryptographic provider truth or model judgment.
-
-The existing six jobs, schedules, notification lifecycle/quiet time/budgets, hooks and plugin registration remain authoritative. Helpers and on-demand assembly create no notices/watches; patrol candidates go through the unchanged relevance/revision/expiry/review/prepare path. No added service, DB, UI, mandatory provider, telemetry or permission. Test fixtures and native smoke use only temporary homes and synthetic events.
-
-## Simple goals (0.3.0)
-
-GOAL.md has one active/done/cancelled status, an integer revision, progress,
-optional owner handle, next_check_at and optional waiting_user/blocked annotations.
-Private parent conversations create/update goals. Native child/Cron context decides
-write permission; task_id only correlates native work and is not an identity gate.
-The parent reads results and tells the user before recording done with a note.
-Owner polling is pure read; no receipt ledger or automatic dispatch/completion exists.
-Unknown external effects are inspected through the existing owner tools, never resent.
-
-Goal writes accept an optional integer revision and return the latest goal on conflict.
-Other content/notification actions retain their existing concurrency and replay controls.
-Profile selection comes from the host; callers cannot choose home/profile paths.
-Internal pagination scope signatures remain, with no caller scope_token service.
-Notification state remains separate from goal completion, preserving quiet/dedup/transport rules.
-
-Installation performs the one-time migration in migration.py; pure views never do.
-Completed rollback archives are retained under a unique suffix before a subsequent upgrade starts a fresh cycle. A saved after hash skips a goal only when its current bytes match; unrelated edits never get overwritten.
-Original goal files and followup records move to archive/followup-0.2.x. Root statuses
-map directly and progress/owner remain. Offline rollback checks for newer edits before
-restoring original files/rows, without restoring a whole database or rerunning work.
-
-## Catalog compatibility in 0.2.0
-
-See [CATALOG-COMPATIBILITY.md](CATALOG-COMPATIBILITY.md) for current retention, preview/range receipts, public dispatch respecting delegation settings, and the new-watch 30-minute floor. Local goal registration remains separate from scheduling. No source sweep, successful watermark, fixed cadence, notification budget is reduced. Raw operation full-audit coverage is explicitly replaced by selected consequential review.
-
-
-## Approved implementation contracts (0.2.0)
-
-The 40-action interface is [INTERFACE.md](INTERFACE.md). Shared `views.py` reads current-profile Markdown and read-only SQLite projections without Store/Runtime initialization, tracking, reconciliation, model calls or reading history. Feed returns items/next_cursor/snapshot_revision; every caller consumes that object. Text continuation requires the first revision; list cursors bind profile, filters and snapshot. UI routes are fixed authenticated GETs under /api/plugins/hermes-muse, with request-profile installed/enabled checks. Dashboard and Desktop ship within this package; Desktop uses ctx.rest and inserts drafts only in a selected real originating chat. No read status, localStorage or extra backend service. The shared page (ui/page.js) styles itself with `.muse-*` CSS built only from host theme variables (Dashboard `--color-*`, Desktop `--dt-*`, neutral fallbacks), and renders Feed/Goal Markdown with a small built-in renderer that never interprets raw HTML and opens only http(s)/mailto links in a new window. Goal lists accept `status=open|closed`, are ordered needs-you, blocked, in progress, then closed by newest, and add read-only `updated/deadline/next_check_at/waiting_user/blocked/latest_progress`; Ideas lists add `last_review_at` (latest nightly-review run) for the empty state. Ideas are only `kind=idea` records created by `idea_add`; an empty list means none were generated.
-
-`content_io.py` uses descriptor-relative no-follow directory/file access and atomic replace. `content.py` restricts object mappings and body writes, persists pending intents before commits, reconciles matching post-crash hashes, and retains tombstones for forgotten objects. Per-profile process/thread locks serialize plugin mutations. Non-goal semantic actions have explicit revisions and request keys; an interrupted semantic operation whose outcome cannot be proven returns outcome_unknown rather than replaying. Records carry persistent _revision counters. source_check uses the single service source_identity resolver for both CAS and writes, following aliases with account/resource validation while holding the profile mutation lock. The low-level request_context module carries the request ContextVar without importing semantic handlers. External editors do not obey plugin locks: detected conflicts preserve the proposal; no claim of atomic transactions across Markdown and SQLite.
-
-`memory_feedback.py` captures correlated hook receipts without memory bodies. Saved receipts can be announced only in their original current turn; this guard runs before idempotent review replay. Successful replace/remove/edit/batch conservatively invalidates earlier unannounced saves, including within a turn, because the ledger has no trusted content-level target mapping. Staged receipts remain available across turns as pending, never upgraded to saved. Classifications are saved/staged/submitted_unconfirmed/failed/duplicate/unknown. A decision is not a send receipt; native assistant message references remain transport-unconfirmed. Lifecycle events without original-session correlation cannot create a recipient. Native approval commands lack a public resolved event; Hindsight plain success lacks persistence proof. No provider patch, queue scan or polling job.
-
-
-Selected-case indexes identify receipt, total reference count, current returned refs and missing evidence; source text is historical. Selection, actual case review and legacy unreviewed history differ. Completion rechecks missing native evidence. Watch runs use real native execution bindings and review the owning goal, stop condition and source checks without advancing fixed-job signal cursors.
-
-Explicit installation_prepare validates a current original-session whole-message imperative naming Muse and matching disable/remove; quoted, instructional, negated, conditional, deferred or unrelated requests fail closed. It also validates exact installation/marker ownership, records original pause state and per-job progress, and returns requires_host_action. Native disable/remove remains a separate host action. Unload only closes instance resources; reenable preserves pauses. All six fixed schedules/IDs and 30-day calendar/source coverage are retained.
-
-Host gaps are explicit: pending-write approval completion events, provider durable receipts, correlated process notification merging, automatic cleanup for every direct disable path. Fallbacks never invent hooks, execute extra model rounds, alter native owners or send external messages. No runtime dependency on this development transport.
-
-## Unresolved platform regression
-
-The 0.1.x CI matrix included Windows. The 0.2.0 implementation currently requires fcntl, descriptor-relative O_DIRECTORY/O_NOFOLLOW and /dev/fd SQLite reads. Restoring only the old Windows lock branch would not restore safe content/views support. Windows is therefore not supported for now and the CI matrix no longer includes it. This does not introduce an unsafe path-based fallback; native-handle/reparse-point-safe Windows adaptation and an actual Windows runner remain required before claiming that platform supported.
-
-Latest child-read scope correction: operations_evidence is routed before tracking/binding for all callers, uses read-only Views for saved receipts and supports index/body pagination plus time/session/job filters. Child conversation_read never records served coverage; parent conversation_read retains coverage by default and may explicitly request read_only=true. Filtered history requires that pure path so a subset cannot certify full notice coverage. Read-only paths do not initialize Store/Runtime. Runtime still binds the actual host profile and rejects home/profile/path fields; private-session checks, hidden-artifact maintenance rules, credential field exclusions and reasoning suppression remain. No child-grant service, token or second database is introduced.
-
-## Unified Dashboard host (0.2.1)
-
-Install and enable the full Muse package in the default Hermes profile using Hermes plugin management. The Dashboard discovers this package and serves its authenticated page/API. The page initially lists registered profiles only; explicitly select one to view its Feed, Ideas and Goals. Browsing is read-only for every profile: the page and its API cannot install, enable, disable or remove Muse in any profile, including other profiles on this host.
-
-To use Muse in another registered profile, install and enable it in that profile with Hermes plugin management (for example `hermes -p <profile> plugins install …`); the page then lists it as enabled and can read it. No cross-profile administration exists in the page, its API, muse_manage or native children.
-
-Profile paths come from Hermes root/home and registry APIs, including custom HERMES_HOME. Read requests use explicit Views without changing process environment or initializing stores. Desktop retains current-profile reads and chat drafts.
-
-With terminal.backend=docker, only terminal execution enters Docker. Muse tools and namespaced companion skills remain dispatched by Hermes on the host, against the same active profile; no Muse mounts, copies or Docker-specific path branch is needed. A whole Hermes instance running in another container or remote HOME is a separate installation: equal profile names do not share state, and this page does not manage remote instances.
-
-## Bounded maintenance context (0.2.2)
-
-context/status now return a section directory instead of an unbounded aggregate. Collection pages share content_read cursors and revisions; large metadata is explicitly paged through metadata_ref. Hourly selected scopes store references/served ranges; batched body reads and revision-bound processed IDs preserve true progress. Selected text changes invalidate its scope, unselected/new input stays pending, and the timestamp cursor never skips unread ties. Nightly synthesizes confirmed changes rather than opening another intake window. See companion references/context.md for the exact flow. Old flat context consumers must migrate in the same release.
-
-Conversation descriptors discover current revisions and first missing offsets without marking a hidden preview read. Exact unchanged prefixes keep their coverage on append; changed/new text must be read before notification review. Quiet hours and transport confirmation are unchanged. Due active goals use ordered goal-ID pages; completing an item never shifts past an unread item.
-
-Feed body corrections already exist in feed_update(title/content/sources); this release documents and natively verifies the authorized CAS/replay path rather than introducing another writer. Finding creation uses expected_revision=absent and request_id. Oversized successful semantic mutations return a read reference, preserving their durable replay result instead of reporting a post-commit size error. The 256 KiB ceiling remains a transport/performance budget, not a model context or permission boundary. No model/provider changes, daemon, Cron or additional database.
-
-Notification preparation returns a bounded conversation continuation without marking hidden previews as served. Read the actual body pages before relevance review. Large committed preferences and installation results use singleton `content_ref` receipts; delivery payloads that cannot fit are rejected before reserving dispatch/budget (the candidate may remain pending).
-
-Semantic mutation receipts are bounded after adding revision/recovery fields. Normal completion, pending recovery and replay use the same final-envelope serializer; the journal stores that exact bounded receipt. Older oversized successful receipts are converted to pageable success references on replay without repeating the mutation.
-
-### Final tool response and recovery
-
-Every action validates the whole request (512 KiB, nesting and control-token bounds) before journal, track, bind or dispatch. Oversized content/question/watch input is rejected before work. `window` belongs to hourly signal intake; nightly synthesis does not accept an old raw-signal window. The final 256 KiB envelope includes revision/recovery fields and errors.
-
-Argument errors are written to be acted on. Each `ok:false` result names the action and field path (`data.query_window`), what was expected, what arrived (type and a short clipped value), and the exact repair (for example "move data.account and data.connection into data.source" or "this is not a calendar source: delete data.query_window and put the time range in data.scope"); common ones add `field`, `expected`, `received`, `hint` and a minimal `example`. A misplaced field gets its correct location; other unsupported fields list the action's allowed fields. Interpreter exceptions (`KeyError`, `TypeError`, `AttributeError`) never reach the caller: the single entry point converts them to `invalid_argument` with the action, field and schema hint. `retryable` is true only when resending after the stated correction can succeed (revision_conflict, revision_required, cursor_expired, source_unavailable); every other validation error says that an unchanged resend fails again. Codes and success results are unchanged.
-
-Committed large results use `result_is_reference/content_ref`; large native errors remain `ok:false` with a bounded reason and `error_ref`. Follow these refs with `content_read`; retain revision and concatenate body pages before interpreting the JSON. `kind=tool_result` is an immutable exact tool envelope in existing profile records, accessible only by its originating private session and ID (no collection or Dashboard exposure). It does not authorize a side effect, certify served conversation evidence, or claim native task completion. Ordinary object references still use their existing domain access. Pure reads do not create receipt records; invalid input is rejected with a bounded explanation.
-
-The following actions additionally accept an optional `request_id` (1..128 characters): delegate, research_start, research_status, watch_stop, operations_read, operations_batch, operations_complete, operations_commit, review_complete, run_complete, notification_prepare, notification_queue, notification_handoff. Use it for a logical state-changing call; identical arguments/key return its exact completed receipt. A key with changed arguments/origin is rejected. A pending/interrupted call returns outcome_unknown without repeating work; inspect native evidence or its existing checkpoint, never create a new key to redispatch unknown execution. This reuses mutation_request, releases the lock during native work, and does not replace CAS or existing own content/install journals. Calls without a key retain their existing recovery contract and must not be blindly retried.
-
-`research_start` large results reference the saved research object; `research_status` may reference the exact observed envelope. Both can be fully read via content_read pages without another dispatch. An allocation receipt (operations_read/batch) is not substantive review: read its refs and actual evidence before committing a checkpoint.
-
-Scheduled source coverage follows explicit user requirements and the profile's declared responsibilities. The optional free-text `Coverage scope` section in PROACTIVE_PREFERENCES.md refines sources/exclusions; it adds no schema or runtime policy branch. A general assistant without exclusions retains full 30-day calendar/pagination/advance preparation, mail, reminders and useful travel coverage even without goals. Specialist roles do not probe unrelated personal sources; unavailable or failing in-scope sources retain honest gaps/recovery. See companion [Coverage scope](../skills/companion/references/proactivity.md#coverage-scope). Native permissions and existing delivery/checkpoint rules remain authoritative. Reload refreshes shipped Cron prompts while preserving the profile's existing preference prose, task IDs, schedules, pauses and targets. Model compliance needs post-deployment observation; static/isolated fixtures do not establish it.
+# Hermes Muse design — 0.4.0 (v2)
+
+This is the public design of Muse v2. The engineering contract for contributors (layer rules, change checklist,
+review list) is [AGENTS.md](../AGENTS.md); where the two differ, AGENTS.md and the code's single tables win.
+The model interface is generated from code: [interface.md](../skills/companion/references/interface.md).
+
+## Goal and approach
+
+Muse is a standalone Hermes plugin that turns Hermes's own sessions, cron, delivery, delegation and native memory
+into a long-running companion inside one profile. It keeps the work the user accepted (Goal) and short-lived
+interests (Interest, Idea), sends evidence-based reminders (Notice) without repeats and within quiet hours and daily
+budgets, reviews goals and conversations at night, and writes a silent personal Feed.
+
+v2 replaces 0.3.x's model-driven bookkeeping with a **deterministic kernel and a thin judgment layer**:
+
+- code keeps the books: watermarks, dedupe, state machines with TTLs, delivery and its reconciliation;
+- every host coupling sits in one adapter (`hermes_muse/host/`) that checks itself with semantic probes;
+- Health runs on its own and never fails silently;
+- the model contract exists once, in code, and its reference is generated.
+
+Out of scope: patching Hermes, replacing long-term memory (`memories/USER.md`, `MEMORY.md` and SOUL belong to the
+user and Hermes), data-source connectors, writing to external sources, generic operation audits or model
+self-assessment, cross-profile access, telemetry and self-update.
+
+## Layers
+
+```
+Hermes host
+  ▼ plugin API, hook kwargs, launcher env, dashboard requests
+inbound entries     __init__.py → runtime.register · cron_entry.py → entry.run · health_entry.py → health.run
+                    · dashboard/plugin_api.py
+application         surface.py (model tools) · hooks.py (main session) · entry.py (job output)
+                    · install.py · views.py (Dashboard, read-only) · health/ (independent, read-only)
+kernel/             intake · notifier · goals · review · sources · packets · runs · records · receipts · Kernel.tick
+                    ← the only place that writes entity state
+kernel/store/       Store v2, keys, machines, migrate, bridge (stdlib only)
+shared              content_io (Files, revision) · locks · calendar normalization
+host/               HostAdapter: sessions · cron · deliver · owners · config · probe   ← the only outbound path
+  ▼ Hermes imports, read-only state.db, cron/deliver/delegation APIs
+Hermes host
+```
+
+Only `host/` imports Hermes or reads its `state.db`; `scripts/check_boundaries.py` enforces this. Entries translate
+host arguments into Muse calls and classify the caller through `HostAdapter.caller()`, never from tool arguments.
+Health depends only on `host/` and a read-only Store, so a kernel bug cannot hide itself.
+
+## Store v2 and state machines
+
+All operational state lives in `muse/state-v2.db` (SQLite, WAL) as `entity` rows with an `event` log (kept 30
+days) and `meta` (the intake watermark, migration record, daily counters). Every write is a `BEGIN IMMEDIATE`
+transaction; transitions are CAS on `state + version`. Each kind has one machine in `kernel/store/machines.py`:
+
+| kind | states | timed state → exit |
+|---|---|---|
+| signal | new → disposed / parked | new: 72h or 3 packets → parked |
+| goal | active ↔ waiting → done / cancelled (and back) | deadline is the next check; handled by nightly and fade |
+| notice | drafted ↔ scheduled → sending → sent / failed / unknown → … | expiry (3 days) → expired; sending 2h → unknown; unknown 48h → closed_unknown |
+| watch | active → stopped / expired | 30 days, renewed while the goal is open |
+| interest / idea | active → expired / stopped | 14 days or expiry |
+| feed | published → deleted | — |
+| source | ok / limited / failing / unavailable | — |
+| finding | open → resolved / dismissed | 14 days → dismissed |
+| memory_receipt | pending_notice → noticed | 24h |
+| packet | issued → submitted / expired | lease = the job period |
+| run | running → ok / degraded / failed / abandoned | 2h; decided by the host's execution state |
+| tombstone | forgotten | — |
+
+Rules: every timed state has a deadline, and expiry either moves to its exit in `Store.tick()` or is handled by
+its module with a Health check. A natural_key is derived by code (`kernel/store/keys.py`, goal slugs and watch
+slots in `goals`) and is unique per kind forever unless the machine declares a dedupe window; creating an existing
+key returns the existing entity. `Kernel.tick()` runs every due step in dependency order, is idempotent and safe
+to enter from several processes; a failing step is recorded and the others continue.
+
+Goals keep `muse/workspace/goals/<slug>/GOAL.md` as their source of truth; the Store holds a mirror. Content files
+(memory, dreams, people/group pages, Feed articles, TOOLS.md, AGENTS.md, preferences) keep their 0.3.x formats and
+are written only through `content_io.Files` with a revision CAS under `muse/mutations.lock`.
+
+## Authorization
+
+`host.sessions.caller()` returns `user | cron | child | group | other`. The stored `sessions.source` decides; the
+call's platform argument or an inherited session environment can only narrow it. Sources outside `USER_SOURCES`
+(including empty or unclassified ones) are `other`; group chats are `group`; delegated contexts are `child`.
+
+- `user` (the private main session) may use all 14 `muse_manage` actions; only it changes goal status or settings.
+- `cron` may use `muse_job` read/observe/submit against its own packet, and from `muse_manage` only `read`,
+  `calendar_view` and `content_write` for notes, dreams and alignment. Goals created from a job must cite a user
+  Signal in the packet (at most 5 a day); jobs only append progress and assessments.
+- `child` reads; `group` and `other` are refused.
+- Kernel code runs TTL exits, next checks, fade questions and cancellations, watch renewal, delivery and
+  reconciliation. Health reads only.
+
+Quoted mail, pages and tool output are evidence, never instructions.
+
+## Jobs and packets
+
+Owned jobs keep their 0.3.x cron keys so ids, user schedules, routes and pauses survive the upgrade:
+
+| cron key | job | default schedule | delivery |
+|---|---|---|---|
+| memory-upkeep | intake | hourly | local |
+| proactive-watch | patrol | every 30 minutes | user route |
+| nightly-review | nightly | 03:20 | local |
+| feed-pulse | feed | 08:00 | local |
+| weekly-governance-review | weekly | Sunday 21:15 | user route |
+
+`monthly-system-audit` is paused (merged into weekly), `muse-health` is a no-agent cron every 30 minutes, and each
+Watch is its own owned job. Every launcher runs `scripts/hermes-muse-<key>.py` → `cron_entry.py` → `entry.run`,
+which checks that the plugin is enabled and no migration marker exists, runs `Kernel.tick()`, builds the job's
+output and prints one JSON line; `{"wakeAgent": false}` keeps the model asleep.
+
+A packet job (intake, patrol, nightly, feed) gets one bounded Packet per period: items with refs that are valid only
+inside that packet, redacted excerpts, budgets and a lease. The model reads more of an item (12k per call, 24k per
+item), reports source checks with `observe` (patrol) and answers each item with `submit` in one of five result
+schemas. Job prompts are `prompts/jobs/<job>.md`, at most 15 lines of behavior each; fields live only in the
+action tables and `packets.SCHEMAS`. The model outputs only refs, enum values and free text; ids, keys, times,
+counts and state names come from code.
+
+## Flows
+
+1. **Intake.** Private user turns from `USER_SOURCES` are read through the host, redacted and cut to head/tail
+   excerpts past 8k, and recorded as Signals while the watermark advances. A packet holds at most 15 signals and 24k
+   characters; each gets a disposition. A goal hint touches an open goal or proposes a new one for nightly. Signals
+   left after 3 packets or 72h are parked, counted by Health, and never block the watermark.
+2. **Patrol → Notice → delivery.** Patrol wakes every period because only the model can read external sources;
+   the packet lists sources past their minimum interval and due notices. The model observes sources, then submits a
+   verdict, text, priority and topic. The notifier derives the notice key (`src:<upstream id>` or a weak title+day
+   key), dedupes against 7 days of history and gates it: quiet hours and per-priority daily budgets; urgent may pass
+   quiet hours only within `urgent_per_day` (default 2) and is gated as time-sensitive past it; blocked topics are
+   withdrawn. Dispatch claims `sending` and checks the budget in one transaction, then sends through a one-shot
+   no-agent cron keyed by the delivery_key; reconciliation reads the delivery receipt. An outcome that is unknown
+   is never resent blindly.
+3. **Nightly.** Due goals get an assessment and progress note (`done_suggested` never closes a goal). Code picks up
+   to 10 review candidates a day by rules; the model's `agent_gap` becomes a Finding with evidence and
+   `latent_need` an Idea. Signal proposals may become goals. Dream and alignment are written when the day changed
+   something.
+4. **Feed.** Up to 3 active interests without an article in 3 days; the model writes articles with source refs and
+   they are published silently.
+5. **Weekly.** Health summary and 7-day counts only; one digest to the user route, suggestions only.
+6. **Fade.** A goal without activity for `goal_dormant_days` gets one question (`goal:<id>:fade:<episode>:<attempt>`);
+   a withdrawn, expired, failed or unknown question is asked again up to 3 times, then `fade_blocked` is reported.
+   Code cancels the goal once `fade_at` has passed and the question was delivered at least a day earlier. Waiting
+   goals do not fade.
+7. **Main-session hooks** (user callers only). `pre_llm_call` injects at most three things: a high Health line, a
+   one-line summary when it changed, and memory_receipts for failed or staged native memory writes (once each).
+   `post_tool_call` records those receipts. `post_llm_call` runs a background tick and, after 5 quiet minutes, may
+   wake intake (at most 3 times a day).
+
+## Health
+
+`health_entry.py` runs `health.run()` every 30 minutes and atomically writes `muse/health.json`: the 7 host probes
+(`symbols`, `cron_sessions`, `delivery_semantics`, `delivery_target`, `signal_purity`, `config_location`, `home`)
+plus invariants over the Store, deliveries, tool errors and jobs. Each health item has an id, level
+(`ok/low/medium/high`), detail, evidence and fix. Alerts never use the Notifier; they reach the user through the
+main-session injection, the Dashboard and Desktop page, cron stdout when the alert set changes, and an optional
+`health_deliver` route. Probes judge capability and semantics, not version ranges; a missing capability degrades
+only its feature and raises a high item.
+
+## Install, upgrade and rollback
+
+On plugin load, `install.install` holds `muse/install.lock`, writes `muse/migrating.json`, migrates the 0.3.1 or
+0.3.16 `muse/state.db` into Store v2 once (the old file becomes read-only), adds missing content files from
+`templates/` without overwriting, backs up the 0.3.x job prompts once to `muse/backup/cron-prompts-0.3.json`,
+refreshes owned jobs and watches in place, creates the Health cron and removes the marker. A failed install keeps
+the marker and its error: jobs and the background tick stay silent and the main session is told. Cutover and
+rollback steps are in [CUTOVER.md](CUTOVER.md); the rollback bridge writes v2's sent notices and settled signals back
+into the 0.3.x database so the old version neither resends nor reprocesses them.
+
+## Privacy
+
+Everything handed to the model is redacted first, read at most 12k at a time and 24k per item; long texts are
+head/tail excerpts. Only private user surfaces are read; groups and unlisted sources are neither read nor
+authorizing. Forget clears the payload, writes a tombstone so later evidence cannot rebuild it, and says what remains.
+Retention is listed in [CATALOG-COMPATIBILITY.md](CATALOG-COMPATIBILITY.md).
+
+## Verification
+
+Acceptance scripts A1–A13 and the release gate are in [ACCEPTANCE.md](ACCEPTANCE.md). Releases install from a tag;
+after a Hermes upgrade the native host contract and probes run again.

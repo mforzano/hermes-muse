@@ -6,9 +6,30 @@ import json
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from .guidance import NOTHING, explain_part, fail
+from .content_io import DomainError
 
 UTC = timezone.utc
+NOTHING = object()
+
+
+def fail(action, path, problem, *, fix, expected=None, got=NOTHING):
+    """An actionable argument error: what is wrong, what was expected and received, how to fix it."""
+    received = None if got is NOTHING else json.dumps(got, ensure_ascii=False, default=str)[:60]
+    text = " ".join(filter(None, (f"{action}: {path} {problem}.", expected and f"Expected {expected}.",
+                                  received and f"Got {received}.", "Fix: " + fix.rstrip(".") + ".")))
+    return DomainError("invalid_argument", text, field=path, hint=fix, **({"expected": expected} if expected else {}))
+
+
+def explain_part(exc):
+    """Python exception from deep parsing -> a sentence without interpreter jargon."""
+    from zoneinfo import ZoneInfoNotFoundError
+    if isinstance(exc, ZoneInfoNotFoundError):
+        return "unknown IANA timezone name (use e.g. America/New_York, or timezone_kind=fixed with utc_offset_seconds)"
+    if isinstance(exc, KeyError):
+        return f"missing required key {exc.args[0]!r}" if exc.args else "missing required key"
+    if isinstance(exc, (TypeError, AttributeError, IndexError)):
+        return "a value has the wrong type or shape (an object where text was needed, or text where an object was needed)"
+    return str(exc)
 WINDOW_KEYS = ("mode", "timezone", "observed_at", "start", "end", "source_resource")
 
 
@@ -160,7 +181,7 @@ def event_times(event, resource):
         required_text(event, "occurrence_id")  # Original RECURRENCE-ID, even for a moved exception.
     if event.get("rrule") and not event["recurring"]:
         raise ValueError("Expand recurring masters through the connector's instance query")
-    if event.get("status", "confirmed") not in ({"observed"} if observed else {"confirmed", "tentative", "cancelled"}):
+    if event.get("status", "confirmed") not in ({"observed", "cancelled"} if observed else {"confirmed", "tentative", "cancelled"}):
         raise ValueError("Unknown event status")
     if event["all_day"] and not observed:
         zone = resolve_zone(event if event.get("timezone") else resource)
@@ -308,6 +329,8 @@ def assemble(data, now):
                 check[field] = source[field]
         coverage.append({"source": identity, "title": title, "resources": resources,
                          "page_observations": times, "gaps": problems, "source_check": check})
+        if "known_limitations" in source:
+            coverage[-1]["known_limitations"] = source["known_limitations"]  # Reported, not a coverage gap.
         gaps.extend(problems)
     if data.get("discovery_complete") is not True:
         gaps.append("Connection/account discovery incomplete; other calendar sources may be missing")
