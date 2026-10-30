@@ -24,6 +24,7 @@ TEXT_MAX = 2000
 DELIVER = "deliver"   # cron key of the owned no-agent job that prints claimed notices
 PER_MESSAGE = 5       # notices in one delivered message; the rest go in the next run
 SEPARATOR = "\n\n---\n\n"
+FOOTER = "— Hermes Muse"  # fixed last line: no notice text can end the stdout as Hermes' {"wakeAgent": false} gate
 
 
 def delivery_key(key, generation=0):
@@ -239,7 +240,7 @@ def claim(k, job, execution_id, now):
 
 def message(notices):
     """The run's stdout: each claimed notice's own text and sources, separated by a rule ('' is silent)."""
-    return SEPARATOR.join(render(e["payload"]) for e in notices)
+    return SEPARATOR.join(render(e["payload"]) for e in notices) + "\n\n" + FOOTER if notices else ""
 
 
 def apply(k, e, receipt, now):
