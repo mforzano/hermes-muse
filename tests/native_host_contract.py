@@ -111,6 +111,15 @@ def main():
                 after = get_job(nightly["id"])
                 assert "manual_run_at" not in after and after["next_run_at"] == compute_next_run(after["schedule"]), after
 
+        # memory: Hermes' own loader, limits and delimiter; a broken host is host_error, not "empty".
+        (home / "memories").mkdir(exist_ok=True)
+        (home / "memories" / "USER.md").write_text("Prefers tea\n§\nLives in Porto", encoding="utf-8")
+        stores = host.memory.stores()
+        assert stores["user"] == {"entries": ["Prefers tea", "Lives in Porto"], "chars": 28, "limit": 1375}, stores
+        assert stores["memory"]["chars"] == 0 and stores["memory"]["limit"] == 2200, stores
+        with mock.patch("tools.memory_tool.load_on_disk_store", side_effect=OSError("disk")):
+            assert host.memory.stores() == {"status": "host_error"}
+
         # sessions: user surfaces only, redacted, bounded; cron session attribution.
         seed_state(home, job["id"])
         with profile_scope(home):
