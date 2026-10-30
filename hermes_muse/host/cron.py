@@ -1,4 +1,4 @@
-"""Hermes Cron: plugin-owned jobs and their executions; delivery as one-shot no-agent jobs.
+"""Hermes Cron: plugin-owned jobs and their executions; delivery receipts of the no-agent `muse-deliver` runs.
 
 A job is owned when its script is a generated `hermes-muse-*.py` launcher in `<home>/scripts`.
 Jobs never get a `workdir`: on Docker/remote terminals a host path breaks every command (0.3.2),
@@ -12,7 +12,7 @@ import os
 import re
 import time
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 from . import HOST_ERROR, Part, exclusive, tolerant
@@ -68,6 +68,10 @@ class Cron(Part):
         """Owned jobs by id, including paused and finished ones."""
         return self.owned_jobs()
 
+    def job(self, key):
+        """The owned job of cron key `key`; None when absent or the host cannot be read."""
+        return next((job for job in self.jobs().values() if job.get("script") == f"{PREFIX}{key}.py"), None)
+
     def by_script(self, script):
         # Raises on a host failure: an empty answer here would create a duplicate job or resend.
         return next((job for job in self.owned_jobs().values() if job.get("script") == script), None)
@@ -106,6 +110,29 @@ class Cron(Part):
         from cron.jobs import pause_job
         with self.scope():
             return bool(pause_job(job_id, reason=f"Hermes Muse: {reason}"))
+
+    @tolerant(False)
+    def remove(self, job_id):
+        """Delete an owned job and its launcher (a settled 0.4.1 one-shot delivery)."""
+        job = self.jobs().get(job_id)
+        if not job:
+            return False
+        from cron.jobs import remove_job
+        with self.scope():
+            removed = remove_job(job_id)
+        (self.home / "scripts" / Path(job["script"]).name).unlink(missing_ok=True)
+        return bool(removed)
+
+    @tolerant(False)
+    def add_route(self, job_id, target):
+        """Add `target` to an owned job's comma-separated route (Hermes delivers to each); the user's targets stay."""
+        job = self.jobs().get(job_id)
+        routes = [r.strip() for r in str((job or {}).get("deliver") or "").split(",") if r.strip()]
+        if not job or target in routes:
+            return False
+        from cron.jobs import update_job
+        with self.scope():
+            return bool(update_job(job_id, {"deliver": ",".join(routes + [target])}))
 
     @tolerant(False)
     def resume(self, job_id):
@@ -176,41 +203,20 @@ def failure_reason(text):
 
 
 class Deliver(Part):
-    @tolerant(lambda: {"status": "failed", "reason": "host_error"})
-    def send(self, target, text, key):
-        """Deliver `text` once to a Hermes route (`bot-chat`, `bot-chat:<profile>`, `telegram`, …).
-
-        A one-shot no-agent job prints the text and deletes its script, so a host retry cannot resend.
-        A repeated `key` returns the existing receipt instead of sending again.
-        """
-        check_key(key)
-        if not isinstance(text, str) or not text.strip():
-            raise ValueError("Delivery text is empty")
-        cron = self.adapter.cron
-        from cron.jobs import create_job
-        with cron.lock():
-            if cron.by_script(f"{PREFIX}deliver-{key}.py"):
-                return self.receipt(key)
-            script = cron.write_script(f"{PREFIX}deliver-{key}.py", (
-                "from pathlib import Path\n"
-                f"print({text!r})\n"
-                "Path(__file__).unlink(missing_ok=True)\n"))
-            at = (datetime.now().astimezone() + timedelta(seconds=5)).isoformat(timespec="seconds")
-            with self.scope():
-                job = create_job(prompt=None, schedule=at, name=f"muse-deliver-{key}", deliver=target,
-                                 script=script, no_agent=True)
-        return {"status": "sending", "job_id": job["id"]}
+    """Receipts of delivering no-agent runs. The owned `muse-deliver` job prints due notices as its stdout and
+    Hermes delivers it to the job's route; 0.4.1 one-shot `muse-deliver-<key>` jobs are still read and swept."""
 
     @tolerant(lambda: {"status": "unknown", "reason": "host_error"})
-    def receipt(self, key):
-        """sending | sent | failed(reason: host_config/transport/run_failed) | unknown. Read-only; never resends."""
-        job = self.adapter.cron.by_script(f"{PREFIX}deliver-{check_key(key)}.py")
+    def receipt(self, job_id, execution_id=None):
+        """sending | sent | failed(reason: host_config/transport/run_failed) | unknown for one run (default: the
+        latest) of an owned job. Read-only; never resends."""
+        job = self.adapter.cron.owned_jobs().get(job_id)
         if not job:
             return {"status": "unknown", "reason": "no_delivery_job"}
-        run = self.adapter.cron.outcome(job["id"])
+        run = self.adapter.cron.outcome(job_id, execution_id)
         if run and run["status"] == HOST_ERROR:
             return {"status": "unknown", "reason": HOST_ERROR}  # notifier.apply leaves the notice for the next tick
-        base = {"job_id": job["id"], **({"execution_id": run["execution_id"], "outcome": run["delivery_outcome"]} if run else {})}
+        base = {"job_id": job_id, **({"execution_id": run["execution_id"], "outcome": run["delivery_outcome"]} if run else {})}
         if not run or run["status"] in ("claimed", "running"):
             return {**base, "status": "sending"}
         status, detail = self.classify(job, run)
@@ -218,6 +224,18 @@ class Deliver(Part):
             return {**base, "status": "failed", "reason": failure_reason(detail) if run["status"] != "failed" else "run_failed",
                     "detail": str(detail or "")[:500]}
         return {**base, "status": status}
+
+    @tolerant(lambda: {"status": "unknown", "reason": "host_error"})
+    def legacy_receipt(self, key):
+        """Receipt of a 0.4.1 one-shot delivery job by its delivery key."""
+        job = self.adapter.cron.by_script(f"{PREFIX}deliver-{check_key(key)}.py")
+        return self.receipt(job["id"]) if job else {"status": "unknown", "reason": "no_delivery_job"}
+
+    def legacy_jobs(self):
+        """{delivery key: job} of the 0.4.1 one-shot delivery jobs that finished or were disabled."""
+        head = f"{PREFIX}deliver-"
+        return {job["script"][len(head):-3]: job for job in self.adapter.cron.jobs().values()
+                if job["script"].startswith(head) and (job.get("state") in FINISHED or not job.get("enabled"))}
 
     def classify(self, job, run):
         """(status, detail) of a finished run from the ledger outcome and, when queued, the native receipt."""
