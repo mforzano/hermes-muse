@@ -1,8 +1,8 @@
 # Hermes Muse — 开发约定（v2）
 
 本文件是所有开发 agent 的统一工程语言。开发前先读完；**只读本文件也必须能不犯架构错**。
-权威顺序：本文件 > 代码里的单一事实表（`kernel/store/machines.py` 的 `MACHINES`、`kernel/packets.py` 的 `SCHEMAS`/`JOBS`、`install.py` 的 `JOBS`、`surface.py` 的 `MAIN`/`JOB`、`host/probe.py` 的 `PROBES`）> `docs/`。
-本文件写的是 v2 的目标状态。代码与目标不一致之处列在第 7 节，**第 7 节里的内容不是规范**。`docs/CUTOVER.md`、`docs/CALLER-MIGRATION.md` 已是 v2 文档；其余 `docs/` 文件和 README 仍描述 0.3.16，由 WP7 重写。
+权威顺序：本文件 > 代码里的单一事实表（`kernel/store/machines.py` 的 `MACHINES`、`kernel/packets.py` 的 `SCHEMAS`/`JOBS`、`install.py` 的 `JOBS`、`surface.py` 的 `MAIN`/`JOB_ACTIONS`、`host/probe.py` 的 `PROBES`）> `docs/`。
+本文件写的是 v2 的目标状态。代码与目标不一致之处列在第 7 节，**第 7 节里的内容不是规范**。面向用户和维护者的公开设计见 [docs/DESIGN.md](docs/DESIGN.md)，接口见代码生成的 [interface.md](skills/companion/references/interface.md)，验收见 [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md)，切换与回滚见 [docs/CUTOVER.md](docs/CUTOVER.md)，升级说明见 [CHANGELOG.md](CHANGELOG.md)。
 
 ---
 
@@ -209,7 +209,7 @@ Hermes 宿主
   - 依赖 `install` 的 `JOBS`、`owned`、`migrating`、`ensure_watch`（job 归属和迁移标记的唯一来源）；
   - 依赖 `health` 的只读函数 `load`、`summary`、`injection`。
 - `health/` 依赖 `host/` 和只读的 `kernel.store`。它**不调用 kernel 业务、不走 Notifier、不修复数据**，这样内核出 bug 时仍能被发现。
-- 模型面只有 `surface.py`：工具 schema、校验、授权和分发都由 `MAIN`/`JOB` 这一张表生成。
+- 模型面只有 `surface.py`：工具 schema、校验、授权和分发都由 `MAIN`/`JOB_ACTIONS` 这一张表生成。
 
 ### 3.2 出站接入点（HostAdapter 接口，`host/__init__.py`）
 
@@ -290,7 +290,7 @@ Hermes 宿主
 | tombstone / forget | 遗忘标记 / 用户要求删除 | kind `tombstone`、`records.forget` |
 | migration marker | 安装或回滚期间让所有 job 静默的标记文件 | `install.migrating`、`muse/migrating.json` |
 | Health / invariant / health item | 独立健康服务 / 不变量 / 一条检查结果（`health.json` 的 `invariants[]`；模型面 `read(kind=status).health.items[]`） | `hermes_muse/health/` |
-| action table | 生成工具 schema 的唯一表 | `surface.MAIN`（muse_manage）、`surface.JOB`（muse_job） |
+| action table | 生成工具 schema 的唯一表 | `surface.MAIN`（muse_manage）、`surface.JOB_ACTIONS`（muse_job） |
 | content kind / revision | 内容文件的类别 / 文件内容的 sha256（新文件用 `absent`） | `surface.CONTENT`、`content_io.revision` |
 | `[SILENT]` / `wakeAgent: false` | 模型无需告知用户时的唯一回答 / launcher 不唤醒模型时的输出 | `prompts/jobs/*.md`、`entry.silent` |
 
@@ -455,7 +455,7 @@ Hermes 宿主
 - 设计契约：14+3 个动作、5 种 submit schema、第 2.1 节的状态机与 TTL、第 2.2 节的授权规则、第 2.3 节的门控规则、`install.JOBS` 的 cron key。要改契约，先提出，由维护者拍板，并同步更新本文件。
 
 ### 6.2 评审与验收清单
-运行前先设置隔离目录：`export TMPDIR=$(mktemp -d) HERMES_HOME=$(mktemp -d)`。下表中 `<hermes-agent>` 是 Hermes 源码路径，`<py>` 是 Hermes venv 的 python（没有 Hermes 时可用系统 python，native 部分为 SKIP）。
+运行前先设置隔离目录：`export TMPDIR=$(mktemp -d) HERMES_HOME=$(mktemp -d)`。下表中 `<hermes-agent>` 是 Hermes 源码路径，`<py>` 是 Hermes venv 的 python。没有 Hermes 时，store_v2、kernel、surface 三个验收可用系统 python 运行，native 部分为 SKIP；health、wp6 和宿主契约需要 Hermes。CI（`.github/workflows/test.yml`）在无 Hermes 的 Linux/macOS 上跑前者，在钉住的 Hermes 上跑下表全部检查。
 
 | 检查 | 命令 |
 |---|---|
@@ -470,6 +470,7 @@ Hermes 宿主
 | 宿主契约（A4/A13；宿主升级后必跑） | `HERMES_SOURCE=<hermes-agent> <py> tests/native_host_contract.py` |
 | 生成物是否最新 | `python -m hermes_muse.surface && git diff --exit-code skills/companion/references/interface.md` |
 | 官方插件校验 | `HERMES_SOURCE=<hermes-agent> <py> tests/official_validation.py`，或 `HERMES_HOME=$(mktemp -d) hermes plugins validate . --json` |
+| Muse 自身的 prompt、skill、模板不含已删除动作 | `python scripts/check_callers.py prompts templates skills after-install.md` |
 | 外部调用方（发布前，A11） | `python scripts/check_callers.py <文件或目录>…` |
 | 隐私扫描（发布前） | 在 diff 中搜索个人名、机器名、profile 名、真实 ID 和凭据模式，应当没有 |
 
@@ -508,21 +509,11 @@ Hermes 宿主
 
 本节只列当前代码与上文目标之间仍然存在的差异。
 
-**发布物尚未切到 v2**：
-- `docs/DESIGN.md`、`docs/INTERFACE.md`、`docs/ACCEPTANCE.md`、`docs/FEATURE-COVERAGE*.md`、`docs/CATALOG-COMPATIBILITY.md`、`README*.md`、`after-install.md` 描述的仍是 0.3.x，由 WP7 重写。在那之前，v2 的接口以生成的 `skills/companion/references/interface.md` 为准。
-- `plugin.yaml` 的 version 仍是 `0.3.16`，description 也是 0.3.x 的说法；`skills/companion/SKILL.md` 已标 `0.4.0`。两者在发布时统一。
-- CI（`.github/workflows/test.yml`）跑 `check_boundaries`、compileall、page 测试、native 契约、store/kernel/health/wp6 验收和官方校验，**但没有跑 `surface_acceptance.py`**。
-
 **仍存在的行为缺口**：
 - **宿主读失败时不登记 run**：`entry.output` 调用 `cron.outcome` 得到 `host_error` 时，不调 `start_run`。这一轮的 run 不会被记录，它的结果也就不会计入 Health 的 `runs_ok`。
 - **没有会话行的会话不能用 Muse 工具**：`caller()` 在没有会话行时只认宿主的 `platform` kwarg，而工具 handler（`surface.register`）不传 platform，所以这种会话会被判为 `other` 而拒绝。目前按“工具调用总在 Hermes 写入会话行之后发生”处理，属于 fail closed。
 - **cron 调用方没有核对 job 归属**：`caller()` 返回 `cron` 只说明是某个 cron 会话，不一定是 Muse 的 job run。用户自己的 cron 也能用 cron 允许的 `muse_manage` 动作（read、calendar_view、写 note/dream/alignment）；`muse_job` 还需要猜中 packet ID。
 - **Feed 记录与正文之间崩溃会丢正文**：`feed` 实体写入后、`records.write_feed` 落盘前如果崩溃，正文会丢失，而且无法恢复：重新提交会返回 `existing`，不再写正文。
-
-**命名残留（与第 4 节不一致，改名时不必兼容）**：
-- `notifier.draft` 的参数仍叫 `source_key`，应改为 notice key；
-- `health.invariants.finding()` 函数和 `health.check` 的局部变量仍叫 finding，应改为 item；
-- 动作表 `surface.JOB` 建议改名为 `JOB_ACTIONS`，与 job 区分。
 
 **刻意的取舍**：
 - 强键是 `src:<上游ID>`，不带 `source_id` 前缀，这样才能与没有记录 source_id 的 0.3.x 历史互相匹配（见 `keys.notice_key` 的 docstring）。
