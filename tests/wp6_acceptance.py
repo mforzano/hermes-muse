@@ -292,13 +292,15 @@ def part_checks(base):
     old, new = base / "old.md", base / "new.md"
     old.write_text("Use muse_manage context/status, then muse_manage source_check.\n"
                    "rows = db.execute(\"select * from sessions where id like 'cron_%s_%%'\")\nro(HOME / \"muse/state.db\")\n"
-                   "import hermes_muse.operations\n")
+                   "import hermes_muse.operations\n"
+                   "Finally call review_complete, then run_complete.\n")
     new.write_text("Use muse_manage read (kind=goal).\nThen run tp.py status.\n"
                    "db.execute(\"... where id like ? or (source='cron' and title like ?)\", (\"cron_%s_%%\" % j, n))\n")
     hits = subprocess.run([sys.executable, str(ROOT / "scripts" / "check_callers.py"), str(old)], capture_output=True, text=True)
     clean = subprocess.run([sys.executable, str(ROOT / "scripts" / "check_callers.py"), str(new)], capture_output=True, text=True)
     check("A11 caller check: removed actions, cron_ prefix, v1 store and module imports found; rewritten text passes",
-          hits.returncode == 1 and all(w in hits.stdout for w in ("context", "status", "source_check", "session", "store", "import"))
+          hits.returncode == 1 and all(w in hits.stdout for w in ("context", "status", "source_check", "session", "store", "import",
+                                                                 "review_complete", "run_complete"))
           and clean.returncode == 0, {"hits": hits.stdout.count("\n"), "clean": clean.stdout.strip()})
 
 
