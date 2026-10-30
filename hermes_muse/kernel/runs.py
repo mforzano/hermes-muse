@@ -15,7 +15,7 @@ def start(k, job, *, job_id, execution_id, packet_id=None, now):
 
 
 def outcome(k, host, packet_id):
-    if host["status"] in ("failed", "error"):
+    if host["status"] in ("failed", "error", "unknown"):  # unknown: the host lost the process; its unanswered refs come back
         return "failed"
     packet = k.store.get(packet_id) if packet_id else None
     if packet is None or not packet["payload"].get("items"):
