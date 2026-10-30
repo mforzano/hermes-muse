@@ -50,10 +50,10 @@ def static():
     check("S3 skill reference regenerated from code (single contract source)",
           s.REFERENCE.read_text(encoding="utf-8") == s.reference(), str(s.REFERENCE.relative_to(ROOT)))
     jobs = sorted(p.stem for p in (ROOT / "prompts/jobs").glob("*.md"))
-    long = {p.name: n for p in (ROOT / "prompts/jobs").glob("*.md") if (n := len(p.read_text().strip().splitlines())) > 15}
+    long = {p.name: n for p in (ROOT / "prompts/jobs").glob("*.md") if (n := len(p.read_text(encoding="utf-8").strip().splitlines())) > 15}
     docs = [ROOT / "prompts/system.md", *(ROOT / "prompts/jobs").glob("*.md"), *(ROOT / "skills/companion").rglob("*.md")]
-    stale = {str(p.relative_to(ROOT)): sorted(set(REMOVED.findall(p.read_text()))) for p in docs if REMOVED.search(p.read_text())}
-    tables = [str(p.relative_to(ROOT)) for p in docs if p != s.REFERENCE and re.search(r"^\|\s*`?field`?\s*\|", p.read_text(), re.M)]
+    stale = {str(p.relative_to(ROOT)): sorted(set(REMOVED.findall(p.read_text(encoding="utf-8")))) for p in docs if REMOVED.search(p.read_text(encoding="utf-8"))}
+    tables = [str(p.relative_to(ROOT)) for p in docs if p != s.REFERENCE and re.search(r"^\|\s*`?field`?\s*\|", p.read_text(encoding="utf-8"), re.M)]
     check("S4 five job prompts <=15 lines; no removed action, request_id or hand-written field table in prompts/skill",
           jobs == sorted(j for j, _, _ in install.JOBS.values()) == sorted([*packets.JOBS, "weekly"]) and not long and not stale and not tables,
           {"jobs": jobs, "long": long, "stale": stale, "tables": tables})
@@ -84,7 +84,7 @@ def job_output(k, key):
 
 def writes_only_in_kernel():
     hits = {f: n for f in ("surface.py", "hooks.py", "entry.py", "install.py", "views.py")
-            if (n := len(re.findall(r"store\.(?:create|transition|attempt)\(|\bpatch\(", (ROOT / "hermes_muse" / f).read_text())))}
+            if (n := len(re.findall(r"store\.(?:create|transition|attempt)\(|\bpatch\(", (ROOT / "hermes_muse" / f).read_text(encoding="utf-8"))))}
     check("S11 entity state is written only in kernel/: surface, hooks, entry, install and views call kernel functions",
           not hits, hits)
 
