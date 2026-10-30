@@ -3,20 +3,27 @@
 - Delivery: one owned no-agent job `muse-deliver` (cron key `deliver`, every 10 minutes, on the user's route, no
   model, added to `install.JOBS`) sends notices. Each run ticks, re-checks the gates (quiet hours, budgets,
   `urgent_per_day`, blocked topics), claims the due notices as `sending` in one transaction tied to its own host
-  execution, and prints them as one message (at most 5, separated by a rule); Hermes delivers that stdout, and an
-  empty stdout is silent. `Kernel.tick`, the other jobs and the main-session hooks no longer send anything.
+  execution, and prints them as one message (at most 5, separated by a rule, ending in a fixed `— Hermes Muse` line
+  so no notice text can act as Hermes' `{"wakeAgent": false}` gate); Hermes delivers that stdout (platforms split long
+  messages), and an empty stdout is silent. `Kernel.tick`, the other jobs and the main-session hooks no longer send.
+- Route: the preference `deliver` is the route of `muse-deliver`; a change is applied by its next run (that run stays
+  silent, so nothing goes to the old route); `null` keeps the job's route.
 - Urgent: scheduling an urgent notice that may go now wakes `muse-deliver` through the native cron wake.
 - Receipts: a notice stores `job_id` and `execution_id`; reconciliation reads that execution's delivery outcome
-  (`Deliver.receipt(job_id, execution_id)`). Nothing is ever resent.
+  (`Deliver.receipt(job_id, execution_id)`). The job's `last_delivery_error` is used only while that execution is the
+  job's latest run; a delivery-queue failure gives its own row's error. Nothing is ever resent.
 - Migration: `Deliver.send` and the one-shot `muse-deliver-<key>` jobs are gone. Notices 0.4.1 left `sending` are
   read from their one-shot job by delivery key until they settle (`Deliver.legacy_receipt`); one that 0.4.1 never
   handed to the host closes as unknown instead of being resent. Install and every deliver run remove finished or
   disabled one-shot delivery jobs (and their launchers) that no notice still waits for; other jobs are never touched.
-- Health: new `deliver_stalled` (notices due for over 30 minutes and not claimed: high while `muse-deliver` is
-  enabled or missing, low while paused). `health_deliver` is now a second route of the `muse-health` job
+- Health: new `deliver_stalled` (notices unclaimed for three `muse-deliver` periods, from its `next_run_at` −
+  `last_run_at`: high while the job is enabled or missing, low while paused; not reported before its first run or
+  when host jobs are unreadable). `health_deliver` is now a second route of the `muse-health` job
   (comma-separated targets, delivered by Hermes) instead of a one-shot job per alert; `health.json` has no `backup`.
-- HostAdapter: `Cron.job(key)`, `Cron.remove`, `Cron.add_route`, `Deliver.legacy_receipt`, `Deliver.legacy_jobs`;
-  `Deliver.send` removed, `Deliver.receipt` takes the job and execution. Cutover rollback also pauses `muse-deliver`.
+- HostAdapter: `Cron.job(key)`, `Cron.remove`, `Cron.set_route`, `Cron.add_route`, `Deliver.legacy_receipt`,
+  `Deliver.legacy_jobs`; `Deliver.send` removed, `Deliver.receipt` takes the job and execution.
+- Cutover: rollback also pauses `muse-deliver`; a later v2 install (cancelled rollback or upgrade again) resumes the
+  jobs the rollback paused (`muse-health`, `muse-deliver`) and leaves the user's own pauses.
 
 # 0.4.1 — Drain in batches, interest news via Feed, memory upkeep (2026-10-30)
 

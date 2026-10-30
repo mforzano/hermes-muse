@@ -37,5 +37,8 @@ Use it when a high Health finding cannot be fixed within 2 hours.
 3. Put back the external callers' previous prompts and scripts.
 4. After 0.3.x has loaded, delete `muse/migrating.json`. Goals need nothing: GOAL.md is shared.
 
+To cancel a rollback (or upgrade again later), delete `muse/migrating.json` and load v2: the install resumes the
+jobs the rollback paused (`muse-health`, `muse-deliver`) and leaves pauses you set yourself.
+
 Residual risk: 0.3.x does not dedupe against sent history, so an event that arrives after the rollback
 can still be notified twice; the bridge only guarantees that what v2 already sent is not sent again.

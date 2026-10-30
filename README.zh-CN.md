@@ -70,7 +70,7 @@ Muse 不带连接器。patrol 只通过你的 Hermes 已有的工具读邮件、
 
 ## 偏好
 
-在对话里说，或编辑 `muse/PROACTIVE_PREFERENCES.md`。字段：`start_hour`/`end_hour`（之外为静默时段，默认 9–22）、`ordinary_per_day`（默认不限）、`time_sensitive_per_day`（默认 3）、`urgent_per_day`（可越过静默时段的 urgent 通知数，默认 2，超出按 time_sensitive 处理）、`blocked_topics`、`deliver`（路由，默认本 profile 的 Bot Chat）、`goal_dormant_days` 与 `goal_fade_days`（默认各 7，`null` 关闭）、`fade_question`、`weather_context`（默认关闭，会用到你给过的地点）。偏好无效时停止投递并报错，不猜默认值。
+在对话里说，或编辑 `muse/PROACTIVE_PREFERENCES.md`。字段：`start_hour`/`end_hour`（之外为静默时段，默认 9–22）、`ordinary_per_day`（默认不限）、`time_sensitive_per_day`（默认 3）、`urgent_per_day`（可越过静默时段的 urgent 通知数，默认 2，超出按 time_sensitive 处理）、`blocked_topics`、`deliver`（发送通知的 `muse-deliver` job 的路由，默认本 profile 的 Bot Chat；修改从它的下一轮起生效，`null` 保留 job 现有路由）、`goal_dormant_days` 与 `goal_fade_days`（默认各 7，`null` 关闭）、`fade_question`、`weather_context`（默认关闭，会用到你给过的地点）。偏好无效时停止投递并报错，不猜默认值。
 
 ## Hermes 配置
 
@@ -80,7 +80,7 @@ Muse 不带连接器。patrol 只通过你的 Hermes 已有的工具读邮件、
 |---|---|---|
 | `plugins.enabled` 包含 `hermes-muse`（且不在 `plugins.disabled` 中） | 启用 | 每个 Muse job 的 launcher 先检查这一项。未启用或配置读取失败时，所有 job 都保持静默。 |
 | `plugins.entries.hermes-muse.settings` | Muse 插件设置都放这里 | 优先于 `.config` 和旧位置 `plugins.hermes-muse`。旧位置还有设置时，Health 报 `probe.config_location` degraded，直到迁走为止。 |
-| ↳ `deliver` | 不设（回退到本 profile 的 Bot Chat） | 偏好里没设 `deliver` 时使用：通知、patrol/weekly/watch job 和 `muse-health` 的路由。job 在创建时取路由，之后刷新保留 job 现有的路由。 |
+| ↳ `deliver` | 不设（回退到本 profile 的 Bot Chat） | 偏好里没设 `deliver` 时使用：`muse-deliver`（通知）、patrol/weekly/watch job 和 `muse-health` 的路由。job 在创建时取路由，之后刷新保留 job 现有的路由。 |
 | ↳ `health_deliver` | 可选的第二路由 | 安装时追加到 `muse-health` job 的路由上，告警集合变化时 Health 告警也发到这里。不设时，告警只出现在主会话、Muse 页面和 cron 输出里。之后删掉这个设置不会移除路由，需要自己改 job 的投递目标。 |
 | ↳ `source_intervals` | 不设（内置：mail 30 分钟、calendar 2 小时、reminders 1 小时、web/rss 6 小时） | `{来源 id 或类型: 分钟}`，决定 patrol 多久重查一次某个来源。间隔越短，模型开销越大。 |
 | `platform_toolsets`（仅在你维护显式列表时） | 包含 `muse` | `muse_manage`/`muse_job` 注册在 toolset `muse` 下。列表里缺了它，这两个工具就不可见：job 无法 submit，会话里也无法管理目标。 |

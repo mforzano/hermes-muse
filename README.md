@@ -70,7 +70,7 @@ Muse has no connectors. The patrol reads mail, calendars, reminders and the web 
 
 ## Preferences
 
-Ask in chat, or edit `muse/PROACTIVE_PREFERENCES.md`. Fields: `start_hour`/`end_hour` (quiet hours outside them, default 9–22), `ordinary_per_day` (default unlimited), `time_sensitive_per_day` (default 3), `urgent_per_day` (urgent notices that may skip quiet hours, default 2; more are gated as time-sensitive), `blocked_topics`, `deliver` (route, default this profile's Bot Chat), `goal_dormant_days` and `goal_fade_days` (default 7 each; `null` turns them off), `fade_question` and `weather_context` (off by default; it uses a location you gave). Invalid preferences stop delivery with an error instead of guessing.
+Ask in chat, or edit `muse/PROACTIVE_PREFERENCES.md`. Fields: `start_hour`/`end_hour` (quiet hours outside them, default 9–22), `ordinary_per_day` (default unlimited), `time_sensitive_per_day` (default 3), `urgent_per_day` (urgent notices that may skip quiet hours, default 2; more are gated as time-sensitive), `blocked_topics`, `deliver` (route of the `muse-deliver` job that sends notices, default this profile's Bot Chat; a change applies from its next run, `null` keeps the job's route), `goal_dormant_days` and `goal_fade_days` (default 7 each; `null` turns them off), `fade_question` and `weather_context` (off by default; it uses a location you gave). Invalid preferences stop delivery with an error instead of guessing.
 
 ## Hermes configuration
 

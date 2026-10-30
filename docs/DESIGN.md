@@ -140,7 +140,9 @@ counts and state names come from code.
    quiet hours only within `urgent_per_day` (default 2) and is gated as time-sensitive past it; blocked topics are
    withdrawn. Only the owned no-agent `muse-deliver` job sends (the tick, other jobs and hooks never do): each run
    re-checks the gates and claims the due notices as `sending` in one transaction, tied to its own host execution,
-   and prints them as one message (at most 5, separated by a rule) that Hermes delivers to the job's route. An
+   and prints them as one message (at most 5, separated by a rule, ending in a fixed footer line so no notice
+   text can act as Hermes' wake gate) that Hermes delivers to the job's route. A `deliver` preference becomes that
+   route at the next run (that run stays silent). An
    urgent notice that may go now wakes `muse-deliver` at once instead of waiting up to 10 minutes. Reconciliation
    reads that execution's delivery receipt; an outcome that is unknown is never resent. Notices that 0.4.1 left
    `sending` keep being read from their one-shot job by delivery key until they settle; finished one-shot jobs
@@ -173,7 +175,7 @@ plus invariants over the Store, deliveries, tool errors and jobs. Each health it
 (`ok/low/medium/high`), detail, evidence and fix. Alerts never use the Notifier; they reach the user through the
 main-session injection, the Dashboard and Desktop page, cron stdout when the alert set changes, and an optional
 `health_deliver` route added as a second target of the health job, so Hermes delivers the same stdout to both.
-`deliver_stalled` reports notices due for over 30 minutes that `muse-deliver` did not claim. Probes judge capability and semantics, not version ranges; a missing capability degrades
+`deliver_stalled` reports notices left unclaimed for three `muse-deliver` periods (its `next_run_at − last_run_at`). Probes judge capability and semantics, not version ranges; a missing capability degrades
 only its feature and raises a high item.
 
 ## Install, upgrade and rollback
@@ -182,7 +184,7 @@ On plugin load, `install.install` holds `muse/install.lock`, writes `muse/migrat
 0.3.16 `muse/state.db` into Store v2 once (the old file becomes read-only), adds missing content files from
 `templates/` without overwriting, backs up the 0.3.x job prompts once to `muse/backup/cron-prompts-0.3.json`,
 refreshes owned jobs and watches in place (creating `muse-deliver`), removes settled 0.4.1 one-shot delivery
-jobs, creates the Health cron and removes the marker. A failed install keeps
+jobs, creates the Health cron, resumes the jobs a cancelled rollback paused and removes the marker. A failed install keeps
 the marker and its error: jobs and the background tick stay silent and the main session is told. Cutover and
 rollback steps are in [CUTOVER.md](CUTOVER.md); the rollback bridge writes v2's sent notices and settled signals back
 into the 0.3.x database so the old version neither resends nor reprocesses them.

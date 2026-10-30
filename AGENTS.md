@@ -129,7 +129,8 @@ owned job 由 `install.JOBS` 定义，cron key 沿用 0.3.x 的名字，这样 j
      - ordinary 和 time_sensitive 受静默时段和各自的每日预算约束；
      - urgent 可以越过静默时段，但受 `urgent_per_day` 约束（默认 2），超出后按 time_sensitive 处理；
      - topic 在 blocked_topics 中的直接撤回（`goal-fade` 保留给淡出询问）。
-   - `tick` 和主会话 hooks 都不投递。只有 owned no_agent job `muse-deliver`（每 10 分钟）投递：它的 run 先 tick，再由 `entry.deliver` 读到本次宿主 execution（claimed/running；读不到就静默，不认领），`notifier.claim()` 在一个事务里按 `gate()` 复查静默时段、预算、`urgent_per_day` 和 blocked_topics，把到期 Notice 认领为 `sending`（写入 `delivery_key`、`job_id`、`execution_id`），每轮最多 `PER_MESSAGE`（5）条，`notifier.message()` 用分隔线拼成一条消息作为 stdout，由 Hermes 投到该 job 的路由；
+   - `tick` 和主会话 hooks 都不投递。只有 owned no_agent job `muse-deliver`（每 10 分钟）投递：它的 run 先 tick，再由 `entry.deliver` 读到本次宿主 execution（claimed/running；读不到就静默，不认领），`notifier.claim()` 在一个事务里按 `gate()` 复查静默时段、预算、`urgent_per_day` 和 blocked_topics，把到期 Notice 认领为 `sending`（写入 `delivery_key`、`job_id`、`execution_id`），每轮最多 `PER_MESSAGE`（5）条，`notifier.message()` 用分隔线拼成一条消息、末行固定为 `FOOTER`（任何通知正文都不能充当 Hermes 的 `{"wakeAgent": false}` 门），作为 stdout 由 Hermes 投到该 job 的路由；
+   - 偏好 `deliver` 有值且与 job 路由不同时，deliver run 先用 `cron.set_route` 改 job 的路由，本轮静默（Hermes 按本轮开始时的路由投递），下一轮起走新路由；`null` 保留 job 现有路由；
    - `schedule()` 排出一条立即可发的 urgent 时，用 `cron.wake` 唤醒 `muse-deliver`，不等下一个 10 分钟；
    - `reconcile()`（在 tick 中）按 `execution_id` 读该 run 的 delivery receipt（`Deliver.receipt`），把 Notice 推进到 `sent`、`failed` 或 `unknown`；任何情况下都不重发；
    - 迁移：0.4.1 留下的 `sending` Notice 没有 `execution_id`，继续按 delivery_key 读其 one-shot job 的回执（`Deliver.legacy_receipt`），直到进入终态；`notifier.sweep()`（install 和每次 deliver run）删除已结束或已停用、且没有 Notice 仍在 `sending/unknown` 等它的 one-shot job 及其 launcher。只动 Muse 自己的 job。
@@ -163,7 +164,7 @@ owned job 由 `install.JOBS` 定义，cron key 沿用 0.3.x 的名字，这样 j
    3. 从模板补齐缺失的内容文件，不覆盖已有文件；
    4. 首次刷新前备份 0.3.x 的 job prompt；
    5. 原地刷新 owned job（含 no_agent 的 `muse-deliver`）和 watch，并删除已结清的 0.4.1 one-shot 投递 job（`notifier.sweep`）；
-   6. 创建或刷新 Health cron；
+   6. 创建或刷新 Health cron；恢复暂停原因为 `install.ROLLED_BACK`（取消回滚）的 owned job，用户自己的暂停不动；
    7. 删除标记。
    - 失败时标记保留并写入错误：job 和后台 tick 保持静默，主会话会收到提示。
 
@@ -230,7 +231,7 @@ Hermes 宿主
 - `cron`：
   - `ensure(key, …)` 创建或刷新自有 job `muse-<key>`（launcher 为 `scripts/hermes-muse-<key>.py`）；
   - `job(key)` 按 cron key 找自有 job；`pause`、`wake`、`jobs`、`owned_jobs`、`executions`；
-  - `remove(job_id)` 删除自有 job 及其 launcher（只用于已结清的 0.4.1 one-shot 投递）；`add_route(job_id, target)` 给自有 job 追加一个投递路由；读失败时都返回 `False`；
+  - `remove(job_id)` 删除自有 job 及其 launcher（只用于已结清的 0.4.1 one-shot 投递）；`set_route(job_id, target)` 替换、`add_route(job_id, target)` 追加自有 job 的投递路由；读失败时都返回 `False`；
   - `outcome` 在读失败时返回 `status: "host_error"`。
 - `deliver`（只读，从不发送）：`receipt(job_id, execution_id)` 返回自有 job 某次 run 的 `sending|sent|failed(reason)|unknown`，读失败时为 `unknown(host_error)`；`legacy_receipt(key)` 按 delivery_key 读 0.4.1 one-shot job 的回执；`legacy_jobs()` 列出已结束或已停用的 one-shot 投递 job。
 - `owners.status(handle)`：查原生委派的状态，读失败时为 `host_error`。
@@ -384,7 +385,7 @@ Hermes 宿主
 6. **prompt 只写行为**，每个 job 不超过 15 行，不写字段表。字段只存在于 action table 和 `packets.SCHEMAS` 中，`skills/companion/references/interface.md` 由代码生成。
 
 ### 5.5 日志与可观测
-- 用 `logging.getLogger(__name__)`；宿主故障记 `warning`；不要用 `print` 输出调试信息。**launcher 的 stdout 就是 Script Output 或投递内容**：`cron_entry.py` 只能打印一行 JSON，`health_entry.py` 非空即投递。
+- 用 `logging.getLogger(__name__)`；宿主故障记 `warning`；不要用 `print` 输出调试信息。**launcher 的 stdout 就是 Script Output 或投递内容**：`cron_entry.py` 只能打印一行 JSON，唯一例外是 deliver run 打印消息纯文本（非空即投递）；`health_entry.py` 非空即投递。
 - 每次状态迁移的 `reason` 用短代码，例如 `ttl`、`receipt:sent:`、`intake:saved`、`update:user`，供 event 日志和 Health 追溯。
 - 可观测性只来自 `event` 表、`health.json` 和 `HostAdapter.faults`。发现新的失败模式时补一条 invariant，不要加遥测。
 
