@@ -188,32 +188,32 @@ def part_notifier(base):
     clock = [T0]
     host = FakeHost(lambda: clock[0])
     k = Kernel(make_home(base, {"blocked_topics": ["crypto"]}), adapter=host, clock=lambda: clock[0])
-    railway = {"upstream_id": "gmail:message:1a169d66fac6d167", "title": "Railway: environment variable disclosure"}
+    alert = {"upstream_id": "gmail:message:synthetic-alert-1", "title": "Vendor alert: environment variable disclosure"}
     outcomes = []
     for day, hour in ((0, 0), (2, 1), (2, 3), (2, 5)):  # the audited pattern: once, then three times two days later
         clock[0] = T0 + day * D + hour * H
-        _, observed, out = patrol(k, [railway])
+        _, observed, out = patrol(k, [alert])
         outcomes.append((observed["items"][0]["notified"], out[0]["result"]))
         k.tick()
         deliver_all(k, host)
-    digitalplat = {"upstream_id": "1a180a721fc10d92", "title": "DigitalPlat domain renewal"}
+    renewal = {"upstream_id": "synthetic-renewal-1", "title": "Domain renewal"}
     for i in range(7):
         clock[0] = T0 + 3 * D + i * 600
-        patrol(k, [{**digitalplat, "title": digitalplat["title"] + ("" if i % 2 else " (reminder)")}], priority="time_sensitive")
+        patrol(k, [{**renewal, "title": renewal["title"] + ("" if i % 2 else " (reminder)")}], priority="time_sensitive")
         k.tick()
         deliver_all(k, host)
     by_key = {}
     for e in k.store.query("notice"):
         by_key.setdefault(e["natural_key"], []).append(e["state"])
-    rail, plat = by_key.get("src:1a169d66fac6d167", []), by_key.get("src:1a180a721fc10d92", [])
-    check("A5 dedupe replay: Railway x4 and DigitalPlat x7 -> one notice, one delivery each",
+    rail, plat = by_key.get("src:synthetic-alert-1", []), by_key.get("src:synthetic-renewal-1", [])
+    check("A5 dedupe replay: vendor alert x4 and domain renewal x7 -> one notice, one delivery each",
           rail == ["sent"] and plat == ["sent"] and len(host.delivered) == 2,
-          {"railway": rail, "digitalplat": plat, "delivered": len(host.delivered), "railway_rounds": outcomes})
+          {"alert": rail, "renewal": plat, "delivered": len(host.delivered), "alert_rounds": outcomes})
 
     clock[0] += H
-    _, _, out = patrol(k, [railway], verdict="supersede", text="Railway: rotation completed, new details")
+    _, _, out = patrol(k, [alert], verdict="supersede", text="Vendor alert: rotation completed, new details")
     k.tick()
-    rail = [e for e in k.store.query("notice") if e["natural_key"] == "src:1a169d66fac6d167"]
+    rail = [e for e in k.store.query("notice") if e["natural_key"] == "src:synthetic-alert-1"]
     check("N1 supersede: explicit, new evidence, new generation and delivery key",
           out[0]["result"] == "superseded" and len(rail) == 2 and len(host.delivered) == 3
           and len({e["payload"]["delivery_key"] for e in rail}) == 2, [(e["state"], e["payload"].get("generation")) for e in rail])
@@ -252,7 +252,7 @@ def part_notifier(base):
     second, third = quiet["src:urgent2@example.org"], quiet["src:urgent3@example.org"]
     check("N3b urgent_per_day caps quiet-hour urgent sends (the rest wait as time_sensitive); a patrol topic in "
           "blocked_topics is withdrawn; the dormancy topic is reserved",
-          notifier.spent_today(k.store, "urgent", clock[0], UTC) == 2  # the superseded Railway and Outage today
+          notifier.spent_today(k.store, "urgent", clock[0], UTC) == 2  # the superseded vendor alert and Outage today
           and all(n["state"] == "scheduled" and n["payload"]["priority"] == "time_sensitive"
                   and n["payload"]["requested_priority"] == "urgent"
                   and datetime.fromtimestamp(n["payload"]["next_eligible"], UTC).hour == 9 for n in (second, third))

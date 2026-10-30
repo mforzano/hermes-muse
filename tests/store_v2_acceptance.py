@@ -64,11 +64,11 @@ def sample(home, shape):
             row["dispatched_at"] = created + 60
         rec("notification", key, row)
 
-    # Vendor security alert: sent 4x, one more pending (Railway pattern).
+    # Vendor security alert: sent 4x, one more pending.
     for i, status in enumerate(["sent", "sent", "sent", "sent", "pending"]):
         notice(f"vend{i}", status, NOW - (5 - i) * D, sources=["gmail:message:MSGAAA"] if i % 2 else ["mail:<msgaaa>"],
                item="msgaaa" if i < 3 else None, title="Vendor security alert")
-    # New device login: 7 notices on one thread (DigitalPlat pattern).
+    # New device login: 7 notices on one thread.
     for i, status in enumerate(["sent", "sent", "pending", "pending", "candidate", "cancelled", "cancelled"]):
         notice(f"dev{i}", status, NOW - (2 - i * 0.2) * D, item="thr-bbb", title="New device login")
     # Domain expiry: two unsent duplicates, nothing sent yet.

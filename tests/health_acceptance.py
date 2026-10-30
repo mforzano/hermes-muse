@@ -40,12 +40,12 @@ def seed_store(home, now, host):
     k = Kernel(home, adapter=host, store=s, clock=lambda: now)
     s.create("signal", "chat:long", {"source": "cli"}, now=now - 80 * H)          # watermark stuck, tick not run
     s.create("signal", "once:1", {"source": "oneshot"}, now=now - H)               # E16 oneshot captured
-    for i in range(2):                                                             # Railway: urgent sent twice (0.3.x)
+    for i in range(2):                                                             # urgent sent twice (0.3.x)
         s.create("notice", "src:msgaaa", {"priority": "urgent", "strong_key": True}, state="sent",
                  now=now - (2 - i) * D, dedupe=False)
     notifier.draft(k, text="Thread bbb", priority="urgent", upstream_id="thr-bbb", now=now - 10 * H)  # eligible, unsent
-    s.create("notice", "src:ccc", {}, state="unknown", now=now - 3 * H)            # trading send went unknown
-    s.create("goal", "trading-goal", {}, deadline=now - 12 * D, now=now - 20 * D)  # next_check 12 days old
+    s.create("notice", "src:ccc", {}, state="unknown", now=now - 3 * H)            # a send went unknown
+    s.create("goal", "stale-goal", {}, deadline=now - 12 * D, now=now - 20 * D)  # next_check 12 days old
     goals.create(k, title="Learn piano", criteria="Play one piece", by="user", session_id="chat", now=now - 20 * D)
     goals.fade(k, now)                                                             # dormant: fade_at 6 days ago
     s.create("run", "exec-stuck", {}, now=now - 3 * H)
