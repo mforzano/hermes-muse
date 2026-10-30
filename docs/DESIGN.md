@@ -129,7 +129,7 @@ counts and state names come from code.
 
 1. **Intake.** Private user turns from `USER_SOURCES` are read through the host, redacted and cut to head/tail
    excerpts past 8k, and recorded as Signals while the watermark advances. Each hourly period drains every waiting
-   Signal in batches (3–15 adaptive, at most 24k excerpt characters each); each gets a disposition. A goal hint touches an open goal or proposes a new one for nightly. Signals
+   Signal in batches (15 each, fewer when their excerpts pass 24k characters); each gets a disposition. A goal hint touches an open goal or proposes a new one for nightly. Signals
    left after 3 packets or 72h are parked, counted by Health, and never block the watermark. When a native memory
    store is at least 90% full (read through `HostAdapter.memory`), the packet names it (`memory_full`, at most 3
    packets a day) and the model may merge or shorten entries in the batch that saves the new fact; each change goes
@@ -152,7 +152,8 @@ counts and state names come from code.
    next check moves to 1 day − 6h so the goal is due again the next night. Code picks review candidates from the last
    72h by rules, oldest first, all of them the same night (no per-night cap). The model's `agent_gap`
    becomes a Finding with evidence and `latent_need` an Idea. Goal proposals (disposed in the last 7 days) are
-   offered once and may become goals. In the last batch, dream and alignment are written when the day changed
+   offered until the model creates or declines them, no more per day than cron may still create (5); the rest wait for
+   the next period. Batches hold a fixed 10 items. In the last batch, dream and alignment are written when the day changed
    something, listing every native memory change.
 4. **Feed.** Each active interest is researched at most once in 20h, longest unchecked first; the model writes
    articles with source refs and they are published silently. One article per packet may carry a notice: its

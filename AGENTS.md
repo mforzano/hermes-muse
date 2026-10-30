@@ -118,7 +118,7 @@ owned job 由 `install.JOBS` 定义，cron key 沿用 0.3.x 的名字，这样 j
 1. **信号 → Intake**：
    - 用户在私聊发出消息后，`host.sessions.user_turns()` 读取它：只收白名单来源，先脱敏，超过 8k 的只取头尾摘录；
    - `intake.capture()`（在 tick 中）把它记成 `signal(new)`，并推进水位 `meta.intake_since`；
-   - intake 是 drain job（分批排空）：每小时的 cron 开启一个周期，本周期的全部 `new` signal 分批 `intake:<周期>[:<批次>]` 处理，`runs.relay` 接力唤醒；每批大小由 `size()` 决定（3–15 条，按耗时自适应），摘录合计不超过 24k，`context.remaining` 是本批之后的剩余数；最后一批之后到达的消息等下次唤醒或下个周期。模型对每条 submit 一个 disposition，`intake.dispose()` 把 signal 置为 `disposed`；
+   - intake 是 drain job（分批排空）：每小时的 cron 开启一个周期，本周期的全部 `new` signal 分批 `intake:<周期>[:<批次>]` 处理，`runs.relay` 接力唤醒；每批固定 15 条（`packets.JOBS` 的 `items`），摘录合计超过 24k 时减少，`context.remaining` 是本批之后的剩余数；最后一批之后到达的消息等下次唤醒或下个周期。模型对每条 submit 一个 disposition，`intake.dispose()` 把 signal 置为 `disposed`；
    - `goal_hint` 指向某个开放目标时，触碰该目标；为 `new` 时，进入 nightly 的建目标提案；
    - 3 次 packet 或 72h 后仍未处置的 signal 转为 `parked`，计入 Health，**不阻塞水位**；
    - 记忆整理：有条目时 `upkeep.full` 经 `host.memory.stores()` 读用量，任一 store ≥90% 时 packet 带 `context.memory_full`（每天最多 3 次）。模型只能在保存新事实的同一个原生 memory batch 里**合并重复或缩短冗长条目**，不得直接删除；`hooks.pre_tool` 否决违规写入，`hooks.post_tool` 用前后快照由 `upkeep.record` 把改动写进 `meta.memory_changes` 和当天的 `memory/<日期>.md`。仍放不下的事实不作答，下个周期重试。Muse 从不写记忆文件，`memory.write_approval` 保持关闭（它会把 cron 的每次写入都暂存待批）。
@@ -135,11 +135,11 @@ owned job 由 `install.JOBS` 定义，cron key 沿用 0.3.x 的名字，这样 j
    - `reconcile()`（在 tick 中）按 `execution_id` 读该 run 的 delivery receipt（`Deliver.receipt`），把 Notice 推进到 `sent`、`failed` 或 `unknown`；任何情况下都不重发；
    - 迁移：0.4.1 留下的 `sending` Notice 没有 `execution_id`，继续按 delivery_key 读其 one-shot job 的回执（`Deliver.legacy_receipt`），直到进入终态；`notifier.sweep()`（install 和每次 deliver run）删除已结束或已停用、且没有 Notice 仍在 `sending/unknown` 等它的 one-shot job 及其 launcher。只动 Muse 自己的 job。
 3. **Nightly**（分批排空）：
-   - 队列按顺序为：全部到期目标（不封顶，deadline 早的在前）、7 天内 `goal_hint=new` 且未提过的提案、复盘候选；每批大小由 `size()` 决定，`context.remaining` 是本批之后的剩余数；
+   - 队列按顺序为：全部到期目标（不封顶，deadline 早的在前）、7 天内 `goal_hint=new` 且未提过的提案（不超过 cron 当天剩余的建目标额度，其余留到下个周期）、复盘候选；每批固定 10 条，`context.remaining` 是本批之后的剩余数；
    - 批次的条目在其 run 以 ok/degraded 结束时算作已消费，当晚不再提供；expired 批次的条目、以及 run 失败或被放弃的批次中未作答的条目会重新提供；run 结束后由 `runs.relay` 接力唤醒；
    - 对到期目标给出 assessment 和 progress_note；`done_suggested` 只是提示，不关闭目标；
    - 复盘候选由代码按规则在 72h 窗口内挑选（`review.window` 分页读完整个窗口），从最老的开始，全部进入当晚队列，不设每晚上限。模型的判断中，`agent_gap` 生成 Finding，`latent_need` 生成 Idea；
-   - signal 提案由模型决定是否 `create` 目标；批次的 run 以 ok/degraded 结束时，代码给其中每个提案写 `proposed_at`（`packets.close`），之后不再提出；
+   - signal 提案由模型 `create` 或 `decline`（两者都算已处理，不计入 stall）；批次的 run 以 ok/degraded 结束时，代码只给已处理的提案写 `proposed_at`（`packets.close`），之后不再提出，未答的下个周期再提；
    - 只在 `remaining` 为 0 的批次里、当天有实质变化或 `context.memory_changes` 不为空时，用 `content_write` 写 dream 和 alignment，并列出每条记忆改动；该批的 run 以 ok/degraded 结束时 `meta.memory_reported_until` 前移（没有条目的批次也一样，所以不会空唤醒）。
 4. **Feed**（分批排空）：每个 active interest 最多每 20h 研究一次，最久未查的在前；每个作答的兴趣都由 `packets.feed_result` 写 `checked_at`。模型写文章并附 `source_refs`，生成 `feed` 实体，`records.write_feed` 把正文写入 `feed/<key>.md`，静默发布。一篇文章可附一条 `notice`（每个 packet 最多 1 条，priority 只能 ordinary/time_sensitive，`source_ref` 必须是文章来源之一）：经 `notifier.draft` 用 `src:` 强键去重（任一来源 7 天内已有 LIVE notice 时返回 existing），之后走完整门控、与 patrol 共享预算；兴趣不再 active 时由代码撤回。
 5. **Weekly**：输入只有 Health 摘要和 7 天的计数。模型写一条周报，投到用户的路由。只提建议，不改任何东西。
@@ -350,7 +350,7 @@ Hermes 宿主
 - **新增的计时状态必须有 deadline**（验收 A3；Health 的 `deadlines` 检查会拦）。到期后的处理只能二选一：
   - 写 exit，由 `Store.tick` 迁移（Health 的 `tick_stalled` 检查会拦）；
   - exit 为空，由所属模块在 tick 的某一步或某个 packet 中处理，同时补一条 Health 检查。现有的 `goal`、`run` 就是这种情况。
-- packet：同一 job 同一时刻只有一个 `issued`，并发调用拿到同一个 packet；drain job 同一周期内可有多批 submitted；ref 只在本 packet 内有效；submit 按条目幂等，可边做边交（`per_item` 每次 submit 重算）。
+- packet：同一 job 同一时刻只有一个 `issued`，并发调用拿到同一个 packet；drain job 同一周期内可有多批 submitted；ref 只在本 packet 内有效；submit 按条目幂等，可边做边交。
 - 投递：muse-deliver run 先在一个事务内认领 `sending` 并写入 `delivery_key` 和本次 `execution_id`，再把消息打印为 stdout；回执只按该 execution 读取，已认领的 Notice 不会再被认领或重发。**结果未知的外部写入不得盲目重发**。
 - 文件：GOAL.md 和内容文件必须持有 `mutations.lock`，并通过 `expected_revision` CAS 写入。冲突时返回 `revision_conflict`，调用方需重读并合并。
 - 安装：同一 profile 同时只有一个 install（`install.lock`）；迁移标记存在期间，launcher 和后台 tick 都不推进状态。
